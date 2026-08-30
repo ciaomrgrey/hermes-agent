@@ -32,7 +32,7 @@ import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple, Set
+from typing import Dict, Any, Optional, List, Mapping, Tuple, Set
 
 from hermes_cli.route_identity import normalize_route_base_url
 from hermes_cli.secret_prompt import masked_secret_prompt
@@ -3652,6 +3652,7 @@ TERMINAL_CONFIG_ENV_MAP = {
     "cwd": "TERMINAL_CWD",
     "temp_dir": "TERMINAL_TEMP_DIR",
     "timeout": "TERMINAL_TIMEOUT",
+    "home_mode": "TERMINAL_HOME_MODE",
     "lifetime_seconds": "TERMINAL_LIFETIME_SECONDS",
     "docker_image": "TERMINAL_DOCKER_IMAGE",
     "docker_forward_env": "TERMINAL_DOCKER_FORWARD_ENV",
@@ -3788,6 +3789,50 @@ def apply_terminal_config_to_env(
         if (should_override and cfg_key in explicit_keys) or env_var not in target:
             target[env_var] = _terminal_env_value(value)
     return target
+
+
+def terminal_env_view() -> Mapping[str, str]:
+    """Return terminal settings isolated to the active routed profile.
+
+    A multiplex gateway serves multiple profile homes in one process. Its
+    process environment may already contain ``TERMINAL_*`` values bridged from
+    the gateway owner's config, so routed turns must resolve a fresh mapping
+    from their context-scoped config. Starting from an empty mapping makes
+    omitted keys and config-read failures fail isolated instead of inheriting
+    another profile's backend, paths, or container settings.
+
+    Single-profile processes retain the historical process-environment view.
+    """
+    from agent.secret_scope import is_multiplex_active
+
+    if not is_multiplex_active():
+        return os.environ
+
+    scoped: Dict[str, str] = {}
+    try:
+        config = load_config_readonly()
+    except Exception:
+        logger.warning(
+            "profile-scoped terminal config bridge failed; using isolated defaults",
+            exc_info=True,
+        )
+        config = DEFAULT_CONFIG
+
+    try:
+        apply_terminal_config_to_env(
+            env=scoped,
+            config=config,
+            override=True,
+        )
+    except Exception:
+        logger.warning(
+            "profile-scoped terminal config mapping failed; using isolated defaults",
+            exc_info=True,
+        )
+        scoped.clear()
+        apply_terminal_config_to_env(env=scoped, config=DEFAULT_CONFIG, override=True)
+    scoped["TERMINAL_HOME_MODE"] = scoped.get("TERMINAL_HOME_MODE") or "auto"
+    return scoped
 
 
 def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:

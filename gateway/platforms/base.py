@@ -1522,6 +1522,13 @@ def _path_is_within(path: Path, root: Path) -> bool:
         return False
 
 
+def _terminal_env():
+    """Profile-scoped terminal settings for Docker media translation."""
+    from hermes_cli.config import terminal_env_view
+
+    return terminal_env_view()
+
+
 def _parse_docker_volume_mounts() -> List[Tuple[Path, Path]]:
     """Parse configured Docker volume mounts into ``(host_path, container_path)``.
 
@@ -1530,7 +1537,7 @@ def _parse_docker_volume_mounts() -> List[Tuple[Path, Path]]:
     Named volumes and non-absolute hosts are skipped because they cannot be
     resolved on the gateway host for media delivery.
     """
-    raw = os.getenv("TERMINAL_DOCKER_VOLUMES", "").strip()
+    raw = _terminal_env().get("TERMINAL_DOCKER_VOLUMES", "").strip()
     if not raw:
         return []
     try:
@@ -1598,7 +1605,7 @@ def _docker_sandbox_dir_candidates(session_key: str = "") -> List[str]:
     except Exception:
         return ["default"]
     # Explicit trusted-profiles opt-in: one shared container identity.
-    shared = os.getenv("TERMINAL_DOCKER_SHARED_CONTAINER_KEY", "").strip()
+    shared = _terminal_env().get("TERMINAL_DOCKER_SHARED_CONTAINER_KEY", "").strip()
     if shared:
         candidates.append(sanitize_task_id_for_path(f"shared:{shared}"))
     try:
@@ -1624,9 +1631,9 @@ def _default_docker_workspace_host_roots(session_key: str = "") -> List[Path]:
     actually resolves — the profile sandbox dir existing does not mean the
     file lives there when it was produced in a legacy per-session container.
     """
-    if os.getenv("TERMINAL_ENV", "").strip().lower() != "docker":
+    if _terminal_env().get("TERMINAL_ENV", "").strip().lower() != "docker":
         return []
-    if os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").strip().lower() not in {
+    if _terminal_env().get("TERMINAL_CONTAINER_PERSISTENT", "true").strip().lower() not in {
         "1",
         "true",
         "yes",
@@ -1634,13 +1641,13 @@ def _default_docker_workspace_host_roots(session_key: str = "") -> List[Path]:
     }:
         return []
     # Explicit cwd mount takes over /workspace when enabled.
-    if os.getenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").strip().lower() in {
+    if _terminal_env().get("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }:
-        cwd = os.getenv("TERMINAL_CWD") or os.getcwd()
+        cwd = _terminal_env().get("TERMINAL_CWD") or os.getcwd()
         try:
             host = Path(os.path.expanduser(cwd)).resolve(strict=False)
         except (OSError, RuntimeError, ValueError):
@@ -1668,9 +1675,9 @@ def _docker_persistent_home_host_roots(session_key: str = "") -> List[Path]:
     produced a real host file the gateway couldn't find. Ordered best-first:
     the profile-scoped layout, then the legacy bug-window per-session layout.
     """
-    if os.getenv("TERMINAL_ENV", "").strip().lower() != "docker":
+    if _terminal_env().get("TERMINAL_ENV", "").strip().lower() != "docker":
         return []
-    if os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").strip().lower() not in {
+    if _terminal_env().get("TERMINAL_CONTAINER_PERSISTENT", "true").strip().lower() not in {
         "1",
         "true",
         "yes",
@@ -1700,7 +1707,7 @@ def _cache_dir_container_mounts() -> List[Tuple[Path, Path]]:
     longer prefixes than the ``/root`` home mount, so longest-prefix matching
     picks the cache translation over the home translation for them.
     """
-    if os.getenv("TERMINAL_ENV", "").strip().lower() != "docker":
+    if _terminal_env().get("TERMINAL_ENV", "").strip().lower() != "docker":
         return []
     try:
         from tools.credential_files import get_cache_directory_mounts
@@ -1721,7 +1728,7 @@ def _warn_unresolved_docker_media(candidate: Path, session_key: str, reason: str
     file seemingly vanished. Point at the sandbox/session mismatch instead.
     Gated to Docker mode so host-path rejections stay quiet.
     """
-    if os.getenv("TERMINAL_ENV", "").strip().lower() != "docker":
+    if _terminal_env().get("TERMINAL_ENV", "").strip().lower() != "docker":
         return
     logger.warning(
         "Docker MEDIA path %s did not resolve to a host sandbox file (%s%s); "

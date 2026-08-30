@@ -1283,8 +1283,10 @@ def _resolve_workspace_hint(parent_agent) -> Optional[str]:
     teaching subagents a fake container path while still helping them avoid
     guessing `/workspace/...` for local repo tasks.
     """
+    from hermes_cli.config import terminal_env_view
+
     candidates = [
-        os.getenv("TERMINAL_CWD"),
+        terminal_env_view().get("TERMINAL_CWD"),
         getattr(
             getattr(parent_agent, "_subdirectory_hints", None), "working_dir", None
         ),

@@ -286,7 +286,9 @@ def get_sandbox_dir() -> Path:
 
     Configurable via TERMINAL_SANDBOX_DIR. Defaults to {HERMES_HOME}/sandboxes/.
     """
-    custom = os.getenv("TERMINAL_SANDBOX_DIR")
+    from hermes_cli.config import terminal_env_view
+
+    custom = terminal_env_view().get("TERMINAL_SANDBOX_DIR")
     if custom:
         p = Path(custom)
     else:

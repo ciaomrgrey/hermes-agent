@@ -215,7 +215,12 @@ def _is_local_terminal_backend() -> bool:
     Mirrors ``tools.browser_tool._is_local_backend`` and terminal_tool's own
     dispatch, which key off ``TERMINAL_ENV``.
     """
-    return os.getenv("TERMINAL_ENV", "local").strip().lower() in ("local", "")
+    from hermes_cli.config import terminal_env_view
+
+    return terminal_env_view().get("TERMINAL_ENV", "local").strip().lower() in (
+        "local",
+        "",
+    )
 
 
 def _media_cache_roots() -> list:

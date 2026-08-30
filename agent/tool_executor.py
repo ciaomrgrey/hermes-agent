@@ -1085,7 +1085,9 @@ def _begin_tool_execution(
         try:
             command = function_args.get("command", "")
             if _is_destructive_command(command):
-                cwd = function_args.get("workdir") or os.getenv(
+                from hermes_cli.config import terminal_env_view
+
+                cwd = function_args.get("workdir") or terminal_env_view().get(
                     "TERMINAL_CWD", os.getcwd()
                 )
                 agent._checkpoint_mgr.ensure_checkpoint(

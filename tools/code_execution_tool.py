@@ -200,9 +200,10 @@ def _spill_full_stdout(stdout_text: str) -> Optional[str]:
 # HERMES_KANBAN_DB, HERMES_*_WEBHOOK).  The child only needs the few
 # location/profile vars in _HERMES_CHILD_ALLOWED below; HERMES_RPC_SOCKET /
 # HERMES_RPC_DIR / TZ / HOME are injected explicitly after scrubbing.
-_SAFE_ENV_PREFIXES = ("PATH", "HOME", "USER", "LANG", "LC_", "TERM",
+_SAFE_ENV_PREFIXES = ("PATH", "HOME", "USER", "LANG", "LC_", "TERM_",
                       "TMPDIR", "TMP", "TEMP", "SHELL", "LOGNAME",
                       "XDG_", "PYTHONPATH", "VIRTUAL_ENV", "CONDA")
+_SAFE_ENV_NAMES = frozenset({"TERM"})
 _SECRET_SUBSTRINGS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL",
                       "PASSWD", "AUTH", "DSN", "WEBHOOK",
                       # Abbreviations that appear in real-world credential
@@ -312,7 +313,7 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
             continue
         if any(s in k.upper() for s in _SECRET_SUBSTRINGS):
             continue
-        if any(k.startswith(p) for p in _SAFE_ENV_PREFIXES):
+        if k in _SAFE_ENV_NAMES or any(k.startswith(p) for p in _SAFE_ENV_PREFIXES):
             scrubbed[k] = v
             continue
         if k in _HERMES_CHILD_ALLOWED:
@@ -1445,6 +1446,7 @@ def _build_child_env(*, rpc_endpoint: str, rpc_token: str, tmpdir: str,
     secret scrubbing, UTF-8 forcing, TZ handling, subprocess HOME, and the
     PYTHONPATH hygiene for external interpreters.
     """
+    from agent.secret_scope import is_multiplex_active
     from hermes_constants import apply_subprocess_home_env
     child_env = _scrub_child_env(os.environ)
     child_env["HERMES_RPC_SOCKET"] = rpc_endpoint
@@ -1478,7 +1480,17 @@ def _build_child_env(*, rpc_endpoint: str, rpc_token: str, tmpdir: str,
         child_env["TZ"] = _tz_name
     child_env.pop("HERMES_TIMEZONE", None)
 
-    apply_subprocess_home_env(child_env)
+    if is_multiplex_active():
+        from hermes_cli.config import terminal_env_view
+
+        scoped_home_env = dict(child_env)
+        scoped_home_env.update(terminal_env_view())
+        apply_subprocess_home_env(scoped_home_env)
+        child_env["HERMES_REAL_HOME"] = scoped_home_env["HERMES_REAL_HOME"]
+        if "HOME" in scoped_home_env:
+            child_env["HOME"] = scoped_home_env["HOME"]
+    else:
+        apply_subprocess_home_env(child_env)
     # ``hermes_tools.py`` always lives in the staging directory, so that
     # directory must be importable even when project mode changes CWD.
     # Hermes's own package root is useful too, but only when the child
@@ -2282,7 +2294,9 @@ def _resolve_child_cwd(mode: str, staging_dir: str, task_id: str = "") -> str:
             session_cwd = None
         if session_cwd and os.path.isdir(session_cwd):
             return session_cwd
-    raw = os.environ.get("TERMINAL_CWD", "").strip()
+    from hermes_cli.config import terminal_env_view
+
+    raw = terminal_env_view().get("TERMINAL_CWD", "").strip()
     if raw:
         expanded = os.path.expanduser(raw)
         if os.path.isdir(expanded):

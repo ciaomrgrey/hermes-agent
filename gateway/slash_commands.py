@@ -3440,7 +3440,9 @@ class GatewaySlashCommandsMixin:
             max_file_size_mb=cp_kwargs["checkpoint_max_file_size_mb"],
         )
 
-        cwd = os.getenv("TERMINAL_CWD", str(Path.home()))
+        from hermes_cli.config import terminal_env_view
+
+        cwd = terminal_env_view().get("TERMINAL_CWD", str(Path.home()))
         arg = event.get_command_args().strip()
 
         # --all / --force: classic full restore, overwriting user edits too.
@@ -3534,7 +3536,9 @@ class GatewaySlashCommandsMixin:
             elif low == "session":
                 mode = "session"
 
-        cwd = os.getenv("TERMINAL_CWD", str(Path.home()))
+        from hermes_cli.config import terminal_env_view
+
+        cwd = terminal_env_view().get("TERMINAL_CWD", str(Path.home()))
 
         if mode == "session":
             return await self._gateway_session_diff(cwd, stat_only)

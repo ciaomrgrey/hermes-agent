@@ -126,8 +126,10 @@ def _worker_memory_max_bytes() -> int:
     sibling worker outside the gateway cgroup while ensuring the worker cannot
     consume memory up to the enclosing user slice or host limit.
     """
+    from hermes_cli.config import terminal_env_view
+
     override_bound: Optional[int] = None
-    override = os.getenv("TERMINAL_LOCAL_MEMORY_MAX_MB", "").strip()
+    override = terminal_env_view().get("TERMINAL_LOCAL_MEMORY_MAX_MB", "").strip()
     if override:
         override_valid = False
         try:
@@ -2201,8 +2203,10 @@ class ProcessRegistry:
         from tools.ansi_strip import strip_ansi
         from tools.interrupt import is_interrupted as _is_interrupted
 
+        from hermes_cli.config import terminal_env_view
+
         try:
-            default_timeout = int(os.getenv("TERMINAL_TIMEOUT", "180"))
+            default_timeout = int(terminal_env_view().get("TERMINAL_TIMEOUT", "180"))
         except (ValueError, TypeError):
             default_timeout = 180
         max_timeout = default_timeout

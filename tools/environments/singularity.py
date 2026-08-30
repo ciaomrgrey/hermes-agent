@@ -71,7 +71,9 @@ def _save_snapshots(data: dict) -> None:
 
 
 def _get_scratch_dir() -> Path:
-    custom_scratch = os.getenv("TERMINAL_SCRATCH_DIR")
+    from hermes_cli.config import terminal_env_view
+
+    custom_scratch = terminal_env_view().get("TERMINAL_SCRATCH_DIR")
     if custom_scratch:
         scratch_path = Path(custom_scratch)
         scratch_path.mkdir(parents=True, exist_ok=True)

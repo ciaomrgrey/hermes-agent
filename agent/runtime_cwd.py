@@ -64,7 +64,9 @@ def resolve_agent_cwd() -> Path:
         if p.is_dir():
             return p
         logger.warning("configured working directory does not exist: %s", override)
-    raw = os.environ.get("TERMINAL_CWD", "").strip()
+    from hermes_cli.config import terminal_env_view
+
+    raw = terminal_env_view().get("TERMINAL_CWD", "").strip()
     if raw:
         p = Path(raw).expanduser()
         if p.is_dir():
@@ -90,7 +92,9 @@ def resolve_context_cwd() -> Path | None:
         else:
             return p
         return None
-    raw = os.environ.get("TERMINAL_CWD", "").strip()
+    from hermes_cli.config import terminal_env_view
+
+    raw = terminal_env_view().get("TERMINAL_CWD", "").strip()
     if raw:
         p = Path(raw).expanduser()
         if not p.is_dir():

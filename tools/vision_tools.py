@@ -1934,7 +1934,9 @@ def _video_to_base64_data_url(video_path: Path, mime_type: Optional[str] = None)
 
 
 def _terminal_backend_is_local() -> bool:
-    backend = os.getenv("TERMINAL_ENV", "local").strip().lower()
+    from hermes_cli.config import terminal_env_view
+
+    backend = terminal_env_view().get("TERMINAL_ENV", "local").strip().lower()
     return backend in ("", "local")
 
 

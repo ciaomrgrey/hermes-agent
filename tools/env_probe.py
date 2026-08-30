@@ -206,7 +206,9 @@ def _build_probe_line() -> str:
     """
     # Bail out if a remote terminal backend is configured; the host's
     # Python state isn't where the agent's tools run.
-    backend = (os.getenv("TERMINAL_ENV") or "local").strip().lower()
+    from hermes_cli.config import terminal_env_view
+
+    backend = (terminal_env_view().get("TERMINAL_ENV") or "local").strip().lower()
     if backend in _REMOTE_BACKENDS or _plugin_backend_is_remote(backend):
         return ""
 

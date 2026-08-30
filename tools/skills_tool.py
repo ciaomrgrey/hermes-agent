@@ -506,7 +506,9 @@ def _is_gateway_surface() -> bool:
 
 
 def _get_terminal_backend_name() -> str:
-    return str(os.getenv("TERMINAL_ENV", "local")).strip().lower() or "local"
+    from hermes_cli.config import terminal_env_view
+
+    return str(terminal_env_view().get("TERMINAL_ENV", "local")).strip().lower() or "local"
 
 
 def _is_env_var_persisted(

@@ -785,6 +785,41 @@ class TestMediaDeliveryDefaultMode:
 class TestDockerContainerMediaPathTranslation:
     """MEDIA:/workspace (and configured mounts) must resolve to host paths."""
 
+    def test_multiplex_mounts_use_routed_profile_config(self, tmp_path, monkeypatch):
+        import json
+        from pathlib import Path
+
+        from agent import secret_scope
+        from gateway.platforms import base
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        owner_out = tmp_path / "owner-out"
+        routed_home = tmp_path / "profiles" / "routed"
+        routed_out = tmp_path / "routed-out"
+        for path in (owner_out, routed_home, routed_out):
+            path.mkdir(parents=True)
+        (routed_home / "config.yaml").write_text(
+            "terminal:\n"
+            "  backend: docker\n"
+            f"  docker_volumes: {json.dumps([f'{routed_out}:/output'])}\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("TERMINAL_ENV", "docker")
+        monkeypatch.setenv(
+            "TERMINAL_DOCKER_VOLUMES",
+            json.dumps([f"{owner_out}:/output"]),
+        )
+        secret_scope.set_multiplex_active(True)
+        token = set_hermes_home_override(str(routed_home))
+        try:
+            assert base._parse_docker_volume_mounts() == [
+                (routed_out.resolve(), Path("/output"))
+            ]
+        finally:
+            reset_hermes_home_override(token)
+            secret_scope.set_multiplex_active(False)
+
     def test_configured_workspace_mount_translates(self, tmp_path, monkeypatch):
         import json
 

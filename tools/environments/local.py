@@ -583,6 +583,21 @@ def _inject_session_context_env(env: dict) -> None:
             env.pop(var_name, None)
 
 
+def _scope_terminal_subprocess_env(env: dict[str, str]) -> None:
+    """Replace process-global terminal settings with the routed profile view."""
+    from agent.secret_scope import is_multiplex_active
+
+    if not is_multiplex_active():
+        return
+
+    from hermes_cli.config import terminal_env_view
+
+    for key in tuple(env):
+        if key.startswith("TERMINAL_"):
+            env.pop(key, None)
+    env.update(terminal_env_view())
+
+
 def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = None) -> dict:
     """Filter Hermes-managed secrets from a subprocess environment."""
     try:
@@ -628,6 +643,8 @@ def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = Non
             resolved = _resolve_passthrough_value(key, value) if passthrough else value
             if resolved is not None:
                 sanitized[key] = resolved
+
+    _scope_terminal_subprocess_env(sanitized)
 
     _inject_context_hermes_home(sanitized)
 
@@ -1423,6 +1440,7 @@ def _make_run_env(env: dict) -> dict:
         _resolve_passthrough_value = lambda _name, fallback: fallback  # noqa: E731
 
     merged = dict(os.environ | env)
+    _scope_terminal_subprocess_env(merged)
     run_env = {}
     for k, v in merged.items():
         if k.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
@@ -1904,7 +1922,15 @@ class LocalEnvironment(BaseEnvironment):
         # Explicit temp-dir override from terminal.temp_dir (TERMINAL_TEMP_DIR).
         # Honored ahead of the generic TMPDIR so users can redirect Hermes' temp
         # root to real storage when /tmp is a small tmpfs.
-        configured = self.env.get("TERMINAL_TEMP_DIR") or os.environ.get("TERMINAL_TEMP_DIR")
+        from agent.secret_scope import is_multiplex_active
+        from hermes_cli.config import terminal_env_view
+
+        if is_multiplex_active():
+            configured = terminal_env_view().get("TERMINAL_TEMP_DIR")
+        else:
+            configured = self.env.get("TERMINAL_TEMP_DIR") or terminal_env_view().get(
+                "TERMINAL_TEMP_DIR"
+            )
         if configured and configured.startswith("/") and os.path.isdir(configured):
             return configured.rstrip("/") or "/"
 

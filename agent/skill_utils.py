@@ -685,7 +685,9 @@ def find_project_root(start: Optional[Path] = None) -> Optional[Path]:
     """
     try:
         if start is None:
-            env_cwd = os.environ.get("TERMINAL_CWD")
+            from hermes_cli.config import terminal_env_view
+
+            env_cwd = terminal_env_view().get("TERMINAL_CWD")
             start = Path(env_cwd) if env_cwd else Path.cwd()
         cur = Path(start).resolve()
     except OSError:

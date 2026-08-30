@@ -1181,7 +1181,9 @@ def _probe_remote_backend(env_type: str) -> str | None:
     per process. Used only for non-local backends where the agent's tools
     operate on a different machine than the host Hermes runs on.
     """
-    cwd_hint = os.getenv("TERMINAL_CWD", "")
+    from hermes_cli.config import terminal_env_view
+
+    cwd_hint = terminal_env_view().get("TERMINAL_CWD", "")
     cache_key = (env_type, cwd_hint)
     cached = _BACKEND_PROBE_CACHE.get(cache_key)
     if cached is not None:
@@ -1330,7 +1332,9 @@ def build_environment_hints() -> str:
 
     hints: list[str] = []
 
-    backend = (os.getenv("TERMINAL_ENV") or "local").strip().lower()
+    from hermes_cli.config import terminal_env_view
+
+    backend = (terminal_env_view().get("TERMINAL_ENV") or "local").strip().lower()
     is_remote_backend = backend in _REMOTE_TERMINAL_BACKENDS or _plugin_backend_is_remote(backend)
 
     if not is_remote_backend:

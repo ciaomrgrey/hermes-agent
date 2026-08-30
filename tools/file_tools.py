@@ -206,9 +206,14 @@ def _terminal_env_type_for_task(task_id: str = "default") -> str:
             if isinstance(stamped, str) and stamped:
                 return stamped
         cfg = _get_env_config()
-        return str(cfg.get("env_type") or os.getenv("TERMINAL_ENV") or "local").lower()
+        return str(cfg.get("env_type") or "local").lower()
     except Exception:
-        return str(os.getenv("TERMINAL_ENV") or "local").lower()
+        try:
+            from hermes_cli.config import terminal_env_view
+
+            return str(terminal_env_view().get("TERMINAL_ENV") or "local").lower()
+        except Exception:
+            return "local"
 
 
 def _uses_container_paths(task_id: str = "default") -> bool:
@@ -256,7 +261,9 @@ def _configured_terminal_cwd() -> str | None:
     relative to, which is exactly the ambiguity that misroutes worktree edits.
     Only an absolute, sentinel-free value is honored.
     """
-    return _sentinel_free_abs_cwd(os.environ.get("TERMINAL_CWD"))
+    from hermes_cli.config import terminal_env_view
+
+    return _sentinel_free_abs_cwd(terminal_env_view().get("TERMINAL_CWD"))
 
 
 def _registered_task_cwd_override(task_id: str = "default") -> str | None:

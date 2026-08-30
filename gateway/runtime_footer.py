@@ -138,7 +138,9 @@ def format_runtime_footer(
             if turn_seconds is not None and turn_seconds >= 0:
                 parts.append(_format_latency(turn_seconds))
         elif field == "cwd":
-            rel = _home_relative_cwd(cwd or os.environ.get("TERMINAL_CWD", ""))
+            from hermes_cli.config import terminal_env_view
+
+            rel = _home_relative_cwd(cwd or terminal_env_view().get("TERMINAL_CWD", ""))
             if rel:
                 parts.append(rel)
         # Unknown field names are silently ignored.
