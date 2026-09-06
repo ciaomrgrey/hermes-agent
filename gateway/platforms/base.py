@@ -2580,7 +2580,7 @@ class BasePlatformAdapter(ABC):
 
     async def send_slash_confirm(
         self, chat_id: str, title: str, message: str, session_key: str, confirm_id: str,
-        metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        metadata: Optional[Dict[str, Any]] = None, allow_always: bool = True) -> SendResult:
         """Three-option slash-command confirmation (e.g. ``/reload-mcp``). Button adapters render
         Approve Once / Always Approve / Cancel and MUST resolve via
         ``GatewayRunner._resolve_slash_confirm(confirm_id, "once"|"always"|"cancel")``. Default (not

@@ -1372,6 +1372,45 @@ def _deliver_via_live_adapter(
     return delivered
 
 
+def _deliver_approval_card_via_live_adapter(
+    t: _TargetDelivery, card: dict, delivery_errors: list,
+) -> bool:
+    """Render a validated Telegram approval card through the existing control path."""
+    from agent.async_utils import safe_schedule_threadsafe
+    from cron.approval_cards import send_approval_card
+
+    _route_thread_id, route_metadata, _media_metadata = _live_route_metadata(t)
+    future = safe_schedule_threadsafe(
+        send_approval_card(
+            t.runtime_adapter,
+            chat_id=t.chat_id,
+            card=card,
+            metadata=route_metadata,
+            source_job=t.job,
+        ),
+        t.loop,
+        logger=logger,
+        log_message="cron approval-card scheduling failed",
+    )
+    if future is None:
+        delivery_errors.append(f"native approval control unavailable for {t.where}")
+        return False
+    try:
+        result = future.result(timeout=60)
+    except Exception as exc:
+        delivery_errors.append(
+            f"native approval control failed for {t.where}: {type(exc).__name__}")
+        return False
+    if not _confirm_adapter_delivery(result):
+        delivery_errors.append(
+            f"native approval control was not confirmed for {t.where}")
+        return False
+    logger.info(
+        "Job '%s': rendered %d native approval recommendation(s) to %s",
+        t.job["id"], len(card["recommendations"]), t.where)
+    return True
+
+
 def _standalone_send(
     t: _TargetDelivery, content: str, media_files: list) -> tuple[Any, Optional[str]]:
     """Run the standalone sender for one target: ``(result, None)`` or ``(None, error)`` (already
@@ -1598,6 +1637,9 @@ def _deliver_result(
     running) the live adapter is tried first (E2EE rooms can't use the standalone HTTP path), then
     standalone fallback. ``for_failure=True`` routes failure-category notices through the job's
     ``failure_deliver`` override when present (NS-788). Returns None on success, else an error."""
+    from cron.approval_cards import parse_approval_card
+
+    approval_card = parse_approval_card(content)
     targets = _resolve_delivery_targets(job, for_failure=for_failure)
     if not targets:
         return _unresolved_delivery_outcome(job, for_failure)
@@ -1627,7 +1669,7 @@ def _deliver_result(
     # Targets acked with NO evidence (bare SendResult(success=True) — Slack/Matrix/Mattermost);
     # persisted as ``last_delivery_unverified`` so `hermes cron list` shows it.
     unverified_targets: list = []
-    if wrap_response:
+    if wrap_response and approval_card is None:
         task_name = job.get("name", job["id"])
         delivery_content = (
             f"Cronjob Response: {task_name}\n"
@@ -1689,6 +1731,13 @@ def _deliver_result(
             notify_delivery=notify_delivery,
             mirror_enabled=mirror_enabled, mirror_text=mirror_text, delivery_errors=delivery_errors)
         if t is None:
+            continue
+        if approval_card is not None:
+            if t.platform_name != "telegram" or not t.live_adapter_ready:
+                delivery_errors.append(
+                    f"native Telegram approval control unavailable for {t.where}")
+                continue
+            _deliver_approval_card_via_live_adapter(t, approval_card, delivery_errors)
             continue
         target_errors: list = []
         delivered = t.live_adapter_ready and _deliver_via_live_adapter(

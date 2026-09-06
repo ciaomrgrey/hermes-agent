@@ -1975,6 +1975,27 @@ def pause_job(job_id: str, reason: Optional[str] = None) -> Optional[Dict[str, A
     })
 
 
+def pause_job_exact(
+    job_id: str, expected_name: str, reason: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Atomically pause one exact ID only when its current name matches the approval binding."""
+    def apply(jobs, i, job):
+        if job.get("id") != job_id or job.get("name") != expected_name:
+            raise ValueError("bound cron job no longer matches the approval")
+        updated = {
+            **job,
+            "enabled": False,
+            "state": "paused",
+            "paused_at": _hermes_now().isoformat(),
+            "paused_reason": reason,
+        }
+        jobs[i] = updated
+        save_jobs(jobs)
+        return _normalize_job_record(updated)
+
+    return _with_job(job_id, apply)
+
+
 def resume_job(job_id: str) -> Optional[Dict[str, Any]]:
     """Resume a paused job and compute the next future run from now. Accepts a job ID or name."""
     job = resolve_job_ref(job_id)

@@ -3800,15 +3800,16 @@ class TelegramAdapter(BasePlatformAdapter):
 
     async def send_slash_confirm(
         self, chat_id: str, title: str, message: str, session_key: str, confirm_id: str,
-        metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        metadata: Optional[Dict[str, Any]] = None, allow_always: bool = True) -> SendResult:
         """Render a three-button slash-command confirmation prompt."""
         def build():
+            buttons = [InlineKeyboardButton("✅ Approve Once", callback_data=f"sc:once:{confirm_id}")]
+            if allow_always:
+                buttons.append(InlineKeyboardButton("🔒 Always Approve", callback_data=f"sc:always:{confirm_id}"))
             keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ Approve Once", callback_data=f"sc:once:{confirm_id}"),
-                    InlineKeyboardButton("🔒 Always Approve", callback_data=f"sc:always:{confirm_id}")],
+                buttons,
                 [InlineKeyboardButton("❌ Cancel", callback_data=f"sc:cancel:{confirm_id}")],
-           ])
+            ])
             preview = self.format_message(self._truncate_preview(message, 3800))
             return preview, keyboard, lambda msg: self._slash_confirm_state.__setitem__(confirm_id, session_key)
         return await self._send_prompt(
@@ -4310,13 +4311,20 @@ class TelegramAdapter(BasePlatformAdapter):
             return
         label_map = {"once": "✅ Approved once", "always": "🔒 Always approve", "cancel": "❌ Cancelled"}
         user_display = getattr(query.from_user, "first_name", "User")
-        label = label_map.get(choice, "Resolved")
-        await query.answer(text=label)
-        await self._edit_md_quiet(query, f"{label} by {user_display}")
-        # The runner stored a handler keyed by session_key; run it and send any returned text as a follow-up.
+        # Resolve before rendering success: an expired/superseded handler must never
+        # claim approval for an effect that cannot run.
         try:
             from tools import slash_confirm as _slash_confirm_mod
             result_text = await _slash_confirm_mod.resolve(session_key, confirm_id, choice)
+            if result_text is None:
+                label = "⌛ Approval expired"
+                await query.answer(text=label)
+                await self._edit_md_quiet(
+                    query, f"{label} — no action ran; it timed out or was resolved elsewhere.")
+                return
+            label = label_map.get(choice, "Resolved")
+            await query.answer(text=label)
+            await self._edit_md_quiet(query, f"{label} by {user_display}")
             if result_text and query.message:
                 # Inherit the prompt's topic: forums use message_thread_id; private DM-topic lanes need
                 # both the topic id and the prompt reply anchor.
