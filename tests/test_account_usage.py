@@ -95,6 +95,66 @@ def test_fetch_account_usage_codex(monkeypatch):
     assert "Credits balance: $12.50" in snapshot.details
 
 
+def _stub_anthropic_usage(monkeypatch, payload):
+    monkeypatch.setattr("agent.account_usage.resolve_anthropic_token", lambda: "oauth-fixture")
+    monkeypatch.setattr("agent.account_usage._is_oauth_token", lambda token: True)
+    monkeypatch.setattr(
+        "agent.account_usage._get_json",
+        lambda url, headers, timeout: payload,
+    )
+
+
+def test_fetch_anthropic_usage_preserves_percentage_points_and_dynamic_window_ids(monkeypatch):
+    _stub_anthropic_usage(
+        monkeypatch,
+        {
+            "seven_day_sonnet": {"utilization": 12, "resets_at": None},
+            "five_hour": {
+                "utilization": 0.5,
+                "resets_at": "2030-03-17T15:00:00Z",
+            },
+            "nimbus_quill": {"utilization": 0, "resets_at": None},
+            "seven_day_opus": {"utilization": 8, "resets_at": None},
+        },
+    )
+
+    snapshot = fetch_account_usage("anthropic")
+
+    assert snapshot is not None
+    assert [(window.label, window.used_percent) for window in snapshot.windows] == [
+        ("Current session", 0.5),
+        ("Opus week", 8.0),
+        ("Sonnet week", 12.0),
+        ("nimbus_quill", 0.0),
+    ]
+    assert snapshot.windows[-1].reset_at is None
+    assert "nimbus_quill: 100% remaining (0% used)" in render_account_usage_lines(snapshot)
+
+
+def test_fetch_anthropic_usage_does_not_treat_extra_usage_as_quota_window(monkeypatch):
+    _stub_anthropic_usage(
+        monkeypatch,
+        {
+            "seven_day": {"utilization": 19, "resets_at": None},
+            "extra_usage": {
+                "is_enabled": True,
+                "utilization": 25,
+                "used_credits": 5.0,
+                "monthly_limit": 20.0,
+                "currency": "USD",
+            },
+        },
+    )
+
+    snapshot = fetch_account_usage("anthropic")
+
+    assert snapshot is not None
+    assert [(window.label, window.used_percent) for window in snapshot.windows] == [
+        ("Current week", 19.0),
+    ]
+    assert snapshot.details == ("Extra usage: 5.00 / 20.00 USD",)
+
+
 def test_render_account_usage_lines_includes_reset_and_provider():
     snapshot = AccountUsageSnapshot(
         provider="openai-codex",
