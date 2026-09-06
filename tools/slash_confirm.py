@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 # session_key -> {"confirm_id", "command", "handler", "created_at"}
 _pending: Dict[str, Dict[str, Any]] = {}
+_resolved_once: Dict[tuple[str, str], float] = {}
 _lock = threading.RLock()
 
 # Older pending confirms are discarded when the session's next message arrives (buttons live
@@ -34,6 +35,32 @@ def register(session_key: str, confirm_id: str, command: str,
                                  "handler": handler, "created_at": time.time()}
 
 
+def register_once(session_key: str, confirm_id: str, command: str,
+                  handler: Callable[[str], Awaitable[Optional[str]]]) -> tuple[str, Optional[object]]:
+    """Register an idempotent confirm and return its state plus ownership token."""
+    now = time.time()
+    key = (session_key, confirm_id)
+    with _lock:
+        for resolved_key, resolved_at in list(_resolved_once.items()):
+            if now - resolved_at > DEFAULT_TIMEOUT_SECONDS:
+                _resolved_once.pop(resolved_key, None)
+        if key in _resolved_once:
+            return "resolved", None
+        pending = _pending.get(session_key)
+        if pending and pending.get("confirm_id") == confirm_id:
+            return "pending", None
+        registration_token = object()
+        _pending[session_key] = {
+            "confirm_id": confirm_id,
+            "command": command,
+            "handler": handler,
+            "created_at": now,
+            "one_shot_key": key,
+            "registration_token": registration_token,
+        }
+        return "registered", registration_token
+
+
 def get_pending(session_key: str) -> Optional[Dict[str, Any]]:
     """Return a copy of the pending confirm dict for a session, or None."""
     with _lock:
@@ -45,6 +72,17 @@ def clear(session_key: str) -> None:
     """Drop the pending confirm for ``session_key`` without running it."""
     with _lock:
         _pending.pop(session_key, None)
+
+
+def clear_if_matches(session_key: str, confirm_id: str, registration_token: object) -> bool:
+    """Clear only the exact owned registration, preserving newer attempts."""
+    with _lock:
+        entry = _pending.get(session_key)
+        if (not entry or entry.get("confirm_id") != confirm_id
+                or entry.get("registration_token") is not registration_token):
+            return False
+        _pending.pop(session_key, None)
+        return True
 
 
 def _is_stale(entry: Dict[str, Any], timeout: float) -> bool:
@@ -74,6 +112,9 @@ async def resolve(session_key: str, confirm_id: str, choice: str,
             return None
         # Pop before running so duplicate callbacks (button double-click) cannot run it twice.
         _pending.pop(session_key, None)
+        one_shot_key = entry.get("one_shot_key")
+        if one_shot_key:
+            _resolved_once[one_shot_key] = time.time()
         if _is_stale(entry, timeout):
             return None
         handler = entry.get("handler")

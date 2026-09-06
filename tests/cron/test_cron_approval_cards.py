@@ -5,6 +5,17 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _clean_confirm_state():
+    from tools import slash_confirm
+
+    slash_confirm._pending.clear()
+    slash_confirm._resolved_once.clear()
+    yield
+    slash_confirm._pending.clear()
+    slash_confirm._resolved_once.clear()
+
+
 def envelope(*items):
     return json.dumps({"hermes_cron_approval": 1, "recommendations": list(items)})
 
@@ -100,9 +111,10 @@ async def test_native_card_registers_before_render_and_never_offers_always(monke
     registered = []
     monkeypatch.setattr(
         slash_confirm,
-        "register",
-        lambda session_key, confirm_id, command, handler: registered.append(
-            (session_key, confirm_id, command, handler)
+        "register_once",
+        lambda session_key, confirm_id, command, handler: (
+            registered.append((session_key, confirm_id, command, handler))
+            or ("registered", object())
         ),
     )
     adapter = SimpleNamespace(send_slash_confirm=AsyncMock(return_value=SimpleNamespace(success=True)))
@@ -125,6 +137,90 @@ async def test_native_card_registers_before_render_and_never_offers_always(monke
     assert kwargs["allow_always"] is False
     assert "trigger 25" in kwargs["message"]
     assert registered[0][2] == "cron.pause:gurney:ce58ebbaa272"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_mode", ["result", "exception"])
+async def test_second_render_failure_preserves_first_visible_control(monkeypatch, failure_mode):
+    from cron import approval_cards
+    from tools import slash_confirm
+
+    effects = []
+    monkeypatch.setattr(
+        approval_cards,
+        "_pause_target",
+        lambda action: effects.append(dict(action)) or {
+            "id": action["job_id"], "name": action["expected_name"], "state": "paused"
+        },
+    )
+    second_failure = (
+        RuntimeError("second render failed") if failure_mode == "exception"
+        else SimpleNamespace(success=False, error="second render failed")
+    )
+    adapter = SimpleNamespace(send_slash_confirm=AsyncMock(side_effect=[
+        SimpleNamespace(success=True, message_id="first-visible"),
+        second_failure,
+    ]))
+    first = recommendation()
+    second = recommendation("second trigger 25", "b123456789ab", "Second watcher")
+    card = approval_cards.parse_approval_card(envelope(first, second))
+    assert card is not None
+
+    execution_id = f"exec-partial-{failure_mode}"
+    send = approval_cards.send_approval_card(
+        adapter, chat_id="1", card=card, metadata=None,
+        source_job={
+            "id": "5291b75fe0f1", "execution_id": execution_id,
+            "approval_actions": [first["action"], second["action"]],
+        },
+    )
+    if failure_mode == "exception":
+        with pytest.raises(RuntimeError, match="second render failed"):
+            await send
+    else:
+        result = await send
+        assert result.success is False
+    first_session_key, first_confirm_id = approval_cards._confirmation_ids(
+        {"id": "5291b75fe0f1", "execution_id": execution_id}, 0, first["action"])
+    second_session_key, _ = approval_cards._confirmation_ids(
+        {"id": "5291b75fe0f1", "execution_id": execution_id}, 1, second["action"])
+    assert slash_confirm.get_pending(first_session_key) is not None
+    assert slash_confirm.get_pending(second_session_key) is None
+
+    pending_retry_adapter = SimpleNamespace(send_slash_confirm=AsyncMock(
+        return_value=SimpleNamespace(success=True, message_id="second-visible")))
+    pending_retry = await approval_cards.send_approval_card(
+        pending_retry_adapter, chat_id="1", card=card, metadata=None,
+        source_job={
+            "id": "5291b75fe0f1", "execution_id": execution_id,
+            "approval_actions": [first["action"], second["action"]],
+        },
+    )
+    assert pending_retry.success is True
+    pending_retry_adapter.send_slash_confirm.assert_awaited_once()
+    assert "Second watcher" in pending_retry_adapter.send_slash_confirm.call_args.kwargs["message"]
+    assert slash_confirm.get_pending(first_session_key) is not None
+    assert slash_confirm.get_pending(second_session_key) is not None
+
+    approved = await slash_confirm.resolve(first_session_key, first_confirm_id, "once")
+    assert approved is not None
+    assert "paused" in approved.lower()
+    assert len(effects) == 1
+    assert await slash_confirm.resolve(first_session_key, first_confirm_id, "once") is None
+    assert len(effects) == 1
+
+    retry_adapter = SimpleNamespace(send_slash_confirm=AsyncMock())
+    retry = await approval_cards.send_approval_card(
+        retry_adapter, chat_id="1", card=card, metadata=None,
+        source_job={
+            "id": "5291b75fe0f1", "execution_id": execution_id,
+            "approval_actions": [first["action"], second["action"]],
+        },
+    )
+    assert retry.success is True
+    retry_adapter.send_slash_confirm.assert_not_awaited()
+    assert slash_confirm.get_pending(first_session_key) is None
+    slash_confirm.clear(second_session_key)
 
 
 @pytest.mark.asyncio

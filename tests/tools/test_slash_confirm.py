@@ -16,8 +16,10 @@ from tools import slash_confirm
 def _clean_pending():
     """Every test gets a clean primitive state."""
     slash_confirm._pending.clear()
+    slash_confirm._resolved_once.clear()
     yield
     slash_confirm._pending.clear()
+    slash_confirm._resolved_once.clear()
 
 
 class TestRegisterAndGetPending:
@@ -106,6 +108,24 @@ class TestClear:
     def test_clear_missing_is_noop(self):
         # Should not raise.
         slash_confirm.clear("nobody")
+
+    def test_owned_clear_does_not_remove_newer_registration(self):
+        async def old_handler(choice):
+            return "old"
+
+        async def new_handler(choice):
+            return "new"
+
+        state, old_token = slash_confirm.register_once(
+            "sess1", "cid1", "old", old_handler)
+        assert state == "registered"
+        assert old_token is not None
+        slash_confirm.register("sess1", "cid1", "new", new_handler)
+
+        assert slash_confirm.clear_if_matches("sess1", "cid1", old_token) is False
+        pending = slash_confirm.get_pending("sess1")
+        assert pending is not None
+        assert pending["command"] == "new"
 
 
 class TestClearIfStale:

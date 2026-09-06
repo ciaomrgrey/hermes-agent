@@ -137,7 +137,6 @@ async def send_approval_card(
 
     ensure_approval_card_allowed(card, source_job)
     sent = []
-    registered_session_keys = []
     for index, recommendation in enumerate(card["recommendations"]):
         action = dict(recommendation["action"])
         session_key, confirm_id = _confirmation_ids(source_job, index, action)
@@ -152,8 +151,10 @@ async def send_approval_card(
             return f"✅ Paused {bound_action['profile']}/{paused['name']} ({paused['id']}); state read back: paused."
 
         command = f"cron.pause:{action['profile']}:{action['job_id']}"
-        slash_confirm.register(session_key, confirm_id, command, handler)
-        registered_session_keys.append(session_key)
+        registration, registration_token = slash_confirm.register_once(
+            session_key, confirm_id, command, handler)
+        if registration != "registered":
+            continue
         try:
             result = await adapter.send_slash_confirm(
                 chat_id=chat_id,
@@ -167,12 +168,12 @@ async def send_approval_card(
                 allow_always=False,
             )
         except Exception:
-            for registered_key in registered_session_keys:
-                slash_confirm.clear(registered_key)
+            slash_confirm.clear_if_matches(
+                session_key, confirm_id, registration_token)
             raise
         if not result or not getattr(result, "success", False):
-            for registered_key in registered_session_keys:
-                slash_confirm.clear(registered_key)
+            slash_confirm.clear_if_matches(
+                session_key, confirm_id, registration_token)
             return SimpleNamespace(success=False, error=getattr(result, "error", "approval render failed"))
         sent.append(result)
     return SimpleNamespace(
