@@ -189,9 +189,21 @@ class BurnRateTest(unittest.TestCase):
             **self.row(10, last=99100.), 'source_job_id': 'ce58ebbaa272',
             'source_job_name': 'Night watcher',
         }}
-        finding = self.watch.evaluate(now, [past])['calls:gurney/xai-oauth:1h']
+        finding = self.watch.evaluate(
+            now, [past], bind_actions=True,
+        )['calls:gurney/xai-oauth:1h']
         self.assertEqual('cron.pause', finding['action']['kind'])
         self.assertEqual('ce58ebbaa272', finding['action']['job_id'])
+
+    def test_action_is_not_pushed_before_native_controls_are_enabled(self):
+        now = self.sample(used=1.)
+        now['rows'] = {'x': {
+            **self.row(30, first=99500.), 'source_job_id': 'ce58ebbaa272',
+            'source_job_name': 'Night watcher',
+        }}
+        finding = self.watch.evaluate(now, [])['calls:gurney/xai-oauth:1h']
+        self.assertNotIn('action', finding)
+        self.assertNotIn('Pause ', finding['text'])
 
     def test_bound_recommendation_emits_native_control_envelope(self):
         import json, tempfile
@@ -201,7 +213,9 @@ class BurnRateTest(unittest.TestCase):
             'source_job_name': 'Night watcher',
         }}
         with tempfile.TemporaryDirectory() as temp:
-            output = self.watch.run_once(now, Path(temp))
+            output = self.watch.run_once(
+                now, Path(temp), approval_controls=True,
+            )
         payload = json.loads(output)
         self.assertEqual(1, payload['hermes_cron_approval'])
         self.assertEqual(
@@ -284,6 +298,23 @@ class BurnRateTest(unittest.TestCase):
     def test_null_reset_preserves_percentage_but_disables_delta(self):
         windows, extra = self.watch.parse_anthropic({'nimbus_quill': {'utilization': 0, 'resets_at': None}})
         self.assertEqual({'used': 0., 'reset': None}, windows['anthropic/nimbus_quill'])
+
+    def test_dynamic_limits_preserve_model_scoped_quota(self):
+        windows, extra = self.watch.parse_anthropic({
+            'five_hour': {'utilization': 8, 'resets_at': '2026-09-06T21:10:00Z'},
+            'seven_day': {'utilization': 27, 'resets_at': '2026-09-11T23:00:00Z'},
+            'limits': [
+                {
+                    'kind': 'weekly_scoped', 'percent': 14,
+                    'resets_at': '2026-09-11T22:59:59Z',
+                    'scope': {'model': {'id': None, 'display_name': 'Fable'}},
+                },
+            ],
+        })
+        self.assertEqual(
+            14., windows['anthropic/weekly_scoped/model/Fable']['used'],
+        )
+        self.assertEqual(3, len(windows))
 
 if __name__ == '__main__':
     unittest.main()

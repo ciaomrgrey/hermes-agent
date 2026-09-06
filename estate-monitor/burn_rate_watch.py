@@ -25,6 +25,32 @@ def parse_anthropic(payload):
         if reset is not None and reset.tzinfo is None:
             raise ValueError('quota reset lacks timezone')
         windows['anthropic/' + key] = {'used': percentage(value['utilization']), 'reset': reset.timestamp() if reset else None}
+    for limit in payload.get('limits') or []:
+        if not isinstance(limit, dict) or not isinstance(limit.get('kind'), str):
+            raise ValueError('invalid dynamic quota limit')
+        kind = limit['kind']
+        if ((kind == 'session' and 'anthropic/five_hour' in windows)
+                or (kind == 'weekly_all' and 'anthropic/seven_day' in windows)):
+            continue
+        scope = limit.get('scope') or {}
+        scope_parts = []
+        for scope_kind, scope_value in sorted(scope.items()):
+            if scope_value is None:
+                continue
+            if isinstance(scope_value, dict):
+                identifier = scope_value.get('id') or scope_value.get('display_name')
+            else:
+                identifier = scope_value
+            if identifier is not None:
+                scope_parts.append(f'{scope_kind}/{identifier}')
+        name = '/'.join(['anthropic', kind] + scope_parts)
+        reset = datetime.fromisoformat(limit['resets_at'].replace('Z', '+00:00')) if limit.get('resets_at') else None
+        if reset is not None and reset.tzinfo is None:
+            raise ValueError('quota reset lacks timezone')
+        windows[name] = {
+            'used': percentage(limit['percent']),
+            'reset': reset.timestamp() if reset else None,
+        }
     # utilization is already percentage points (0.5 means 0.5%, NOT 50%).
     extra = payload.get('extra_usage') or {}
     return windows, {k: extra[k] for k in ('is_enabled', 'used_credits', 'monthly_limit', 'currency') if k in extra}
@@ -45,7 +71,7 @@ def new_findings(findings, previous):
         else priorities.get(value['level'], 9),
         value['text']))
 
-def evaluate(current, history):
+def evaluate(current, history, bind_actions=False):
     findings = {}
     for name, window in sorted(current['quota'].items()):
         used = window['used']
@@ -106,7 +132,7 @@ def evaluate(current, history):
                     'text': f'⚠️ {group}: ≥{calls} calls/{hours}h (trigger {threshold}).',
                 }
                 jobs = source_jobs.get(group, {})
-                if group not in unbound and len(jobs) == 1:
+                if bind_actions and group not in unbound and len(jobs) == 1:
                     job_id, job_name = next(iter(jobs.items()))
                     profile = group.split('/', 1)[0]
                     finding['text'] = (
@@ -213,7 +239,7 @@ def accounting_status(rows, quota):
     return status, errors
 
 
-def run_once(current, directory, retry_delivery=False):
+def run_once(current, directory, retry_delivery=False, approval_controls=False):
     import copy
     import json
     current = copy.deepcopy(current)
@@ -231,7 +257,7 @@ def run_once(current, directory, retry_delivery=False):
     history = [s for s in state['history'] if 0 < current['at']-s['at'] <= 43200]
     if state['history'] and current['at'] <= state['history'][-1]['at']:
         current['errors'].append('observation clock moved backwards: rate history discarded')
-    findings = evaluate(current, history)
+    findings = evaluate(current, history, bind_actions=approval_controls)
     previous = state['findings']
     changed = new_findings(findings, previous)
     stamp = datetime.fromtimestamp(current['at'], timezone.utc).isoformat(timespec='seconds')
@@ -359,6 +385,7 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         retry_delivery = False
         jobs = home/'cron/jobs.json'
+        job = {}
         if jobs.exists():
             job = next((j for j in json.loads(jobs.read_text())['jobs'] if j['id'] == JOB_ID), {})
             checkpoint = args.state_dir/'state.json'
@@ -370,7 +397,11 @@ def main():
                     retry_delivery = not acknowledged
             except (ValueError, TypeError, KeyError):
                 retry_delivery = True
-        output = run_once(collect(home.parent), args.state_dir, retry_delivery=retry_delivery)
+        output = run_once(
+            collect(home.parent), args.state_dir,
+            retry_delivery=retry_delivery,
+            approval_controls=job.get('approval_controls') is True,
+        )
         if output:
             print(output)
 
