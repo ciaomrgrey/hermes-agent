@@ -17,7 +17,7 @@ def test_pending_delivery_is_claimed_and_sent_once(tmp_path, monkeypatch):
 
     assert queue.drain(send) == 1
     assert queue.drain(send) == 0
-    send.assert_called_once_with({"id": "job-1"}, "brief", False)
+    send.assert_called_once_with({"id": "job-1"}, "brief", False, "exec-1")
     status = queue.get_status("exec-1")
     assert status["status"] == "delivered"
     assert status["job_json"] == "{}"
@@ -69,6 +69,7 @@ def test_failure_delivery_lane_survives_durable_handoff(tmp_path, monkeypatch):
         {"id": "job-failure", "failure_deliver": "local"},
         "failed",
         True,
+        "exec-failure",
     )
 
 
@@ -182,7 +183,7 @@ def test_wait_timeout_leaves_unclaimed_delivery_queued_for_next_gateway(
     assert status["status"] == "pending"
     send = Mock(return_value=None)
     assert queue.drain(send) == 1
-    send.assert_called_once_with(job, "result", False)
+    send.assert_called_once_with(job, "result", False, "exec-3")
     assert queue.get_status("exec-3")["status"] == "delivered"
 
 

@@ -61,6 +61,37 @@ def test_plain_cron_output_is_not_a_control_card():
     assert parse_approval_card("✅ Nothing to report.") is None
 
 
+def test_confirmation_identity_is_unique_per_execution():
+    from cron.approval_cards import _confirmation_ids
+
+    action = recommendation()["action"]
+    first = _confirmation_ids(
+        {"id": "5291b75fe0f1", "execution_id": "exec-1"}, 0, action)
+    second = _confirmation_ids(
+        {"id": "5291b75fe0f1", "execution_id": "exec-2"}, 0, action)
+    assert first != second
+
+
+def test_pause_job_exact_checks_bound_name_inside_mutation_lock(monkeypatch):
+    from cron import jobs
+
+    stored = [{
+        "id": "ce58ebbaa272", "name": "Night watcher",
+        "enabled": True, "state": "scheduled",
+    }]
+    monkeypatch.setattr(jobs, "load_jobs", lambda: stored)
+    monkeypatch.setattr(jobs, "save_jobs", lambda value: None)
+
+    with pytest.raises(ValueError):
+        jobs.pause_job_exact("ce58ebbaa272", "Renamed watcher")
+    assert stored[0]["enabled"] is True
+
+    paused = jobs.pause_job_exact("ce58ebbaa272", "Night watcher")
+    assert paused is not None
+    assert paused["state"] == "paused"
+    assert stored[0]["enabled"] is False
+
+
 @pytest.mark.asyncio
 async def test_native_card_registers_before_render_and_never_offers_always(monkeypatch):
     from cron import approval_cards
@@ -140,7 +171,10 @@ def test_scheduler_routes_control_envelope_to_native_live_adapter(monkeypatch):
         platform=Platform.TELEGRAM,
         chat_id="471605389",
         where="telegram:471605389",
-        job={"id": "5291b75fe0f1", "execution_id": "exec-4"},
+        job={
+            "id": "5291b75fe0f1", "no_agent": True,
+            "approval_controls": True,
+        },
     )
     routed = []
     monkeypatch.setattr(delivery, "_resolve_delivery_targets", lambda job, for_failure=False: [
@@ -150,7 +184,7 @@ def test_scheduler_routes_control_envelope_to_native_live_adapter(monkeypatch):
     monkeypatch.setattr(
         delivery,
         "_deliver_approval_card_via_live_adapter",
-        lambda t, card, errors: routed.append((t, card)) or True,
+        lambda t, card, errors, execution_id: routed.append((t, card)) or True,
     )
     monkeypatch.setattr(
         delivery,
@@ -160,9 +194,25 @@ def test_scheduler_routes_control_envelope_to_native_live_adapter(monkeypatch):
     monkeypatch.setattr("gateway.config.load_gateway_config", lambda: SimpleNamespace())
 
     error = delivery._deliver_result(
-        target.job, card_text, adapters={"telegram": object()}, loop=SimpleNamespace()
+        target.job, card_text, adapters={"telegram": object()}, loop=SimpleNamespace(),
+        execution_id="exec-4",
     )
 
     assert error is None
     assert len(routed) == 1
     assert routed[0][1]["recommendations"][0]["action"]["job_id"] == "ce58ebbaa272"
+
+
+def test_agent_cron_cannot_mint_approval_controls(monkeypatch):
+    from cron import scheduler_delivery as delivery
+
+    monkeypatch.setattr(
+        delivery, "_resolve_delivery_targets",
+        lambda job, for_failure=False: [{"platform": "telegram", "chat_id": "1"}],
+    )
+    error = delivery._deliver_result(
+        {"id": "agent-job", "no_agent": False, "approval_controls": True},
+        envelope(recommendation()),
+        execution_id="exec-agent",
+    )
+    assert "trusted no-agent job" in error

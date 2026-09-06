@@ -75,6 +75,14 @@ class BurnRateTest(unittest.TestCase):
         findings = self.watch.evaluate(now, [past])
         self.assertTrue(any('counter' in f['text'] and 'UNMEASURED' in f['text'] for f in findings.values()))
 
+    def test_deleted_ledger_row_is_unmeasured_not_zero(self):
+        now = self.sample()
+        past = self.sample(at=99100.)
+        past['rows'] = {'r': self.row(500, last=99100.)}
+        finding = self.watch.evaluate(now, [past])['counter:gurney/xai-oauth']
+        self.assertEqual('unmeasured', finding['level'])
+        self.assertIn('disappeared', finding['text'])
+
     def test_anthropic_fraction_is_percentage_not_fraction_multiplier(self):
         self.assertTrue(hasattr(self.watch, 'parse_anthropic'), 'raw Anthropic percentage parser missing')
         windows, extra = self.watch.parse_anthropic({'five_hour': {'utilization': .5, 'resets_at': '2026-09-06T16:00:00Z'}, 'seven_day_fable': {'utilization': 7, 'resets_at': '2026-09-11T23:00:00Z'}, 'extra_usage': {'is_enabled': False}})
@@ -205,6 +213,23 @@ class BurnRateTest(unittest.TestCase):
         self.assertNotIn('action', finding)
         self.assertNotIn('Pause ', finding['text'])
 
+    def test_pause_actions_are_restricted_to_authorized_gurney_jobs(self):
+        now = self.sample(used=1.)
+        past = self.sample(at=99100., used=1.)
+        now['rows'] = {'x': {
+            'profile': 'cody', 'provider': 'xai-oauth', 'calls': 40,
+            'first': 1., 'last': 100000., 'source_job_id': 'aaaaaaaaaaaa',
+            'source_job_name': 'Unrelated watcher',
+        }}
+        past['rows'] = {'x': {
+            **now['rows']['x'], 'calls': 10, 'last': 99100.,
+        }}
+        finding = self.watch.evaluate(
+            now, [past], bind_actions=True,
+        )['calls:cody/xai-oauth:1h']
+        self.assertNotIn('action', finding)
+        self.assertNotIn('Pause ', finding['text'])
+
     def test_bound_recommendation_emits_native_control_envelope(self):
         import json, tempfile
         now = self.sample(used=1.)
@@ -289,6 +314,25 @@ class BurnRateTest(unittest.TestCase):
             third = self.watch.run_once(self.sample(at=101800., used=0., reset=120000.), directory, retry_delivery=True)
             self.assertEqual(second.count('21%'), third.count('21%'))
             self.assertEqual('✅ Nothing to report.', self.watch.run_once(self.sample(at=102700., used=0., reset=120000.), directory))
+
+    def test_success_acknowledges_only_the_one_delivered_finding(self):
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            current = self.sample(used=21.)
+            current['quota']['openai-codex/session'] = {
+                'used': 91., 'reset': 110000.,
+            }
+            first = self.watch.run_once(current, directory)
+            state = json.loads((directory/'state.json').read_text())
+            self.assertEqual(2, len(state['pending']))
+
+            current['at'] = 100900.
+            second = self.watch.run_once(current, directory)
+            state = json.loads((directory/'state.json').read_text())
+            self.assertNotEqual(first, second)
+            self.assertNotEqual('✅ Nothing to report.', second)
+            self.assertEqual(1, len(state['pending']))
 
     def test_new_reset_window_realerts_same_absolute_severity(self):
         before = self.watch.evaluate(self.sample(used=21.), [])

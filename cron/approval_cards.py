@@ -96,9 +96,12 @@ def _pause_target(action: dict[str, Any]) -> dict[str, Any]:
 def _confirmation_ids(
     source_job: dict[str, Any], index: int, action: dict[str, Any],
 ) -> tuple[str, str]:
+    execution_id = source_job.get('execution_id')
+    if not isinstance(execution_id, str) or not execution_id:
+        raise ValueError('cron approval requires an execution identity')
     canonical_action = json.dumps(action, sort_keys=True, separators=(",", ":"))
     identity = (
-        f"{source_job.get('id', '')}:{source_job.get('execution_id', '')}:"
+        f"{source_job.get('id', '')}:{execution_id}:"
         f"{index}:{canonical_action}")
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
     return f"cron-approval:{digest}", digest

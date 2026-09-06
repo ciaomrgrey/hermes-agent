@@ -1110,12 +1110,13 @@ def drain_delivery_queue(adapters, loop) -> int:
     if not _path().exists():
         return 0
     return drain(
-        lambda queued_job, queued_content, queued_for_failure: _deliver_result(
+        lambda queued_job, queued_content, queued_for_failure, execution_id: _deliver_result(
             queued_job,
             queued_content,
             adapters=adapters,
             loop=loop,
             for_failure=queued_for_failure,
+            execution_id=execution_id,
         )
     )
 
@@ -2710,7 +2711,7 @@ class _RunDelivery:
 
 def _save_compose_deliver(
     d: _RunDelivery, fence: _FireOwnership, final_response: str, output: str, *,
-    adapters, loop, verbose: bool, execution_token,
+    adapters, loop, verbose: bool, execution_token, execution_id: str,
 ) -> None:
     """Save output, compose the notice and deliver it (both side effects run under the fire-claim
     fence; a lost claim raises ``_FireClaimLostDuringSideEffect`` for the caller)."""
@@ -2767,6 +2768,7 @@ def _save_compose_deliver(
                 deliver_content,
                 adapters=adapters,
                 loop=loop,
+                execution_id=execution_id,
                 # Failure summaries (and drift/blocked-config alerts composed into deliver_content
                 # on the failure path) honor the job's failure_deliver override (NS-788).
                 for_failure=not d.success,
@@ -2975,7 +2977,7 @@ def _run_one_job_body(
         try:
             _save_compose_deliver(
                 d, fence, final_response, output, adapters=adapters, loop=loop, verbose=verbose,
-                execution_token=execution_token)
+                execution_token=execution_token, execution_id=execution_id)
         except _FireClaimLostDuringSideEffect:
             d.side_effect_ownership_lost = True
         finally:

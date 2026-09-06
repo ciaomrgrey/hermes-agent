@@ -125,6 +125,15 @@ def evaluate(current, history, bind_actions=False):
                     source_jobs.setdefault(group, {})[job_id] = job_name
                 else:
                     unbound.add(group)
+        if baseline:
+            for key, old in baseline['rows'].items():
+                if key in current['rows'] or old['last'] < start:
+                    continue
+                group = old['profile'] + '/' + old['provider']
+                findings.setdefault('counter:' + group, {
+                    'level': 'unmeasured',
+                    'text': f'UNMEASURED — {group} ledger row disappeared; delta unavailable.',
+                })
         for group, calls in sorted(totals.items()):
             if calls >= threshold:
                 finding = {
@@ -132,7 +141,11 @@ def evaluate(current, history, bind_actions=False):
                     'text': f'⚠️ {group}: ≥{calls} calls/{hours}h (trigger {threshold}).',
                 }
                 jobs = source_jobs.get(group, {})
-                if bind_actions and group not in unbound and len(jobs) == 1:
+                profile = group.split('/', 1)[0]
+                if (
+                    bind_actions and profile == 'gurney'
+                    and group not in unbound and len(jobs) == 1
+                ):
                     job_id, job_name = next(iter(jobs.items()))
                     profile = group.split('/', 1)[0]
                     finding['text'] = (
@@ -263,12 +276,16 @@ def run_once(current, directory, retry_delivery=False, approval_controls=False):
     stamp = datetime.fromtimestamp(current['at'], timezone.utc).isoformat(timespec='seconds')
     # Pending notices retain their ORIGINAL observation timestamp until native
     # cron acknowledges delivery, even if the condition has since cleared.
-    pending = state.get('pending', {}) if retry_delivery else {}
+    saved_pending = state.get('pending', {})
     # Migrate the v1 text->timestamp checkpoint shape without nesting notices.
     pending = {
         key: (value if isinstance(value, dict) else {'text': key, 'observed': value})
-        for key, value in pending.items()
+        for key, value in saved_pending.items()
     }
+    # A successful cron completion acknowledges only the one standalone issue
+    # selected on the previous run.  Delivery failures retain the full queue.
+    if pending and not retry_delivery:
+        pending.pop(next(iter(pending)))
     for finding in changed:
         pending.setdefault(finding['text'], {
             'text': finding['text'], 'observed': stamp,

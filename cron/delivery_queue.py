@@ -281,7 +281,7 @@ def recover_abandoned() -> int:
 
 
 def drain(
-    send: Callable[[dict, str, bool], Optional[str]], *, limit: int = 20
+    send: Callable[[dict, str, bool, str], Optional[str]], *, limit: int = 20
 ) -> int:
     """Deliver pending rows through *send*, terminalizing every claimed row."""
     recover_abandoned()
@@ -295,7 +295,8 @@ def drain(
         try:
             try:
                 error = send(
-                    row["job"], row["content"], bool(row["for_failure"])
+                    row["job"], row["content"], bool(row["for_failure"]),
+                    str(row["execution_id"]),
                 )
             except BaseException as exc:
                 error = f"{type(exc).__name__}: {exc}"

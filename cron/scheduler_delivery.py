@@ -1373,7 +1373,7 @@ def _deliver_via_live_adapter(
 
 
 def _deliver_approval_card_via_live_adapter(
-    t: _TargetDelivery, card: dict, delivery_errors: list,
+    t: _TargetDelivery, card: dict, delivery_errors: list, execution_id: str,
 ) -> bool:
     """Render a validated Telegram approval card through the existing control path."""
     from agent.async_utils import safe_schedule_threadsafe
@@ -1386,7 +1386,7 @@ def _deliver_approval_card_via_live_adapter(
             chat_id=t.chat_id,
             card=card,
             metadata=route_metadata,
-            source_job=t.job,
+            source_job={**t.job, "execution_id": execution_id},
         ),
         t.loop,
         logger=logger,
@@ -1631,7 +1631,8 @@ def _unresolved_delivery_outcome(job: dict, for_failure: bool) -> Optional[str]:
 
 
 def _deliver_result(
-    job: dict, content: str, adapters=None, loop=None, *, for_failure: bool = False
+    job: dict, content: str, adapters=None, loop=None, *, for_failure: bool = False,
+    execution_id: Optional[str] = None,
 ) -> Optional[str]:
     """Deliver job output to the configured target(s). With ``adapters``/``loop`` (gateway
     running) the live adapter is tried first (E2EE rooms can't use the standalone HTTP path), then
@@ -1640,6 +1641,14 @@ def _deliver_result(
     from cron.approval_cards import parse_approval_card
 
     approval_card = parse_approval_card(content)
+    approval_execution_id = execution_id or ""
+    if approval_card is not None and not (
+        job.get("no_agent") is True
+        and job.get("approval_controls") is True
+        and isinstance(execution_id, str)
+        and approval_execution_id
+    ):
+        return "native approval control requires a trusted no-agent job, explicit enablement, and execution identity"
     targets = _resolve_delivery_targets(job, for_failure=for_failure)
     if not targets:
         return _unresolved_delivery_outcome(job, for_failure)
@@ -1737,7 +1746,8 @@ def _deliver_result(
                 delivery_errors.append(
                     f"native Telegram approval control unavailable for {t.where}")
                 continue
-            _deliver_approval_card_via_live_adapter(t, approval_card, delivery_errors)
+            _deliver_approval_card_via_live_adapter(
+                t, approval_card, delivery_errors, approval_execution_id)
             continue
         target_errors: list = []
         delivered = t.live_adapter_ready and _deliver_via_live_adapter(
