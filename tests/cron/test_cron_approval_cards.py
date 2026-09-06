@@ -1,6 +1,6 @@
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -113,7 +113,10 @@ async def test_native_card_registers_before_render_and_never_offers_always(monke
         chat_id="471605389",
         card=card,
         metadata=None,
-        source_job={"id": "5291b75fe0f1", "execution_id": "exec-1"},
+        source_job={
+            "id": "5291b75fe0f1", "execution_id": "exec-1",
+            "approval_actions": [recommendation()["action"]],
+        },
     )
 
     assert result.success is True
@@ -122,6 +125,43 @@ async def test_native_card_registers_before_render_and_never_offers_always(monke
     assert kwargs["allow_always"] is False
     assert "trigger 25" in kwargs["message"]
     assert registered[0][2] == "cron.pause:gurney:ce58ebbaa272"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "allowed_actions",
+    [
+        None,
+        [],
+        [{**recommendation()["action"], "profile": "ripley"}],
+        [{**recommendation()["action"], "job_id": "b123456789ab"}],
+        [{**recommendation()["action"], "expected_name": "Renamed watcher"}],
+    ],
+)
+async def test_native_card_rejects_actions_not_exactly_allowed_by_source_job(
+    monkeypatch, allowed_actions,
+):
+    from cron import approval_cards
+    from tools import slash_confirm
+
+    register = Mock()
+    monkeypatch.setattr(slash_confirm, "register", register)
+    adapter = SimpleNamespace(send_slash_confirm=AsyncMock())
+    source_job = {"id": "5291b75fe0f1", "execution_id": "exec-denied"}
+    if allowed_actions is not None:
+        source_job["approval_actions"] = allowed_actions
+
+    with pytest.raises(ValueError, match="not explicitly allowed"):
+        await approval_cards.send_approval_card(
+            adapter,
+            chat_id="471605389",
+            card=approval_cards.parse_approval_card(envelope(recommendation())),
+            metadata=None,
+            source_job=source_job,
+        )
+
+    register.assert_not_called()
+    adapter.send_slash_confirm.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -141,7 +181,10 @@ async def test_approve_once_pauses_exact_bound_job_and_deny_has_no_effect(monkey
     card = approval_cards.parse_approval_card(envelope(recommendation()))
     await approval_cards.send_approval_card(
         adapter, chat_id="1", card=card, metadata=None,
-        source_job={"id": "5291b75fe0f1", "execution_id": "exec-2"},
+        source_job={
+            "id": "5291b75fe0f1", "execution_id": "exec-2",
+            "approval_actions": [recommendation()["action"]],
+        },
     )
     session_key, confirm_id = adapter.send_slash_confirm.call_args.kwargs["session_key"], adapter.send_slash_confirm.call_args.kwargs["confirm_id"]
     denied = await slash_confirm.resolve(session_key, confirm_id, "cancel")
@@ -150,7 +193,10 @@ async def test_approve_once_pauses_exact_bound_job_and_deny_has_no_effect(monkey
 
     await approval_cards.send_approval_card(
         adapter, chat_id="1", card=card, metadata=None,
-        source_job={"id": "5291b75fe0f1", "execution_id": "exec-3"},
+        source_job={
+            "id": "5291b75fe0f1", "execution_id": "exec-3",
+            "approval_actions": [recommendation()["action"]],
+        },
     )
     session_key, confirm_id = adapter.send_slash_confirm.call_args.kwargs["session_key"], adapter.send_slash_confirm.call_args.kwargs["confirm_id"]
     approved = await slash_confirm.resolve(session_key, confirm_id, "once")
@@ -174,6 +220,7 @@ def test_scheduler_routes_control_envelope_to_native_live_adapter(monkeypatch):
         job={
             "id": "5291b75fe0f1", "no_agent": True,
             "approval_controls": True,
+            "approval_actions": [recommendation()["action"]],
         },
     )
     routed = []

@@ -1638,7 +1638,7 @@ def _deliver_result(
     running) the live adapter is tried first (E2EE rooms can't use the standalone HTTP path), then
     standalone fallback. ``for_failure=True`` routes failure-category notices through the job's
     ``failure_deliver`` override when present (NS-788). Returns None on success, else an error."""
-    from cron.approval_cards import parse_approval_card
+    from cron.approval_cards import ensure_approval_card_allowed, parse_approval_card
 
     approval_card = parse_approval_card(content)
     approval_execution_id = execution_id or ""
@@ -1649,6 +1649,11 @@ def _deliver_result(
         and approval_execution_id
     ):
         return "native approval control requires a trusted no-agent job, explicit enablement, and execution identity"
+    if approval_card is not None:
+        try:
+            ensure_approval_card_allowed(approval_card, job)
+        except ValueError as exc:
+            return str(exc)
     targets = _resolve_delivery_targets(job, for_failure=for_failure)
     if not targets:
         return _unresolved_delivery_outcome(job, for_failure)

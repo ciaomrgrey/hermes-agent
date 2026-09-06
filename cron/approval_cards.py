@@ -65,6 +65,23 @@ def parse_approval_card(content: str) -> Optional[dict[str, Any]]:
     return payload
 
 
+def ensure_approval_card_allowed(card: dict[str, Any], source_job: dict[str, Any]) -> None:
+    """Fail closed unless every card action exactly matches trusted job config."""
+    configured = source_job.get("approval_actions")
+    if not isinstance(configured, list):
+        configured = []
+    allowed = {
+        json.dumps(action, sort_keys=True, separators=(",", ":"))
+        for action in configured
+        if isinstance(action, dict)
+    }
+    for recommendation in card["recommendations"]:
+        canonical = json.dumps(
+            recommendation["action"], sort_keys=True, separators=(",", ":"))
+        if canonical not in allowed:
+            raise ValueError("cron approval action is not explicitly allowed by source job")
+
+
 def _profile_home(profile: str) -> Path:
     from hermes_constants import get_hermes_home
 
@@ -118,6 +135,7 @@ async def send_approval_card(
     """Register exact handlers first, then render native one-shot controls."""
     from tools import slash_confirm
 
+    ensure_approval_card_allowed(card, source_job)
     sent = []
     registered_session_keys = []
     for index, recommendation in enumerate(card["recommendations"]):
