@@ -163,6 +163,9 @@ class _SecondaryRecoveryAdapter:
     def set_platform_event_handler(self, handler):
         self.platform_event_handler = handler
 
+    def set_co_resident_adapters_provider(self, provider):
+        self.co_resident_adapters_provider = provider
+
 
 def _secondary_recovery_runner(*, running=True):
     runner = GatewayRunner.__new__(GatewayRunner)
@@ -526,6 +529,40 @@ class TestSecondaryProfileConfigHandling:
         runner._configure_profile_adapter(adapter, "reviewer", Platform.DISCORD)
 
         assert adapter._runtime_status_platform_key == "reviewer:discord"
+
+    def test_profile_wiring_tracks_live_same_platform_adapters(self):
+        runner = _secondary_recovery_runner()
+        primary = _SecondaryRecoveryAdapter()
+        secondary = _SecondaryRecoveryAdapter()
+        replacement = _SecondaryRecoveryAdapter()
+        telegram = _SecondaryRecoveryAdapter()
+        telegram.platform = Platform.TELEGRAM
+        runner.adapters = {
+            Platform.DISCORD: primary,
+            Platform.TELEGRAM: telegram,
+        }
+        runner._profile_adapters = {
+            "reviewer": {Platform.DISCORD: secondary},
+        }
+
+        runner._configure_profile_adapter(secondary, "reviewer", Platform.DISCORD)
+
+        assert tuple(secondary.co_resident_adapters_provider()) == (primary, secondary)
+        runner.adapters[Platform.DISCORD] = replacement
+        runner._profile_adapters.pop("reviewer")
+        assert tuple(secondary.co_resident_adapters_provider()) == (replacement,)
+
+        import gc
+
+        weakref_runner = GatewayRunner.__new__(GatewayRunner)
+        weakref_runner.adapters = {}
+        weakref_runner._profile_adapters = {}
+        lone = _SecondaryRecoveryAdapter()
+        weakref_runner._wire_co_resident_adapters_provider(lone)
+        provider = lone.co_resident_adapters_provider
+        del weakref_runner
+        gc.collect()
+        assert tuple(provider()) == ()
 
     @pytest.mark.asyncio
     async def test_duplicate_credential_is_persisted_as_profile_fatal(

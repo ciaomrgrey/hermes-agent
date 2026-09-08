@@ -13925,6 +13925,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _set_reaction(self._handle_reaction_event)
             adapter.set_topic_recovery_fn(self._recover_telegram_topic_thread_id)
             adapter.set_authorization_check(self._make_adapter_auth_check(adapter.platform))
+            self._wire_co_resident_adapters_provider(adapter)
             adapter.set_platform_event_handler(self._primary_platform_event_handler())
             adapter._busy_text_mode = self._busy_text_mode
             _pending_connects.append((platform, platform_config, adapter))
@@ -15257,6 +15258,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 seen.add(aid)
                 yield adapter
 
+    def _wire_co_resident_adapters_provider(self, adapter) -> None:
+        """Give capable adapters a live, same-platform view without pinning this runner."""
+        setter = getattr(adapter, "set_co_resident_adapters_provider", None)
+        if not callable(setter):
+            return
+        runner_ref = _weakref.ref(self)
+        platform = adapter.platform
+
+        def co_resident_adapters():
+            runner = runner_ref()
+            if runner is None:
+                return ()
+            return tuple(
+                peer
+                for peer in runner._iter_gateway_adapters()
+                if getattr(peer, "platform", None) == platform
+            )
+
+        setter(co_resident_adapters)
+
     def _session_activity_for_stall(self, session_key: str) -> Optional[dict]:
         """Return the shared activity snapshot for stall progress (#72039).
 
@@ -15742,6 +15763,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _set_reaction(self._handle_reaction_event)
                     adapter.set_topic_recovery_fn(self._recover_telegram_topic_thread_id)
                     adapter.set_authorization_check(self._make_adapter_auth_check(adapter.platform))
+                    self._wire_co_resident_adapters_provider(adapter)
                     adapter.set_platform_event_handler(self._primary_platform_event_handler())
                     adapter._busy_text_mode = self._busy_text_mode
 
@@ -16873,6 +16895,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         adapter.set_authorization_check(
             self._make_adapter_auth_check(platform, profile_name=profile_name)
         )
+        self._wire_co_resident_adapters_provider(adapter)
         adapter.set_platform_event_handler(
             self._make_profile_platform_event_handler(profile_name)
         )
