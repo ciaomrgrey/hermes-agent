@@ -201,6 +201,45 @@ def test_delegated_child_marker_does_not_persist_in_parent_terminal_snapshot(
         env.cleanup()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX bash snapshot path")
+def test_parallel_delegated_children_do_not_poison_parent_terminal_snapshot(
+    monkeypatch,
+    tmp_path,
+):
+    """Concurrent children retain lineage without corrupting parent shell state."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.delenv("HERMES_DELEGATED_CHILD_CONTEXT", raising=False)
+
+    from agent.delegation_context import delegated_child_context
+    from tools.environments.local import LocalEnvironment
+
+    command = (
+        'printf "%s|%s" "${HERMES_DELEGATED_CHILD_CONTEXT-unset}" '
+        '"${PARENT_SNAPSHOT_CANARY-unset}"'
+    )
+    env = LocalEnvironment(cwd=str(tmp_path), timeout=15)
+
+    def run_child():
+        with delegated_child_context():
+            return env.execute(command, timeout=15)["output"]
+
+    try:
+        parent_before = env.execute(
+            "export PARENT_SNAPSHOT_CANARY=kept; " + command,
+            timeout=15,
+        )["output"]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            children = list(pool.map(lambda _index: run_child(), range(2)))
+        parent_after = env.execute(command, timeout=15)["output"]
+
+        assert parent_before == "unset|kept"
+        assert children == ["1|kept", "1|kept"]
+        assert parent_after == "unset|kept"
+    finally:
+        env.cleanup()
+
+
 def test_delegate_child_kanban_cli_cannot_delete_parent_board(
     monkeypatch,
     tmp_path,
