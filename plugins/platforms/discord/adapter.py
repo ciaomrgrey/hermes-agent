@@ -1396,13 +1396,14 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 return False, False
             role_authorized = bool(getattr(self, "_allowed_role_ids", set()))
         raw_self_mention = self._self_is_explicitly_mentioned(message)
+        raw_other_bot_mention = self._raw_mentions_other_bot(message)
         if not isinstance(message.channel, discord.DMChannel) and (
-            message.mentions or raw_self_mention
+            message.mentions or raw_self_mention or raw_other_bot_mention
         ):
             other_bots_mentioned = any(
                 mentioned.bot and mentioned != self._client.user
                 for mentioned in message.mentions
-            )
+            ) or raw_other_bot_mention
             if other_bots_mentioned and not raw_self_mention:
                 return False, False
             ignore_no_mention = os.getenv(
@@ -4688,6 +4689,22 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         since ``message.mentions`` isn't always populated (mobile/edited/relayed)."""
         content = getattr(message, "content", "") or ""
         return {match.group(1) for match in re.finditer(r"<@!?(\d+)>", content)}
+
+    def _raw_mentions_other_bot(self, message: Any) -> bool:
+        """True when a raw mention resolves to another cached bot user."""
+        if not self._client or not self._client.user:
+            return False
+        self_id = str(self._client.user.id)
+        guild = getattr(message, "guild", None)
+        get_member = getattr(guild, "get_member", None)
+        get_user = getattr(self._client, "get_user", None)
+        for user_id in self._raw_mentioned_user_ids(message) - {self_id}:
+            mentioned = get_member(int(user_id)) if callable(get_member) else None
+            if mentioned is None and callable(get_user):
+                mentioned = get_user(int(user_id))
+            if getattr(mentioned, "bot", False):
+                return True
+        return False
 
     def _self_is_explicitly_mentioned(self, message: Any) -> bool:
         """True when the bot is in ``message.mentions`` or raw-mentioned in the content."""
