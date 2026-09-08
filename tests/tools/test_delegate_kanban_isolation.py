@@ -223,17 +223,26 @@ def test_delegate_child_kanban_cli_cannot_delete_parent_board(
     env = LocalEnvironment(cwd=str(tmp_path), timeout=15)
     try:
         with delegated_child_context():
-            result = env.execute(
+            child_result = env.execute(
                 _python_with_repo_path(code),
                 timeout=15,
             )
+        assert kb.board_exists("victim")
+        parent_result = env.execute(
+            _python_with_repo_path(code),
+            timeout=15,
+        )
     finally:
         env.cleanup()
 
-    assert result["returncode"] == 1
-    assert "delegate_task child contexts cannot mutate Kanban tasks" in result["output"]
-    assert kb.board_exists("victim")
-    assert kb.board_dir("victim").is_dir()
+    assert child_result["returncode"] == 1
+    assert (
+        "delegate_task child contexts cannot mutate Kanban tasks"
+        in child_result["output"]
+    )
+    assert parent_result["returncode"] == 0, parent_result["output"]
+    assert not kb.board_exists("victim")
+    assert not kb.board_dir("victim").exists()
 
 
 def test_delegate_child_attach_url_guard_leaves_no_row_or_file(monkeypatch, tmp_path):
