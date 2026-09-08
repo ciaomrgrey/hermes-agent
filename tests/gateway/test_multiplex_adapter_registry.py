@@ -210,6 +210,9 @@ class _SecondaryRecoveryAdapter:
     def set_platform_event_handler(self, handler):
         self.platform_event_handler = handler
 
+    def set_co_resident_adapters_provider(self, provider):
+        self.co_resident_adapters_provider = provider
+
 
 def _secondary_recovery_runner(*, running=True):
     runner = GatewayRunner.__new__(GatewayRunner)
@@ -717,6 +720,30 @@ class TestSecondaryProfileConfigHandling:
         runner._configure_profile_adapter(adapter, "reviewer", Platform.DISCORD)
 
         assert adapter._runtime_status_platform_key == "reviewer:discord"
+
+    def test_adapter_wiring_tracks_primary_and_replaced_secondary_peers(self):
+        runner = _secondary_recovery_runner()
+        primary = _SecondaryRecoveryAdapter()
+        secondary = _SecondaryRecoveryAdapter()
+        replacement = _SecondaryRecoveryAdapter()
+        runner.adapters = {Platform.DISCORD: primary}
+        runner._profile_adapters = {
+            "reviewer": {Platform.DISCORD: secondary},
+            "other": {Platform.TELEGRAM: object()},
+        }
+
+        runner._wire_adapter_handlers(
+            secondary,
+            message_handler=object(),
+            fatal_error_handler=object(),
+            busy_session_handler=object(),
+            authorization_check=object(),
+            platform_event_handler=object(),
+        )
+
+        assert secondary.co_resident_adapters_provider() == (primary, secondary)
+        runner._profile_adapters["reviewer"][Platform.DISCORD] = replacement
+        assert secondary.co_resident_adapters_provider() == (primary, replacement)
 
     @pytest.mark.asyncio
     async def test_duplicate_credential_is_persisted_as_profile_fatal(

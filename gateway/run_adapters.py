@@ -1048,7 +1048,30 @@ class GatewayAdapterLifecycleMixin:
             authorization_check or self._make_adapter_auth_check(adapter.platform)
         )
         adapter.set_platform_event_handler(platform_event_handler or self._primary_platform_event_handler())
+        set_co_resident_adapters = getattr(adapter, "set_co_resident_adapters_provider", None)
+        if callable(set_co_resident_adapters):
+            runner_ref = _weakref.ref(self)
+            platform = adapter.platform
+
+            def co_resident_adapters():
+                runner = runner_ref()
+                return runner._co_resident_platform_adapters(platform) if runner is not None else ()
+
+            set_co_resident_adapters(co_resident_adapters)
         adapter._busy_text_mode = (self._busy_text_mode if busy_text_mode is None else busy_text_mode)
+
+    def _co_resident_platform_adapters(self, platform: Platform) -> tuple[BasePlatformAdapter, ...]:
+        """Return the currently published primary and secondary adapters for one platform."""
+        adapters = []
+        primary = getattr(self, "adapters", {}).get(platform)
+        if primary is not None:
+            adapters.append(primary)
+        adapters.extend(
+            profile_adapters[platform]
+            for profile_adapters in getattr(self, "_profile_adapters", {}).values()
+            if platform in profile_adapters
+        )
+        return tuple(adapters)
 
     def _configure_profile_adapter(
         self, adapter: BasePlatformAdapter, profile_name: str, platform: Platform

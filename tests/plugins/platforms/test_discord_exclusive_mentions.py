@@ -111,40 +111,55 @@ class TestDiscordExclusiveMentions(IsolatedAsyncioTestCase):
             _adapter(bots[bot_id], users, require_mention=bot_id != 900)
             for bot_id in bots
         ]
+        co_residents = [*self.adapters, SimpleNamespace(_client=None)]
+        for adapter in self.adapters:
+            adapter.set_co_resident_adapters_provider(lambda: co_residents)
 
     async def test_raw_bot_mention_routes_only_to_selected_profile(self):
         selected = self.adapters[2]._client.user
 
-        results = [
-            await adapter._dispatch_discord_message(
-                _message(
-                    self.channel,
-                    f"<@{selected.id}> /voice join",
-                    mentions=[],
-                    message_id=100 + index,
-                )
-            )
-            for index, adapter in enumerate(self.adapters)
-        ]
+        for cache_state in ("warm", "cold"):
+            if cache_state == "cold":
+                self.channel.guild.get_member = lambda _user_id: None
+                for adapter in self.adapters:
+                    adapter._client.get_user = lambda _user_id: None
+                    adapter.handle_message.reset_mock()
 
-        self.assertEqual(results, [False, False, True, False, False])
-        self.assertEqual(
-            [adapter.handle_message.await_count for adapter in self.adapters],
-            [0, 0, 1, 0, 0],
-        )
+            results = [
+                await adapter._dispatch_discord_message(
+                    _message(
+                        self.channel,
+                        f"<@{selected.id}> /voice join",
+                        mentions=[],
+                        message_id=100 + index + (10 if cache_state == "cold" else 0),
+                    )
+                )
+                for index, adapter in enumerate(self.adapters)
+            ]
+
+            self.assertEqual(results, [False, False, True, False, False])
+            self.assertEqual(
+                [adapter.handle_message.await_count for adapter in self.adapters],
+                [0, 0, 1, 0, 0],
+            )
 
     async def test_raw_human_mention_does_not_suppress_mention_free_profile(self):
-        result = await self.adapters[0]._dispatch_discord_message(
-            _message(
-                self.channel,
-                f"<@{self.human.id}> /voice join",
-                mentions=[],
-                message_id=200,
-            )
-        )
+        for cache_state in ("warm", "cold"):
+            if cache_state == "cold":
+                self.channel.guild.get_member = lambda _user_id: None
+                self.adapters[0]._client.get_user = lambda _user_id: None
 
-        self.assertTrue(result)
-        self.assertEqual(self.adapters[0].handle_message.await_count, 1)
+            result = await self.adapters[0]._dispatch_discord_message(
+                _message(
+                    self.channel,
+                    f"<@{self.human.id}> /voice join",
+                    mentions=[],
+                    message_id=200 + (1 if cache_state == "cold" else 0),
+                )
+            )
+
+            self.assertTrue(result)
+        self.assertEqual(self.adapters[0].handle_message.await_count, 2)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ import time
 import traceback
 from collections import defaultdict
 from contextlib import suppress
-from typing import Callable, Dict, List, Optional, Any, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote, urljoin
 
 from agent.async_utils import (consume_detached_task_result as _consume_background_task_result)
@@ -4690,15 +4690,28 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         content = getattr(message, "content", "") or ""
         return {match.group(1) for match in re.finditer(r"<@!?(\d+)>", content)}
 
+    def set_co_resident_adapters_provider(
+        self, provider: Callable[[], Iterable[Any]]
+    ) -> None:
+        """Supply the gateway's live same-process adapter view for cache-free bot identity checks."""
+        self._co_resident_adapters_provider = provider
+
     def _raw_mentions_other_bot(self, message: Any) -> bool:
-        """True when a raw mention resolves to another cached bot user."""
+        """True when a raw mention identifies another co-resident or cached bot user."""
         if not self._client or not self._client.user:
             return False
         self_id = str(self._client.user.id)
+        other_ids = self._raw_mentioned_user_ids(message) - {self_id}
+        provider = getattr(self, "_co_resident_adapters_provider", None)
+        if callable(provider):
+            for adapter in provider():
+                user = getattr(getattr(adapter, "_client", None), "user", None)
+                if user is not None and str(user.id) in other_ids:
+                    return True
         guild = getattr(message, "guild", None)
         get_member = getattr(guild, "get_member", None)
         get_user = getattr(self._client, "get_user", None)
-        for user_id in self._raw_mentioned_user_ids(message) - {self_id}:
+        for user_id in other_ids:
             mentioned = get_member(int(user_id)) if callable(get_member) else None
             if mentioned is None and callable(get_user):
                 mentioned = get_user(int(user_id))
