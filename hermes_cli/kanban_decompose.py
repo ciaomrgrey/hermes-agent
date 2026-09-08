@@ -339,6 +339,25 @@ def list_triage_ids(*, tenant: Optional[str] = None) -> list[str]:
     return [row.id for row in rows]
 
 
+def list_auto_decompose_triage_ids(*, tenant: Optional[str] = None) -> list[str]:
+    """Return triage ids eligible for automatic decomposition.
+
+    Capability and human-input block loops are escalations for an operator,
+    not fresh ideas for the decomposer.  Manual ``decompose``/``specify`` keeps
+    using :func:`list_triage_ids`, so an explicit resolution remains available.
+    """
+    with kbc.connect_closing() as conn:
+        rows = kb.list_tasks(conn, status="triage", tenant=tenant, limit=1000)
+    return [
+        row.id
+        for row in rows
+        if not (
+            row.block_kind in {"capability", "needs_input"}
+            and row.block_recurrences >= kb.BLOCK_RECURRENCE_LIMIT
+        )
+    ]
+
+
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
 # Names external plugins imported from this module before the Sep 2026 decomposition.
 # Internal code MUST NOT use these (scripts/check_compat_pointers.py fails CI if it does).
