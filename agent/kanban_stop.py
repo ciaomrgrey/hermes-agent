@@ -11,6 +11,8 @@ import json
 import os
 from typing import Any, Iterable, Optional
 
+from agent.message_sanitization import tool_call_id_variants, tool_result_id_variants
+
 
 _TERMINAL_KANBAN_TOOLS = frozenset({
     "kanban_complete",
@@ -29,9 +31,24 @@ def kanban_stop_nudge_enabled() -> bool:
     return bool((os.environ.get("HERMES_KANBAN_TASK") or "").strip())
 
 
+def _tool_call_name(tool_call: Any) -> str:
+    """Return a dict or SDK object's function name."""
+    if isinstance(tool_call, dict):
+        function = tool_call.get("function")
+        return str(
+            (function.get("name") if isinstance(function, dict) else tool_call.get("name"))
+            or ""
+        )
+    function = getattr(tool_call, "function", None)
+    return str(
+        (getattr(function, "name", "") if function is not None else getattr(tool_call, "name", ""))
+        or ""
+    )
+
+
 def _successful_tool_result(msg: dict) -> bool:
-    """Whether *msg* records a successful terminal lifecycle transition."""
-    if msg.get("role") != "tool" or str(msg.get("name") or "") not in _TERMINAL_KANBAN_TOOLS:
+    """Whether *msg* carries a successful lifecycle-transition result."""
+    if msg.get("role") != "tool":
         return False
     payload: Any = msg.get("content")
     if isinstance(payload, str):
@@ -44,11 +61,23 @@ def _successful_tool_result(msg: dict) -> bool:
 
 def session_called_kanban_terminal(messages: Iterable[dict] | None) -> bool:
     """True if this conversation recorded a successful terminal kanban tool result."""
-    return any(
-        _successful_tool_result(msg)
-        for msg in messages or ()
-        if isinstance(msg, dict)
-    )
+    terminal_call_ids: set[str] = set()
+    for msg in messages or ():
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") == "assistant":
+            for tool_call in msg.get("tool_calls") or ():
+                if _tool_call_name(tool_call) in _TERMINAL_KANBAN_TOOLS:
+                    terminal_call_ids.update(tool_call_id_variants(tool_call))
+            continue
+        if not _successful_tool_result(msg):
+            continue
+        if str(msg.get("name") or "") in _TERMINAL_KANBAN_TOOLS:
+            return True
+        result_ids = tool_result_id_variants(msg.get("tool_call_id"))
+        if terminal_call_ids.intersection(result_ids):
+            return True
+    return False
 
 
 def build_kanban_stop_nudge(

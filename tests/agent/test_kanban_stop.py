@@ -29,7 +29,7 @@ def test_env_can_disable(clear_kanban_env):
     assert build_kanban_stop_nudge(messages=[]) is None
 
 
-def test_nudge_when_no_terminal_tool(clear_kanban_env):
+def test_nudge_for_genuine_unclosed_current_worker(clear_kanban_env):
     clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_46be8aa5")
     messages = [
         {"role": "user", "content": "work kanban task"},
@@ -45,6 +45,14 @@ def test_nudge_when_no_terminal_tool(clear_kanban_env):
             ],
         },
         {"role": "tool", "name": "kanban_heartbeat", "tool_call_id": "1", "content": "ok"},
+        {
+            "role": "tool",
+            "name": "kanban_show",
+            "content": (
+                '{"task":{"status":"running","current_run_id":101},'
+                '"runs":[{"id":101,"profile":"implementer","status":"running"}]}'
+            ),
+        },
     ]
     nudge = build_kanban_stop_nudge(messages=messages, attempts=0)
     assert nudge is not None
@@ -107,6 +115,43 @@ def test_no_nudge_after_kanban_request_review(clear_kanban_env):
     assert build_kanban_stop_nudge(messages=messages) is None
 
 
+def test_no_nudge_after_review_handoff_when_reviewer_is_already_running(clear_kanban_env):
+    """A later reviewer claim does not revive the stale implementer's guard."""
+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_review")
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "review-call",
+                    "type": "function",
+                    "function": {
+                        "name": "kanban_request_review",
+                        "arguments": '{"summary":"ready"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "review-call",
+            "content": '{"ok":true,"task_id":"t_review","status":"review"}',
+        },
+        {
+            "role": "tool",
+            "name": "kanban_show",
+            "content": (
+                '{"task":{"status":"running","current_run_id":202},'
+                '"runs":[{"id":101,"outcome":"review_requested"},'
+                '{"id":202,"profile":"reviewer","status":"running"}]}'
+            ),
+        },
+    ]
+    assert session_called_kanban_terminal(messages) is True
+    assert build_kanban_stop_nudge(messages=messages) is None
+
+
 def test_no_nudge_after_kanban_request_changes(clear_kanban_env):
     clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_review")
     messages = [
@@ -140,7 +185,6 @@ def test_nudge_after_rejected_kanban_request_review(clear_kanban_env):
         },
         {
             "role": "tool",
-            "name": "kanban_request_review",
             "tool_call_id": "1",
             "content": '{"error":"goal judge rejected completion"}',
         },
