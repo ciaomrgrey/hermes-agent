@@ -89,10 +89,85 @@ def test_no_nudge_after_kanban_complete(clear_kanban_env):
                 }
             ],
         },
-        {"role": "tool", "name": "kanban_complete", "tool_call_id": "1", "content": "done"},
+        {
+            "role": "tool",
+            "name": "kanban_complete",
+            "tool_call_id": "1",
+            "content": '{"ok":true,"status":"done"}',
+        },
     ]
     assert session_called_kanban_terminal(messages) is True
     assert build_kanban_stop_nudge(messages=messages) is None
+
+
+def test_no_nudge_after_kanban_request_review(clear_kanban_env):
+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_review")
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "1",
+                    "type": "function",
+                    "function": {
+                        "name": "kanban_request_review",
+                        "arguments": '{"summary":"ready"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "name": "kanban_request_review",
+            "tool_call_id": "1",
+            "content": '{"ok":true,"task":{"status":"review"}}',
+        },
+    ]
+    assert session_called_kanban_terminal(messages) is True
+    assert build_kanban_stop_nudge(messages=messages) is None
+
+
+def test_no_nudge_after_kanban_request_changes(clear_kanban_env):
+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_review")
+    messages = [
+        {
+            "role": "tool",
+            "name": "kanban_request_changes",
+            "tool_call_id": "1",
+            "content": '{"ok":true,"task":{"status":"ready"}}',
+        }
+    ]
+    assert session_called_kanban_terminal(messages) is True
+    assert build_kanban_stop_nudge(messages=messages) is None
+
+
+def test_nudge_after_rejected_kanban_request_review(clear_kanban_env):
+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_review")
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "1",
+                    "type": "function",
+                    "function": {
+                        "name": "kanban_request_review",
+                        "arguments": '{"summary":"ready"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "name": "kanban_request_review",
+            "tool_call_id": "1",
+            "content": '{"error":"goal judge rejected completion"}',
+        },
+    ]
+    assert session_called_kanban_terminal(messages) is False
+    assert build_kanban_stop_nudge(messages=messages) is not None
 
 
 
