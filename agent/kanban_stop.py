@@ -7,8 +7,10 @@ return a bounded synthetic nudge so the loop continues instead of exiting.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import sqlite3
 from typing import Any, Iterable, Optional
 
 from agent.message_sanitization import tool_call_id_variants, tool_result_id_variants
@@ -19,6 +21,13 @@ _TERMINAL_KANBAN_TOOLS = frozenset({
     "kanban_block",
     "kanban_request_review",
     "kanban_request_changes",
+})
+_TERMINAL_RUN_STATUSES = frozenset({
+    "done",
+    "blocked",
+    "review",
+    "changes_requested",
+    "superseded",
 })
 
 _DEFAULT_MAX_ATTEMPTS = 2
@@ -80,6 +89,40 @@ def session_called_kanban_terminal(messages: Iterable[dict] | None) -> bool:
     return False
 
 
+def worker_run_lifecycle_status(
+    *, task_id: Optional[str] = None, run_id: Optional[int | str] = None,
+) -> Optional[str]:
+    """Return this worker run's live lifecycle status from its pinned board.
+
+    ``HERMES_KANBAN_DB`` is the native board identity/grant injected by the
+    dispatcher. The lookup never scans another board and opens that path
+    read-only so a missing or stale pin cannot create or migrate a database.
+    """
+    tid = (task_id or os.environ.get("HERMES_KANBAN_TASK") or "").strip()
+    raw_run_id = run_id if run_id is not None else os.environ.get("HERMES_KANBAN_RUN_ID")
+    if not tid or raw_run_id is None:
+        return None
+    try:
+        expected_run_id = int(raw_run_id)
+    except (TypeError, ValueError):
+        return None
+    if not (os.environ.get("HERMES_KANBAN_DB") or "").strip():
+        return None
+    try:
+        from hermes_cli import kanban_db as kb
+
+        # HERMES_KANBAN_DB is the board identity pinned by the dispatcher.
+        # Open it read-only: a stop check must never create or migrate a board.
+        db_path = kb.kanban_db_path().expanduser().resolve()
+        with contextlib.closing(sqlite3.connect(
+            db_path.as_uri() + "?mode=ro", uri=True, timeout=1.0,
+        )) as conn:
+            conn.row_factory = sqlite3.Row
+            return kb.goal_run_status(conn, tid, expected_run_id)
+    except (OSError, OverflowError, sqlite3.Error):
+        return None
+
+
 def build_kanban_stop_nudge(
     *,
     messages: Iterable[dict] | None = None,
@@ -89,14 +132,19 @@ def build_kanban_stop_nudge(
 ) -> Optional[str]:
     """Synthetic follow-up when a kanban worker exits without a terminal tool; ``None`` when
     the guard should not fire (not a kanban worker, already completed/blocked, budget exhausted)."""
-    if (
-        not kanban_stop_nudge_enabled()
-        or attempts >= max_attempts
-        or session_called_kanban_terminal(messages)
-    ):
+    if not kanban_stop_nudge_enabled() or attempts >= max_attempts:
         return None
 
     tid = (task_id or os.environ.get("HERMES_KANBAN_TASK") or "").strip() or "this task"
+    run_id = (os.environ.get("HERMES_KANBAN_RUN_ID") or "").strip()
+    if run_id:
+        if worker_run_lifecycle_status(task_id=tid, run_id=run_id) in _TERMINAL_RUN_STATUSES:
+            return None
+    elif session_called_kanban_terminal(messages):
+        # Legacy/manual workers without a dispatcher run id can only prove the
+        # transition from their transcript. Dispatcher workers use live state
+        # so an unrelated task/board result cannot silence the guard.
+        return None
     return (
         "[System: You are a Hermes kanban worker. A plain-text reply is NOT a "
         "terminal state for the board.\n\n"
@@ -111,4 +159,9 @@ def build_kanban_stop_nudge(
     )
 
 
-__all__ = ["build_kanban_stop_nudge", "kanban_stop_nudge_enabled", "session_called_kanban_terminal"]
+__all__ = [
+    "build_kanban_stop_nudge",
+    "kanban_stop_nudge_enabled",
+    "session_called_kanban_terminal",
+    "worker_run_lifecycle_status",
+]
