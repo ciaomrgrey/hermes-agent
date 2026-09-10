@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from hermes_cli import kanban_db as kb
+from hermes_cli import kanban_db_connect as kbc
+
 from agent.kanban_stop import (
     build_kanban_stop_nudge,
     kanban_stop_nudge_enabled,
@@ -52,6 +55,24 @@ def test_nudge_when_no_terminal_tool(clear_kanban_env):
     assert "kanban_block" in nudge
     assert "t_46be8aa5" in nudge
     assert "protocol violation" in nudge.lower() or "protocol" in nudge.lower()
+
+
+def test_no_nudge_when_own_run_requested_review(clear_kanban_env, tmp_path):
+    db_path = tmp_path / "kanban.db"
+    kbc.init_db(db_path)
+    with kbc.connect_closing(db_path) as conn:
+        task_id = kb.create_task(conn, title="Review handoff", assignee="builder")
+        claimed = kb.claim_task(conn, task_id)
+        assert claimed is not None
+        run_id = claimed.current_run_id
+        assert run_id is not None
+        assert kb.request_review(conn, task_id, expected_run_id=run_id)
+
+        clear_kanban_env.setenv("HERMES_KANBAN_DB", str(db_path))
+        clear_kanban_env.setenv("HERMES_KANBAN_TASK", task_id)
+        clear_kanban_env.setenv("HERMES_KANBAN_RUN_ID", str(run_id))
+
+        assert build_kanban_stop_nudge(messages=[]) is None
 
 
 def test_no_nudge_after_kanban_complete(clear_kanban_env):
