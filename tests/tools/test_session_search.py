@@ -539,6 +539,146 @@ class TestCrossProfileRead:
             assert result["mode"] == "read"
             assert result["session_id"] == "s_other"
 
+    def test_explicit_profile_matrix_preserves_db_provenance_for_every_shape(
+        self, db, tmp_path, monkeypatch
+    ):
+        profiles = (
+            "emma", "sophia", "jared", "plutus", "cody", "generalist",
+            "gurney", "ripley",
+        )
+        homes = {}
+        expected = {}
+        snapshots = {}
+        for profile in profiles:
+            home = tmp_path / profile
+            home.mkdir()
+            target = SessionDB(home / "state.db")
+            session_id = f"scope-{profile}"
+            marker = f"unique-profile-marker-{profile}"
+            target.create_session(session_id, source="cli")
+            message_id = target.append_message(
+                session_id, role="user", content=marker
+            )
+            target.close()
+            homes[profile] = home
+            expected[profile] = (session_id, marker, message_id)
+            snapshots[profile] = (home / "state.db").read_bytes()
+
+        from hermes_cli import profiles as profiles_mod
+        monkeypatch.setattr(profiles_mod, "profile_exists", lambda name: name in homes)
+        monkeypatch.setattr(profiles_mod, "get_profile_dir", lambda name: homes[name])
+
+        probes = []
+        for profile in profiles:
+            session_id, marker, message_id = expected[profile]
+            browse = json.loads(session_search(profile=profile, db=db))
+            discover = json.loads(session_search(query=marker, profile=profile, db=db))
+            read = json.loads(session_search(session_id=session_id, profile=profile, db=db))
+            scroll = json.loads(session_search(
+                session_id=session_id,
+                around_message_id=message_id,
+                profile=profile,
+                db=db,
+            ))
+            probes.extend((browse, discover, read, scroll))
+
+            expected_link = f"@session:{profile}/{session_id}"
+            assert browse["results"][0]["link"] == expected_link
+            assert discover["results"][0]["link"] == expected_link
+            assert read["link"] == expected_link
+            assert scroll["link"] == expected_link
+            assert marker in json.dumps(discover)
+            assert marker in json.dumps(read)
+            assert marker in json.dumps(scroll)
+            assert (homes[profile] / "state.db").read_bytes() == snapshots[profile]
+
+        assert len(probes) == len(profiles) * 4 == 32
+
+    def test_explicit_profile_failures_are_errors_not_local_fallbacks(
+        self, db, tmp_path, monkeypatch
+    ):
+        db.create_session("local-only", source="cli")
+        db.append_message("local-only", role="user", content="local-secret-marker")
+
+        homes = {}
+        empty_home = tmp_path / "empty"
+        empty_home.mkdir()
+        empty_db = SessionDB(empty_home / "state.db")
+        empty_db.close()
+        homes["empty"] = empty_home
+
+        missing_home = tmp_path / "missing-db"
+        missing_home.mkdir()
+        homes["missing-db"] = missing_home
+
+        corrupt_home = tmp_path / "corrupt"
+        corrupt_home.mkdir()
+        (corrupt_home / "state.db").write_bytes(b"not a sqlite database")
+        homes["corrupt"] = corrupt_home
+
+        unreadable_home = tmp_path / "unreadable"
+        unreadable_home.mkdir()
+        (unreadable_home / "state.db").mkdir()
+        homes["unreadable"] = unreadable_home
+
+        from hermes_cli import profiles as profiles_mod
+        monkeypatch.setattr(profiles_mod, "profile_exists", lambda name: name in homes)
+        monkeypatch.setattr(profiles_mod, "get_profile_dir", lambda name: homes[name])
+        monkeypatch.setattr(
+            "tools.session_search_tool._locate_session_db",
+            lambda _sid: pytest.fail("explicit profile read must not scan another DB"),
+        )
+
+        covered_empty = json.loads(session_search(profile="empty", db=db))
+        assert covered_empty["success"] is True
+        assert covered_empty["count"] == 0
+
+        read_miss = json.loads(session_search(
+            session_id="local-only", profile="empty", db=db
+        ))
+        assert read_miss["success"] is False
+        assert "not found" in read_miss["error"]
+        assert "local-secret-marker" not in json.dumps(read_miss)
+
+        failures = {
+            "nonexistent": session_search(profile="does-not-exist", db=db),
+            "missing": session_search(profile="missing-db", db=db),
+            "corrupt": session_search(profile="corrupt", db=db),
+            "unreadable": session_search(profile="unreadable", db=db),
+            "reserved": session_search(profile="hermes", db=db),
+            "traversal": session_search(profile="../../emma", db=db),
+        }
+        for label, raw in failures.items():
+            result = json.loads(raw)
+            assert result["success"] is False, label
+            assert "local-secret-marker" not in raw, label
+        assert not (missing_home / "state.db").exists()
+
+    def test_explicit_profile_does_not_require_default_database(self, tmp_path, monkeypatch):
+        target_home = tmp_path / "emma"
+        target_home.mkdir()
+        target = SessionDB(target_home / "state.db")
+        target.create_session("scope-emma", source="cli")
+        target.append_message("scope-emma", role="user", content="emma-only-marker")
+        target.close()
+
+        from hermes_cli import profiles as profiles_mod
+        monkeypatch.setattr(profiles_mod, "profile_exists", lambda name: name == "emma")
+        monkeypatch.setattr(profiles_mod, "get_profile_dir", lambda _name: target_home)
+
+        real_session_db = SessionDB
+
+        def local_db_unavailable(*args, **kwargs):
+            if kwargs.get("read_only"):
+                return real_session_db(*args, **kwargs)
+            raise RuntimeError("local DB unavailable")
+
+        monkeypatch.setattr("hermes_state.SessionDB", local_db_unavailable)
+        result = json.loads(session_search(query="emma-only-marker", profile="emma"))
+
+        assert result["success"] is True
+        assert result["results"][0]["link"] == "@session:emma/scope-emma"
+
 
 # =========================================================================
 # Cron demotion in discover ranking (#19434)

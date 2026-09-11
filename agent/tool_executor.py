@@ -2129,8 +2129,10 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 agent._vprint(f"  {_get_cute_tool_message_impl('message_agent', function_args, tool_duration, result=function_result)}")
         elif function_name == "session_search":
             def _execute(next_args: dict) -> Any:
-                session_db = agent._get_session_db_for_recall()
-                if not session_db:
+                profile = next_args.get("profile")
+                explicit_profile = profile is not None and bool(str(profile).strip())
+                session_db = None if explicit_profile else agent._get_session_db_for_recall()
+                if not session_db and not explicit_profile:
                     from hermes_state import format_session_db_unavailable
                     return json.dumps({"success": False, "error": format_session_db_unavailable()})
                 from tools.session_search_tool import session_search as _session_search
@@ -2143,6 +2145,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                     window=next_args.get("window", 5),
                     sort=next_args.get("sort"),
                     detail=next_args.get("detail", "adaptive"),
+                    profile=profile,
                     db=session_db,
                     current_session_id=agent.session_id,
                 )

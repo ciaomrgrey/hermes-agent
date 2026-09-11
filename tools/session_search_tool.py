@@ -366,7 +366,7 @@ def _resolve_profile_db(profile: str):
     return SessionDB(db_path=profiles_mod.get_profile_dir(canon) / "state.db", read_only=True)
 
 
-def _session_link(session_id: str, profile: str = None) -> str:
+def _session_link(session_id: str, profile: Optional[str] = None) -> str:
     """The reference the agent writes to point the user at a session.
 
     Same value the desktop composer emits when a session is dragged into a
@@ -432,7 +432,7 @@ def _locate_session_db(session_id: str):
     return None, None
 
 
-def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_profile: str = None) -> str:
+def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_profile: Optional[str] = None) -> str:
     """Read shape: dump a whole session by id (head + tail when large).
 
     Serves the linked-session case — the user dropped an @session reference and
@@ -482,7 +482,7 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_prof
     return json.dumps(response, ensure_ascii=False)
 
 
-def _list_recent_sessions(db, limit: int, current_session_id: str = None, link_profile: str = None) -> str:
+def _list_recent_sessions(db, limit: int, current_session_id: Optional[str] = None, link_profile: Optional[str] = None) -> str:
     """Return metadata for the most recent sessions (no LLM calls, no FTS5)."""
     try:
         # list_sessions_rich (include_children=False) already applies the
@@ -544,7 +544,8 @@ def _scroll(
     session_id: str,
     around_message_id: int,
     window: int = 5,
-    current_session_id: str = None,
+    current_session_id: Optional[str] = None,
+    link_profile: Optional[str] = None,
 ) -> str:
     """Scroll shape: return a window of messages centered on an anchor.
 
@@ -659,6 +660,7 @@ def _scroll(
         "success": True,
         "mode": "scroll",
         "session_id": session_id,
+        "link": _session_link(session_id, link_profile),
         "around_message_id": around_message_id,
         "session_meta": {
             "when": _format_timestamp(session_meta.get("started_at")),
@@ -765,8 +767,8 @@ def _discover(
     limit: int,
     sort: Optional[str],
     detail: str,
-    current_session_id: str = None,
-    link_profile: str = None,
+    current_session_id: Optional[str] = None,
+    link_profile: Optional[str] = None,
 ) -> str:
     """Discovery shape: FTS5 plus adaptive or full result hydration."""
     role_list = role_filter if role_filter else ["user", "assistant"]
@@ -955,7 +957,7 @@ def _session_search_impl(
     role_filter: str = None,
     limit: int = 3,
     db=None,
-    current_session_id: str = None,
+    current_session_id: Optional[str] = None,
     # Scroll shape
     session_id: str = None,
     around_message_id: int = None,
@@ -963,7 +965,7 @@ def _session_search_impl(
     # Discovery shape
     sort: str = None,
     # Cross-profile (any shape)
-    profile: str = None,
+    profile: Optional[str] = None,
     # Discovery result shaping (appended to preserve positional compatibility)
     detail: str = "adaptive",
     *,
@@ -1006,6 +1008,8 @@ def _session_search_impl(
                 _owned_dbs.append(profile_db)
             current_session_id = None
 
+    explicit_profile = profile is not None and bool(str(profile).strip())
+
     # Scroll shape takes precedence — explicit anchor beats any query.
     if (isinstance(session_id, str) and session_id.strip()) and around_message_id is not None:
         return _scroll(
@@ -1014,6 +1018,7 @@ def _session_search_impl(
             around_message_id=around_message_id,
             window=window,
             current_session_id=current_session_id,
+            link_profile=profile,
         )
 
     # Read shape: a session_id with no anchor → dump the whole session.
@@ -1023,10 +1028,10 @@ def _session_search_impl(
         if json.loads(result).get("success"):
             return result
 
-        # Miss in the target profile — the model may have dropped the owning
-        # profile from the link. Scan every profile and read it from wherever
-        # it lives, tagging the profile it was found in.
-        located, owner = _locate_session_db(sid)
+        # With no explicit profile, the model may have dropped the owning
+        # profile from the link. Locate the bare id across profiles. An explicit
+        # target is authoritative and must fail closed on a miss.
+        located, owner = (None, None) if explicit_profile else _locate_session_db(sid)
         if located is not None:
             try:
                 found = json.loads(_read_session(located, sid, link_profile=owner))
@@ -1084,7 +1089,7 @@ def session_search(
     role_filter: str = None,
     limit: int = 3,
     db=None,
-    current_session_id: str = None,
+    current_session_id: Optional[str] = None,
     # Scroll shape
     session_id: str = None,
     around_message_id: int = None,
@@ -1092,13 +1097,20 @@ def session_search(
     # Discovery shape
     sort: str = None,
     # Cross-profile (any shape)
-    profile: str = None,
+    profile: Optional[str] = None,
     # Discovery result shaping (appended to preserve positional compatibility)
     detail: str = "adaptive",
 ) -> str:
     """Run session search and close databases opened by this invocation."""
     owned_dbs: List[Any] = []
-    if db is None:
+    embedded_profile = (
+        isinstance(session_id, str)
+        and "/" in session_id
+        and bool(session_id.partition("/")[0])
+        and bool(session_id.partition("/")[2])
+    )
+    explicit_profile = profile is not None and bool(str(profile).strip())
+    if db is None and not (explicit_profile or embedded_profile):
         try:
             from hermes_state import SessionDB
 

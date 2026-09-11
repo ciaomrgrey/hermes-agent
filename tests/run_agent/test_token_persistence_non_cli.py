@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import json
 import sys
 
+from hermes_state import SessionDB
 from run_agent import AIAgent
 
 
@@ -126,3 +127,68 @@ def test_sequential_session_search_forwards_detail(monkeypatch):
     assert captured["db"] is session_db
     assert captured["query"] == "Hermes"
     assert captured["detail"] == "full"
+
+
+def _seed_profile_db(tmp_path, monkeypatch, profile):
+    home = tmp_path / profile
+    home.mkdir()
+    target = SessionDB(home / "state.db")
+    session_id = f"seam-{profile}"
+    marker = f"seam-marker-{profile}"
+    target.create_session(session_id, source="cli")
+    target.append_message(session_id, role="user", content=marker)
+    target.close()
+
+    from hermes_cli import profiles as profiles_mod
+    monkeypatch.setattr(profiles_mod, "profile_exists", lambda name: name == profile)
+    monkeypatch.setattr(profiles_mod, "get_profile_dir", lambda _name: home)
+    return session_id, marker
+
+
+def _fail_if_local_db_requested():
+    raise AssertionError("explicit profile must not request the local database")
+
+
+def test_invoke_tool_reads_explicit_profile_when_local_db_is_unavailable(
+    tmp_path, monkeypatch
+):
+    session_id, marker = _seed_profile_db(tmp_path, monkeypatch, "emma")
+    agent = _make_agent(None, platform="acp")
+    monkeypatch.setattr(agent, "_get_session_db_for_recall", _fail_if_local_db_requested)
+
+    result = json.loads(agent._invoke_tool(
+        "session_search",
+        {"query": marker, "profile": "emma"},
+        "task-id",
+    ))
+
+    assert result["success"] is True
+    assert result["results"][0]["session_id"] == session_id
+    assert result["results"][0]["link"] == f"@session:emma/{session_id}"
+    assert marker in json.dumps(result)
+
+
+def test_sequential_tool_reads_explicit_profile_when_local_db_is_unavailable(
+    tmp_path, monkeypatch
+):
+    session_id, marker = _seed_profile_db(tmp_path, monkeypatch, "sophia")
+    agent = _make_agent(None, platform="acp")
+    monkeypatch.setattr(agent, "_get_session_db_for_recall", _fail_if_local_db_requested)
+    tool_call = SimpleNamespace(
+        id="profile-search-1",
+        function=SimpleNamespace(
+            name="session_search",
+            arguments=json.dumps({"query": marker, "profile": "sophia"}),
+        ),
+    )
+    messages = []
+
+    agent._execute_tool_calls_sequential(
+        SimpleNamespace(tool_calls=[tool_call]), messages, "task-id"
+    )
+
+    result = json.loads(messages[0]["content"])
+    assert result["success"] is True
+    assert result["results"][0]["session_id"] == session_id
+    assert result["results"][0]["link"] == f"@session:sophia/{session_id}"
+    assert marker in json.dumps(result)
