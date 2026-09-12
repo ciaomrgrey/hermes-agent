@@ -94,8 +94,13 @@ def _callback_tool(module: str, func: str, callback_attr: str, *arg_specs: _ArgS
 
 
 def _session_search(agent, args: dict, ctx: InlineToolContext) -> Any:
-    session_db = agent._get_session_db_for_recall()
-    if not session_db:
+    # A named store (including a profile-qualified link) must not depend on
+    # the caller's database being available. The tool resolves/validates it.
+    scoped = bool(str(args.get("profile") or "").strip()) or (
+        isinstance(args.get("session_id"), str) and "/" in args["session_id"]
+    )
+    session_db = None if scoped else agent._get_session_db_for_recall()
+    if not scoped and not session_db:
         from hermes_state import format_session_db_unavailable
 
         return json.dumps({"success": False, "error": format_session_db_unavailable()})
