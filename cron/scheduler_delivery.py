@@ -737,8 +737,10 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str) -> Optional[str]
     env = strip_launch_profile_env(delegated_child_subprocess_env(os.environ))
     if profile:
         argv += ["-p", profile]
-        # -p owns profile resolution; this scheduler's HERMES_HOME must not shadow it.
-        env.pop("HERMES_HOME", None)
+        # -p selects the identity, but still needs this installation's root.
+        # Dropping HERMES_HOME loses custom roots and resolves in the native default.
+        from hermes_constants import get_default_hermes_root
+        env["HERMES_HOME"] = str(get_default_hermes_root())
     else:
         # Multiplex workers carry the profile in a ContextVar, not os.environ.
         env["HERMES_HOME"] = str(source_home)
