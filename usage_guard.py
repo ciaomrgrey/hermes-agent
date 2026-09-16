@@ -69,10 +69,13 @@ def main():
             else:
                 result = dict(armed=False, release_ready=False, release_blocker=RELEASE_BLOCKER,
                               held=guard.holds(), pending_alerts=len(guard.outbox()),
+                              storage=guard.storage_status(),
                               sampling_seconds=cfg['sample_seconds'], no_live_controls_installed=True)
             if args.command != 'status' and cfg.get('delivery_enabled', False):
                 from agent.usage_guard_delivery import send_notice
                 guard.deliver(lambda body: send_notice(body, cfg))
+            if args.command != 'status':
+                guard.maintain(now)
             print(json.dumps(result, indent=2))
         finally:
             guard.close()

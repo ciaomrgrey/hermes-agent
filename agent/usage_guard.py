@@ -102,8 +102,11 @@ class Guard:
                 account TEXT NOT NULL, PRIMARY KEY(provider,account));
             CREATE TABLE IF NOT EXISTS outbox (
                 id TEXT PRIMARY KEY, body TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-                receipt TEXT, last_error TEXT);
+                receipt TEXT, last_error TEXT, created REAL NOT NULL DEFAULT 0);
         ''')
+        if 'created' not in {r['name'] for r in self.db.execute('PRAGMA table_info(outbox)')}:
+            with self.db:
+                self.db.execute('ALTER TABLE outbox ADD COLUMN created REAL NOT NULL DEFAULT 0')
         if 'epoch' not in {r['name'] for r in self.db.execute('PRAGMA table_info(incidents)')}:
             with self.db:
                 self.db.execute('ALTER TABLE incidents ADD COLUMN epoch TEXT')
@@ -148,7 +151,7 @@ class Guard:
                     self.db.execute('INSERT INTO incidents VALUES(?,?,?)', (provider, incident_id, epoch))
                     body = json.dumps(dict(id=incident_id, provider=provider, window=result,
                                            threshold_pp=self.config['threshold_pp'], sampling_seconds=self.config['sample_seconds']))
-                    self.db.execute('INSERT INTO outbox(id,body) VALUES(?,?)', (incident_id, body))
+                    self.db.execute('INSERT INTO outbox(id,body,created) VALUES(?,?,?)', (incident_id, body, at))
                 else:
                     incident_id = incident['id']
                 if self.is_night(at):
@@ -181,9 +184,22 @@ class Guard:
                 end=local(peak['end']) if peak else None, peak_coverage=peak['coverage'] if peak else None)
         report['providers']['xai-oauth'] = dict(coverage='unsupported', peak_pp=None)
         with self.db:
-            self.db.execute('INSERT OR IGNORE INTO outbox(id,body) VALUES(?,?)',
-                            (report['id'], json.dumps(report)))
+            self.db.execute('INSERT OR IGNORE INTO outbox(id,body,created) VALUES(?,?,?)',
+                            (report['id'], json.dumps(report), at))
         return report
+
+    def maintain(self, at):
+        """Prune acknowledged history only; never erase an undelivered original."""
+        cutoff = at-self.config.get('retention_days',7)*86400
+        with self.db:
+            self.db.execute('DELETE FROM samples WHERE t<?',(cutoff,))
+            self.db.execute('DELETE FROM outbox WHERE receipt IS NOT NULL AND created<?',(cutoff,))
+
+    def storage_status(self):
+        pending = self.db.execute('SELECT COUNT(*) FROM outbox WHERE receipt IS NULL').fetchone()[0]
+        warning = self.config.get('pending_warning_count',10000)
+        return dict(pending=pending, saturated=pending>=warning, pending_warning_count=warning,
+                    pending_policy='retain-originals; total-storage-not-bounded-during-indefinite-outage')
 
     def holds(self):
         return [r[0] for r in self.db.execute('SELECT DISTINCT provider FROM holds ORDER BY provider')]

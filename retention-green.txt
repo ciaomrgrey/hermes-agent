@@ -1,0 +1,19 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 2 test files (~9 tests) under ['tests/agent/test_usage_guard_retention.py', 'tests/agent/test_usage_guard.py']; running with -j 1
+[ 88.9% |     8/~9 | ✓8 | ✗0] ✓ tests/agent/test_usage_guard.py (8✓, 0.6s)
+[100.0% |     9/~9 | ✓9 | ✗0] ✓ tests/agent/test_usage_guard_retention.py (1✓, 0.2s)
+
+=== Summary: 2 files, 9 tests passed, 0 failed (100% complete) in 0.9s (1 workers) ===
+  Durations cached to test_durations.json (2 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   2
+  Total subprocess CPU-wall: 0.9s  (runner wall: 0.9s, parallelism: 1x)
+  P50: 0.63s  P90: 0.63s  P95: 0.63s  P99: 0.63s  Max: 0.63s
+  <1s: 2 files (100%)  <2s: 2 files (100%)
+  Top 10 slowest:
+      0.63s  tests/agent/test_usage_guard.py
+      0.24s  tests/agent/test_usage_guard_retention.py

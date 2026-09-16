@@ -1,0 +1,95 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~1 tests) under ['tests/agent/test_usage_guard_retention.py']; running with -j 1
+[100.0% |     1/~1 | ✓0 | ✗1] ✗ tests/agent/test_usage_guard_retention.py (1✗, 0.5s)
+
+  ╔╍ Failed: tests/agent/test_usage_guard_retention.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║ asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+  ║ collected 1 item
+  ║ 
+  ║ tests/agent/test_usage_guard_retention.py F                              [100%]
+  ║ 
+  ║ =================================== FAILURES ===================================
+  ║ _________ test_retention_preserves_original_pending_and_current_dedupe _________
+  ║ 
+  ║ tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-tfu6mvks/pytest-of-claudia/pytest-0/test_retention_preserves_origi0')
+  ║ 
+  ║     def test_retention_preserves_original_pending_and_current_dedupe(tmp_path):
+  ║         cfg = dict(threshold_pp=10,window_seconds=21600,sample_seconds=60,timezone='Europe/Zurich',
+  ║                    night_start='22:00',night_end='06:00',retention_days=7,pending_warning_count=2)
+  ║         path=tmp_path/'state.sqlite3'
+  ║         guard=Guard(path,cfg)
+  ║         row=dict(status='ok',pp=0,grant='synthetic',reset=604800)
+  ║         guard.sample('anthropic',0,row)
+  ║         guard.sample('anthropic',60,dict(row,pp=11))
+  ║         original=guard.outbox()[0]
+  ║         guard.report(3600)
+  ║         guard.deliver(lambda body: 'fixture-receipt' if json.loads(body)['id'].startswith('report:') else None)
+  ║         guard.report(8*86400)
+  ║ >       guard.maintain(8*86400)
+  ║         ^^^^^^^^^^^^^^
+  ║ E       AttributeError: 'Guard' object has no attribute 'maintain'
+  ║ 
+  ║ tests/agent/test_usage_guard_retention.py:18: AttributeError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_usage_guard_retention.py::test_retention_preserves_original_pending_and_current_dedupe
+  ║ ============================== 1 failed in 0.11s ===============================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_usage_guard_retention.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 1 failed (100% complete) in 0.5s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 0.5s  (runner wall: 0.5s, parallelism: 1x)
+  P50: 0.49s  P90: 0.49s  P95: 0.49s  P99: 0.49s  Max: 0.49s
+  <1s: 1 files (100%)  <2s: 1 files (100%)
+  Top 10 slowest:
+      0.49s  tests/agent/test_usage_guard_retention.py
+
+=== Failure output ===
+
+--- tests/agent/test_usage_guard_retention.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 1 item
+
+tests/agent/test_usage_guard_retention.py F                              [100%]
+
+=================================== FAILURES ===================================
+_________ test_retention_preserves_original_pending_and_current_dedupe _________
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-tfu6mvks/pytest-of-claudia/pytest-0/test_retention_preserves_origi0')
+
+    def test_retention_preserves_original_pending_and_current_dedupe(tmp_path):
+        cfg = dict(threshold_pp=10,window_seconds=21600,sample_seconds=60,timezone='Europe/Zurich',
+                   night_start='22:00',night_end='06:00',retention_days=7,pending_warning_count=2)
+        path=tmp_path/'state.sqlite3'
+        guard=Guard(path,cfg)
+        row=dict(status='ok',pp=0,grant='synthetic',reset=604800)
+        guard.sample('anthropic',0,row)
+        guard.sample('anthropic',60,dict(row,pp=11))
+        original=guard.outbox()[0]
+        guard.report(3600)
+        guard.deliver(lambda body: 'fixture-receipt' if json.loads(body)['id'].startswith('report:') else None)
+        guard.report(8*86400)
+>       guard.maintain(8*86400)
+        ^^^^^^^^^^^^^^
+E       AttributeError: 'Guard' object has no attribute 'maintain'
+
+tests/agent/test_usage_guard_retention.py:18: AttributeError
+=========================== short test summary info ============================
+FAILED tests/agent/test_usage_guard_retention.py::test_retention_preserves_original_pending_and_current_dedupe
+============================== 1 failed in 0.11s ===============================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_usage_guard_retention.py  (1 test failed)
