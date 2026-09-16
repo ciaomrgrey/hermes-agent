@@ -106,3 +106,49 @@ def test_daily_report_always_enqueues_and_names_partial_peak(tmp_path):
     guard.report(now+86400)
     assert len(guard.outbox()) == 2
     guard.close()
+
+
+def test_real_sampling_jitter_retains_resolution_coverage():
+    from agent import usage_guard as g
+    rows = [dict(t=t+.25, pp=t/21600*10, reset=604800, grant='synthetic', status='ok') for t in range(0,21601,60)]
+    result = g.rolling(rows, 21600.8)
+    assert result['coverage'] == 'sampled'
+    assert result['end']-result['start'] <= 21600
+
+
+def test_new_grant_or_reset_is_a_new_incident(tmp_path):
+    from agent import usage_guard as g
+    cfg = dict(threshold_pp=10, window_seconds=21600, sample_seconds=60,
+               timezone='Europe/Zurich', night_start='22:00', night_end='06:00')
+    guard = g.Guard(tmp_path/'state.sqlite3', cfg)
+    base = dict(status='ok', pp=0, reset=604800, grant='synthetic')
+    guard.sample('anthropic', 0, base)
+    guard.sample('anthropic', 60, dict(base, pp=11))
+    assert len(guard.outbox()) == 1
+    guard.sample('anthropic', 120, dict(base, reset=1209600))
+    guard.sample('anthropic', 180, dict(base, pp=11, reset=1209600))
+    assert len(guard.outbox()) == 2
+    guard.sample('anthropic', 240, dict(base, grant='new-synthetic-account'))
+    guard.sample('anthropic', 300, dict(base, pp=12, grant='new-synthetic-account'))
+    assert len(guard.outbox()) == 3
+    guard.close()
+
+
+def test_report_includes_zurich_0100_to_0700_peak(tmp_path):
+    import json
+    from agent import usage_guard as g
+    cfg = dict(threshold_pp=10, window_seconds=21600, sample_seconds=60,
+               timezone='Europe/Zurich', night_start='22:00', night_end='06:00')
+    guard = g.Guard(tmp_path/'state.sqlite3', cfg)
+    at = g.timestamp('2026-09-18T06:05:00+02:00')
+    start = g.timestamp('2026-09-17T01:00:00+02:00')
+    samples = [('anthropic', t, json.dumps(dict(status='ok', grant='synthetic', reset=at+604800,
+                 pp=max(0,min(12,(t-start)/1800))))) for t in range(int(at)-108000,int(at)+1,60)]
+    with guard.db:
+        guard.db.executemany('INSERT INTO samples VALUES(?,?,?)', samples)
+    report = guard.report(at)['providers']['anthropic']
+    assert report['peak_pp'] == 12
+    assert report['start'] == '2026-09-17T01:00:00+02:00'
+    assert report['end'] == '2026-09-17T07:00:00+02:00'
+    assert report['coverage'] == 'sampled'
+    guard.close()

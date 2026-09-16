@@ -50,7 +50,7 @@ def parse_weekly(provider, payload):
         return {'status': 'unavailable', 'reason': 'missing or invalid weekly fields'}
 
 
-def rolling(rows, end, window=21600, max_gap=90):
+def rolling(rows, end, window=21600, max_gap=90, resolution=60):
     """No interpolation: delta within the final contiguous monotone grant/reset segment.
 
     A missing boundary, reset, correction or observation gap yields only a lower
@@ -74,8 +74,10 @@ def rolling(rows, end, window=21600, max_gap=90):
     first, last = segment[0], segment[-1]
     if len(segment) < 2:
         return dict(empty, start=first['t'], end=last['t'], coverage='partial')
+    span = last['t']-first['t']
     return {'pp': last['pp']-first['pp'], 'start': first['t'], 'end': last['t'],
-            'coverage': 'sampled' if last['t']-first['t'] == window else 'partial'}
+            'observed_seconds': span, 'sampling_seconds': resolution,
+            'coverage': 'sampled' if window-resolution <= span <= window else 'partial'}
 
 
 class Guard:
@@ -94,13 +96,24 @@ class Guard:
                 provider TEXT NOT NULL, t REAL NOT NULL, value TEXT NOT NULL,
                 PRIMARY KEY(provider,t));
             CREATE TABLE IF NOT EXISTS incidents (
-                provider TEXT PRIMARY KEY, id TEXT NOT NULL);
+                provider TEXT PRIMARY KEY, id TEXT NOT NULL, epoch TEXT);
             CREATE TABLE IF NOT EXISTS holds (
-                provider TEXT PRIMARY KEY, since REAL NOT NULL, incident TEXT NOT NULL);
+                provider TEXT NOT NULL, since REAL NOT NULL, incident TEXT NOT NULL,
+                account TEXT NOT NULL, PRIMARY KEY(provider,account));
             CREATE TABLE IF NOT EXISTS outbox (
                 id TEXT PRIMARY KEY, body TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                 receipt TEXT, last_error TEXT);
         ''')
+        if 'epoch' not in {r['name'] for r in self.db.execute('PRAGMA table_info(incidents)')}:
+            with self.db:
+                self.db.execute('ALTER TABLE incidents ADD COLUMN epoch TEXT')
+        if 'account' not in {r['name'] for r in self.db.execute('PRAGMA table_info(holds)')}:
+            with self.db:
+                self.db.execute('ALTER TABLE holds RENAME TO legacy_holds')
+                self.db.execute('CREATE TABLE holds(provider TEXT NOT NULL, since REAL NOT NULL, '
+                                'incident TEXT NOT NULL, account TEXT NOT NULL, PRIMARY KEY(provider,account))')
+                self.db.execute("INSERT INTO holds SELECT provider,since,incident,'*' FROM legacy_holds")
+                self.db.execute('DROP TABLE legacy_holds')
 
     def close(self):
         self.db.close()
@@ -121,20 +134,26 @@ class Guard:
             if last is not None and at <= last:
                 return None
             self.db.execute('INSERT INTO samples VALUES(?,?,?)', (provider, at, json.dumps(value)))
-            result = rolling(self.rows(provider, at-window), at, window, self.config['sample_seconds']*1.5)
+            epoch = json.dumps([value.get('grant'), value.get('reset')])
+            if value.get('status') == 'ok':
+                self.db.execute('DELETE FROM incidents WHERE provider=? AND (epoch IS NULL OR epoch!=?)',
+                                (provider, epoch))
+            result = rolling(self.rows(provider, at-window), at, window,
+                             self.config['sample_seconds']*1.5, self.config['sample_seconds'])
             breach = result['pp'] is not None and result['pp'] > self.config['threshold_pp']
             if breach:
                 incident = self.db.execute('SELECT id FROM incidents WHERE provider=?', (provider,)).fetchone()
                 if incident is None:
                     incident_id = f'breach:{provider}:{at}'
-                    self.db.execute('INSERT INTO incidents VALUES(?,?)', (provider, incident_id))
+                    self.db.execute('INSERT INTO incidents VALUES(?,?,?)', (provider, incident_id, epoch))
                     body = json.dumps(dict(id=incident_id, provider=provider, window=result,
                                            threshold_pp=self.config['threshold_pp'], sampling_seconds=self.config['sample_seconds']))
                     self.db.execute('INSERT INTO outbox(id,body) VALUES(?,?)', (incident_id, body))
                 else:
                     incident_id = incident['id']
                 if self.is_night(at):
-                    self.db.execute('INSERT OR IGNORE INTO holds VALUES(?,?,?)', (provider, at, incident_id))
+                    self.db.execute('INSERT OR IGNORE INTO holds VALUES(?,?,?,?)',
+                                    (provider, at, incident_id, value.get('account') or '*'))
             elif result['coverage'] == 'sampled':
                 self.db.execute('DELETE FROM incidents WHERE provider=?', (provider,))
             self.db.execute('DELETE FROM samples WHERE t<?', (at-self.config.get('retention_days', 7)*86400,))
@@ -148,7 +167,8 @@ class Guard:
                       held=self.holds(), providers={}, external_clients='uncontrolled; shared quota can keep increasing')
         for provider in ('anthropic', 'openai-codex'):
             rows = self.rows(provider, at-86400-self.config['window_seconds'])
-            points = [rolling(rows, r['t'], self.config['window_seconds'], self.config['sample_seconds']*1.5)
+            points = [rolling(rows, r['t'], self.config['window_seconds'], self.config['sample_seconds']*1.5,
+                              self.config['sample_seconds'])
                       for r in rows if at-86400 <= r['t'] <= at]
             usable = [p for p in points if p['pp'] is not None]
             peak = max(usable, key=lambda p: p['pp']) if usable else None
@@ -166,7 +186,7 @@ class Guard:
         return report
 
     def holds(self):
-        return [r[0] for r in self.db.execute('SELECT provider FROM holds ORDER BY provider')]
+        return [r[0] for r in self.db.execute('SELECT DISTINCT provider FROM holds ORDER BY provider')]
 
     def outbox(self):
         return [dict(r) for r in self.db.execute('SELECT * FROM outbox WHERE receipt IS NULL ORDER BY rowid')]

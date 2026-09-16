@@ -1,0 +1,10 @@
+{
+  "source_file": "/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/agent/auxiliary_client.py",
+  "owner_released": true,
+  "outcomes": [
+    "AuxiliaryExplicitCancellation"
+  ],
+  "peer_closed_before_fixture_cleanup": true,
+  "provider_worker_alive_before_fixture_cleanup": false,
+  "qualified_local_teardown": true
+}

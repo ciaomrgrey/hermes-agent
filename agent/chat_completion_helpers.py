@@ -814,11 +814,34 @@ class _InlineRequest:
         self._hb_stop = threading.Event()
         self._hb = threading.Thread(target=self._activity_heartbeat, name="direct-api-activity-hb", daemon=True)
         self._watchdog = None
+        from agent.provider_control import current_policy, _SCOPE
+        self._provider_policy = current_policy()
+        self._provider_scope = _SCOPE.get()
+        self.hold_error = None
+
+    def check_hold(self):
+        if self.hold_error is not None:
+            raise self.hold_error
+        if self._provider_scope is not None:
+            self._provider_scope.check()
+        self._provider_policy.check(getattr(self.agent, 'provider', ''))
 
     def _activity_heartbeat(self) -> None:
         # Never put the API call itself on another worker thread — that is the nested-pool
         # deadlock this path exists to avoid (#60203). This ticker only refreshes the clock.
-        while not self._hb_stop.wait(_DIRECT_API_ACTIVITY_HEARTBEAT_SECONDS):
+        from agent.provider_control import HeldProvider
+        interval = .02 if self._provider_policy.database is not None else _DIRECT_API_ACTIVITY_HEARTBEAT_SECONDS
+        next_activity = time.monotonic()
+        while not self._hb_stop.wait(interval):
+            try:
+                self.check_hold()
+            except HeldProvider as exc:
+                self.hold_error = exc
+                self.abort('provider_hold')
+                continue
+            if time.monotonic() < next_activity:
+                continue
+            next_activity = time.monotonic()+_DIRECT_API_ACTIVITY_HEARTBEAT_SECONDS
             with contextlib.suppress(Exception):
                 self.agent._touch_activity("waiting for non-streaming API response")
 
@@ -884,6 +907,8 @@ class _InlineRequest:
         # Only OpenAI-wire requests reach direct_api_call; ``kind`` exists
         # for signature parity with the dispatch helper.
         client = self.agent._create_request_openai_client(reason=reason, api_kwargs=self.api_kwargs)
+        from agent.request_connect_control import bind
+        bind(client, getattr(self.agent, 'provider', ''))
         with self.lock:
             self.client = client
             stale_before_dispatch = self.stale
@@ -897,6 +922,7 @@ class _InlineRequest:
             raise TimeoutError(
                 f"Non-streaming API call timed out before request dispatch (threshold: {int(self.stale_timeout)}s)")
         self.agent._active_request_abort = self.abort_hook
+        self.check_hold()
         return client
 
     def mark_done(self) -> None:
@@ -906,6 +932,8 @@ class _InlineRequest:
     def pop_client(self):
         with self.lock:
             client, self.client = self.client, None
+        from agent.request_connect_control import clear
+        clear(client)
         return client
 
 
@@ -930,6 +958,7 @@ def direct_api_call(agent, api_kwargs: dict):
     if hard_timeout is not None and "timeout" not in api_kwargs:
         api_kwargs = {**api_kwargs, "timeout": hard_timeout}
     request = _InlineRequest(agent, api_kwargs, stale_timeout, call_start)
+    request.check_hold()
     request.start_watchdogs()
 
     # Only a clean return reports the reuse reason; errors/interrupts really
@@ -938,6 +967,7 @@ def direct_api_call(agent, api_kwargs: dict):
     try:
         response = _dispatch_nonstreaming_api_request(agent, api_kwargs, make_client=request.make_client)
     except Exception:
+        request.check_hold()
         if getattr(agent, "_interrupt_requested", False):
             raise InterruptedError("Agent interrupted during API call") from None
         with request.lock:
@@ -950,6 +980,7 @@ def direct_api_call(agent, api_kwargs: dict):
                 f"(threshold: {int(stale_timeout)}s)") from None
         raise
     else:
+        request.check_hold()
         if getattr(agent, "_interrupt_requested", False):
             raise InterruptedError("Agent interrupted during API call")
         # Mark ``done`` under the lock so a timer firing between response
@@ -996,6 +1027,9 @@ class _RequestClientRegistry:
         self.lock = threading.Lock()
 
     def set_client(self, client, *, kind: str = "openai"):
+        from agent.request_connect_control import bind
+        if kind != 'stream':
+            bind(client, getattr(self.agent, 'provider', ''))
         with self.lock:
             self.client, self.kind, self.owner_tid = client, kind, threading.get_ident()
         return client
@@ -1039,6 +1073,8 @@ class _RequestClientRegistry:
             self.owner_tid = None
         if request_client is None:
             return
+        from agent.request_connect_control import clear
+        clear(request_client)
         if request_kind == "stream":
             self._close_stream_handle(request_client, reason)
         elif request_kind == "anthropic_messages":
@@ -3311,6 +3347,8 @@ class _StreamingCall(StreamingWaitMonitor):
     def run(self):
         """Resolve the stale timeout, run the request (worker thread or inline),
         drive the heartbeat/stale/interrupt monitor, then translate the outcome."""
+        from agent.provider_control import check_request
+        check_request(getattr(self.agent, 'provider', ''))
         self._resolve_stale_timeout()
         # Delegated children and cron turns run the request INLINE (a worker inside
         # their nested pools wedges before the socket opens) but must still STREAM
@@ -3331,6 +3369,9 @@ class _StreamingCall(StreamingWaitMonitor):
             self.worker = threading.Thread(target=_context_thread_target(self._run_call), daemon=True)
             self.worker.start()
             self._monitor_loop()
+        if getattr(self, '_provider_hold', None) is not None:
+            raise self._provider_hold
+        check_request(getattr(self.agent, 'provider', ''))
         if self._monitor_interrupted["yes"]:
             raise InterruptedError("Agent interrupted during streaming API call")
         if self.agent._interrupt_requested:  # worker returned early before the monitor saw the flag

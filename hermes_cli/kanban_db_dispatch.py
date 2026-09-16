@@ -1515,6 +1515,12 @@ def _dispatch_lane_task(
     if profile_exists is not None and not profile_exists(assignee):
         result.skipped_nonspawnable.append(task_id)
         return False
+    from agent.provider_control import check_profile, HeldProvider
+    try:
+        check_profile(assignee, dict(row).get('provider'))
+    except HeldProvider:
+        result.respawn_guarded.append((task_id, 'provider held'))
+        return False
     # Per-profile cap: one profile's local model / API quota / browser pool
     # must not be overwhelmed by a fan-out even with global headroom.
     if per_profile_cap is not None:

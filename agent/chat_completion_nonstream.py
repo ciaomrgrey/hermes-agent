@@ -54,6 +54,8 @@ class _NonStreamRequest:
             self.agent._active_codex_stream_request_token = None
 
     def _make_client(self, reason: str, kind: str = "openai"):
+        from agent.provider_control import check_request
+        check_request(getattr(self.agent, 'provider', ''))
         # Per-request clients are registered with the abort machinery so the watchdogs
         # force-close the worker's connection, never the shared client (#67142).
         if kind == "anthropic_messages":
@@ -237,6 +239,20 @@ class _NonStreamRequest:
 
     def run(self):
         agent, wd = self.agent, self.wd
+        from agent.provider_control import check_request, HeldProvider
+        check_request(getattr(agent, 'provider', ''))
+        def check_hold():
+            try:
+                check_request(getattr(agent, 'provider', ''))
+            except HeldProvider:
+                self.cancelled = True
+                deadline = h.time.monotonic()+2
+                while self.thread.is_alive() and h.time.monotonic() < deadline:
+                    self._abort_request('provider_hold')
+                    self.thread.join(.02)
+                h.logger.warning('Provider hold local main-worker ended=%s; remote/billing unproven',
+                                 not self.thread.is_alive())
+                raise
         if wd.codex:
             # Reset before the worker starts so a marker left over from a previous
             # call on this agent can't be misread as the first event for this one.
@@ -251,6 +267,7 @@ class _NonStreamRequest:
         poll_count = 0
         while t.is_alive():
             t.join(timeout=0.3)
+            check_hold()
             poll_count += 1
             # Keep the quiet gateway heartbeat; only silence warrants a notice.
             # Resumed events clear our notice on the next poll, not 30s later.
@@ -277,6 +294,7 @@ class _NonStreamRequest:
                 break
             if agent._interrupt_requested:
                 self._interrupt(elapsed)
+        check_hold()
         if self.result["error"] is not None:
             raise self.result["error"]
         # Success — the provider proved responsive: clear the breaker (#58962).

@@ -30,6 +30,16 @@ def cmd_pause(args: argparse.Namespace) -> int:
 
 def cmd_resume(args: argparse.Namespace) -> int:
     """Disengage the global emergency stop."""
+    provider = getattr(args, 'provider', None)
+    if provider:
+        from agent.provider_control import current_policy
+        policy = current_policy()
+        if policy.database is None or provider not in policy.providers:
+            print('Provider control is not configured for this provider; no change.')
+            return 2
+        policy.resume(provider)
+        print(f'Provider {provider} resumed explicitly; global ESTOP is unchanged.')
+        return 0
     from agent.estop import disengage, sentinel_path
 
     if disengage():
@@ -53,4 +63,6 @@ def build_pause_parser(subparsers) -> None:
     resume_parser = subparsers.add_parser(
         "resume", help="Lift the emergency stop set by `hermes pause`",
         description="Remove the ESTOP sentinel; dispatch resumes on the next tick.")
+    resume_parser.add_argument('--provider', choices=('anthropic','openai-codex'),
+                               help='Resume only this provider hold; do not change global ESTOP')
     resume_parser.set_defaults(func=cmd_resume)

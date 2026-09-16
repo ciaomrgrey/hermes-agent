@@ -41,6 +41,25 @@ def test_corrupt_control_is_fail_closed_only_for_configured_providers(tmp_path):
     policy.check('xai-oauth')
 
 
+def test_hold_is_terminal_not_retryable():
+    from agent.provider_control import HeldProvider
+    assert not issubclass(HeldProvider, Exception)
+
+
+def test_hold_account_isolation_and_unknown_conservatism(tmp_path):
+    from agent.provider_control import Policy, HeldProvider
+    db = tmp_path/'account.sqlite3'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE holds(provider TEXT, account TEXT, since REAL, incident TEXT)')
+        conn.execute('INSERT INTO holds VALUES(?,?,?,?)', ('anthropic','account-A',1,'synthetic'))
+    policy = Policy(db, ('anthropic',))
+    with pytest.raises(HeldProvider):
+        policy.check('anthropic', account='account-A')
+    with pytest.raises(HeldProvider):
+        policy.check('anthropic', account=None)
+    policy.check('anthropic', account='account-B')
+
+
 def test_native_interrupt_can_cancel_one_agent_without_other_provider_child():
     import threading
     from agent.interrupt_control import InterruptControlMixin
@@ -75,3 +94,20 @@ def test_real_turn_facade_refuses_held_provider_before_preflight(tmp_path, monke
     # Deliberately no other agent attrs: gate must precede auxiliary/preflight work.
     with pytest.raises(HeldProvider):
         Bare().run_conversation('must not reach inference')
+
+
+def test_native_resume_provider_does_not_touch_estop(tmp_path, monkeypatch):
+    import argparse
+    from hermes_cli.subcommands.pause import build_pause_parser
+    from agent import provider_control as pc, estop
+    db = tmp_path/'resume.sqlite3'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        conn.execute('INSERT INTO holds VALUES(?,?,?)', ('anthropic',1,'fixture'))
+    monkeypatch.setattr(pc, 'current_policy', lambda: pc.Policy(db, ('anthropic',)))
+    monkeypatch.setattr(estop, 'disengage', lambda: (_ for _ in ()).throw(AssertionError('must not change global ESTOP')))
+    parser = argparse.ArgumentParser()
+    build_pause_parser(parser.add_subparsers())
+    args = parser.parse_args(['resume','--provider','anthropic'])
+    assert args.func(args) == 0
+    pc.current_policy().check('anthropic')

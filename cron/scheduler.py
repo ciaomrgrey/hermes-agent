@@ -3600,6 +3600,14 @@ def _submit_with_guard(job: dict, pool: concurrent.futures.ThreadPoolExecutor, p
     def _not_dispatched_shutdown() -> None:
         logger.warning("Job '%s' not dispatched — interpreter is shutting down", job_label)
 
+    if not job.get('no_agent'):
+        from agent.provider_control import check_profile, HeldProvider
+        try:
+            check_profile(job.get('profile'), job.get('provider'))
+        except HeldProvider:
+            _clear_run_claim_best_effort()
+            return None
+
     # During interpreter shutdown pool.submit raises; skip — the job fires on the next tick.
     # If the interpreter is finalizing (gateway SIGTERM / restart / OOM), scheduling any new delivery is
     # futile — asyncio.run and a fresh ThreadPoolExecutor both raise "cannot schedule new futures after

@@ -429,7 +429,7 @@ def aux_stream_deadline(deadline: Optional[float]):
         _aux_stream_deadline.value = previous
 
 
-def _run_protected_sync_provider_call(callback: Callable[[dict[str, Any]], Any], kwargs: dict[str, Any]) -> Any:
+def _run_protected_sync_provider_call(callback: Callable[[dict[str, Any]], Any], kwargs: dict[str, Any], *, attempt=None) -> Any:
     """Run one protected provider callback in an attempt-isolated daemon thread.
 
     Aux clients are process-shared and cannot be closed to wake one request, so the callback (incl.
@@ -438,8 +438,11 @@ def _run_protected_sync_provider_call(callback: Callable[[dict[str, Any]], Any],
     transcript/commit state, never holds the session lock). Unprotected / no cancel source: direct.
     """
     source_cancel_check = _capture_aux_cancel_check()
-    if not _aux_interrupt_protected() or not callable(source_cancel_check):
+    if attempt is None and (not _aux_interrupt_protected() or not callable(source_cancel_check)):
         return callback(kwargs)
+    if attempt is not None:
+        original_cancel = source_cancel_check
+        source_cancel_check = lambda: attempt.cancel_requested() or (callable(original_cancel) and original_cancel())
     # One linearized outcome per attempt: the host Event is reused/cleared on later turns and
     # the Codex timeout Timer may race owner polling — same lock for both.
     cancel_check = _AuxiliaryCancellationDecision(source_cancel_check)
@@ -466,24 +469,35 @@ def _run_protected_sync_provider_call(callback: Callable[[dict[str, Any]], Any],
                 _aux_thread_local_hook(_aux_provider_response, provider_response_hook),
                 aux_stream_deadline(host_deadline),
                 aux_interrupt_protection(cancel_check=cancel_check),
+                attempt.worker() if attempt is not None else contextlib.nullcontext(),
             ):
+                if attempt is not None and cancel_check():
+                    raise AuxiliaryExplicitCancellation()
                 outcome["result"] = callback(kwargs)
         except BaseException as exc:
             outcome["exception"] = exc
         finally:
             done.set()
 
-    threading.Thread(
+    worker = threading.Thread(
         target=provider_context.run, args=(_provider_worker,), name="hermes-protected-aux-provider",
-        daemon=True).start()
+        daemon=True)
+    worker.start()
+    def cancelled():
+        if _captured_aux_cancel_requested(cancel_check):
+            if attempt is not None:
+                receipt = attempt.abort_and_join(worker)
+                logger.warning('Auxiliary local cancellation evidence: %s', receipt)
+            return True
+        return False
     while True:
         # Check cancel before AND after each wait so it wins when result publication and the
         # host Event land in the same polling interval.
-        if _captured_aux_cancel_requested(cancel_check):
+        if cancelled():
             raise AuxiliaryExplicitCancellation()
         if not done.wait(0.02):
             continue
-        if _captured_aux_cancel_requested(cancel_check):
+        if cancelled():
             raise AuxiliaryExplicitCancellation()
         exception = outcome.get("exception")
         if exception is not None:
@@ -2478,22 +2492,35 @@ def _relay_auxiliary_metadata(
 def _relay_sync_completion(
     client: Any, kwargs: dict[str, Any], *, provider: str | None = None,
     api_mode: str | None = None, create: Callable[[dict[str, Any]], Any] | None = None,
+    create_owned=None,
 ) -> Any:
     from agent.auxiliary_wire import prepare_chat_messages
+    from agent.provider_control import current_policy, HeldProvider
+    policy = current_policy()
+    attempt = None
+    if policy.database is not None and provider in policy.providers:
+        policy.check(provider)
+        if create is not None:
+            raise HeldProvider('Controlled aux callback must bind an attempt-owned client')
+        from agent.auxiliary_control import Attempt
+        attempt = Attempt(client, provider, policy)
+        client = attempt.client
 
     kwargs = prepare_chat_messages(client, kwargs)
     # The progress hook is installed per TASK, so every attempt (retries, recovery rungs, fallbacks)
     # must stream through _create_with_progress or the compression watchdog sees silence (#98466).
-    callback = create or (lambda request: _create_with_progress(client, request))
+    callback = ((lambda request: create_owned(client, request)) if create_owned else
+                create or (lambda request: _create_with_progress(client, request)))
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
-    # Isolate only the provider callback so the owning thread can unwind its lease/DB
-    # transaction on hard cancel without touching the shared client.
+    def execute(request):
+        with attempt.registered() if attempt is not None else contextlib.nullcontext():
+            return _run_protected_sync_provider_call(callback, request, attempt=attempt)
     if route is None:
-        return _run_protected_sync_provider_call(callback, kwargs)
+        return execute(kwargs)
     provider_name, fallback_model, metadata = route
     from agent import relay_llm
     return relay_llm.execute_current(
-        kwargs, lambda request: _run_protected_sync_provider_call(callback, request),
+        kwargs, execute,
         name=provider_name, model_name=str(kwargs.get("model") or fallback_model),
         metadata=metadata, defer_logical_completion=True,
     )
@@ -2508,6 +2535,14 @@ async def _relay_async_completion(
     kwargs = prepare_chat_messages(client, kwargs)
     # Async twin of the seam default above (#98466).
     callback = create or (lambda request: _acreate_with_progress(client, request))
+    from agent.provider_control import current_policy, check_request, HeldProvider
+    check_request(provider)
+    policy = current_policy()
+    if policy.database is not None and provider in policy.providers:
+        if create is not None:
+            raise HeldProvider('Controlled async callback must bind an owned client')
+        from agent.auxiliary_control import run_async
+        callback = lambda request: run_async(client, request, provider)
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
     if route is None:
         return await callback(kwargs)
@@ -3783,8 +3818,8 @@ def _call_fallback_candidate_sync(
         return _validate_llm_response(
             _relay_sync_completion(
                 client, request_kwargs, provider=dest.provider, api_mode=dest.api_mode,
-                create=lambda request: _create_with_progress(
-                    client, request, task,
+                create_owned=lambda owned, request: _create_with_progress(
+                    owned, request, task,
                     force_stream=_provider_requires_stream(dest.provider, dest.base_url),
                 ),
             ),
@@ -7373,8 +7408,8 @@ def _call_llm_impl(
         return _validate_llm_response(
             _relay_sync_completion(
                 client, kwargs, provider=request_provider, api_mode=req.resolved_api_mode,
-                create=lambda request: _create_with_progress(
-                    client, request, task,
+                create_owned=lambda owned, request: _create_with_progress(
+                    owned, request, task,
                     force_stream=_provider_requires_stream(
                         request_provider, req.base_info or req.resolved_base_url),
                 ),

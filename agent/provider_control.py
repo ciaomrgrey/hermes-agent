@@ -12,7 +12,7 @@ from contextvars import ContextVar
 from pathlib import Path
 
 
-class HeldProvider(InterruptedError):
+class HeldProvider(BaseException):
     """An explicit hold is cancellation, never a retry/fallback candidate."""
 
 
@@ -24,13 +24,16 @@ class Policy:
         self.database = Path(database) if database else None
         self.providers = tuple(providers)
 
-    def check(self, *providers):
+    def check(self, *providers, account=None):
         targets = set(providers).intersection(self.providers)
         if not targets or self.database is None:
             return
         try:
             with sqlite3.connect(self.database.as_uri()+'?mode=ro', uri=True, timeout=1) as conn:
-                held = {r[0] for r in conn.execute('SELECT provider FROM holds')}
+                has_account = 'account' in {r[1] for r in conn.execute('PRAGMA table_info(holds)')}
+                rows = conn.execute('SELECT provider,account FROM holds' if has_account else
+                                    "SELECT provider,NULL FROM holds")
+                held = {p for p,a in rows if account is None or a in (None, '*', account)}
         except (sqlite3.Error, OSError):
             raise HeldProvider('Provider control state unavailable; admission refused') from None
         if targets.intersection(held):
@@ -47,17 +50,11 @@ class Policy:
         scope = ActiveScope(self, agent)
         scope.check()
         token = _SCOPE.set(scope)
-        handle = None
         try:
-            if schedule and self.database is not None:
-                from agent.periodic_scheduler import schedule as native_schedule
-                handle = native_schedule(scope.poll, 1.0)
             yield scope
         finally:
             with scope.lock:
                 scope.active = False
-            if handle is not None:
-                handle.cancel(wait=2)
             _SCOPE.reset(token)
 
 
@@ -119,3 +116,23 @@ def check_request(provider):
         scope.policy.check(provider)
     else:
         current_policy().check(provider)
+
+
+def check_profile(profile=None, provider_override=None):
+    """Pre-claim scheduler gate; original profile ownership cannot fallback away."""
+    policy = current_policy()
+    if policy.database is None:
+        return
+    from hermes_cli.config import load_config_readonly
+    from hermes_cli.profiles import get_profile_dir
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+    token = set_hermes_home_override(get_profile_dir(profile)) if profile else None
+    try:
+        model = load_config_readonly().get('model') or {}
+        provider = model.get('provider') if isinstance(model, dict) else None
+        if not provider or provider == 'auto':
+            raise HeldProvider('Unresolved profile provider under enabled control; admission refused')
+        policy.check(provider, provider_override)
+    finally:
+        if token is not None:
+            reset_hermes_home_override(token)

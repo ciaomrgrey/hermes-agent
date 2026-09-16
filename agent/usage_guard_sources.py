@@ -30,6 +30,7 @@ def fetch(provider):
         result = parse_weekly(provider, payload)
         result['grant'] = hashlib.sha256((provider+':'+identity).encode()).hexdigest()
         result['identity_kind'] = identity_kind
+        result['account'] = result['grant'] if identity_kind == 'account-fingerprint' else None
         result['fetched_at'] = time.time()
         result['source'] = 'oauth_usage_api' if provider == 'anthropic' else 'usage_api'
         if result['status'] == 'ok' and result['reset'] <= result['fetched_at']:

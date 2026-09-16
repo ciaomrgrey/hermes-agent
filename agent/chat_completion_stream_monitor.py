@@ -58,6 +58,18 @@ class StreamingWaitMonitor:
         _is_local_base = bool(self.agent.base_url) and is_local_endpoint(self.agent.base_url)
         while not self._call_done.is_set():
             self._call_done.wait(timeout=0.3)
+            from agent.provider_control import check_request, HeldProvider
+            try:
+                check_request(getattr(self.agent, 'provider', ''))
+            except HeldProvider as exc:
+                self._provider_hold = exc
+                self._request_cancelled['value'] = True
+                deadline = time.monotonic()+2
+                while not self._call_done.is_set() and time.monotonic() < deadline:
+                    self._cancel_current_stream_attempt('provider_hold')
+                    self.clients.close_once('provider_hold')
+                    self._call_done.wait(.02)
+                return
             _hb_now = time.time()
             if _is_local_base and self._poll_local_load_notice(_hb_now):
                 continue

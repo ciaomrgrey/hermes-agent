@@ -3233,6 +3233,10 @@ def force_close_tcp_sockets(client: Any) -> int:
     is FD-safe from any thread. Returns the count (logged as ``tcp_force_closed=N``)."""
     import socket as _socket
     shutdown_count = 0
+    from agent.request_connect_control import ConnectAbort
+    pending = getattr(getattr(client, '_client', client), '_hermes_connect_abort', None)
+    if isinstance(pending, ConnectAbort):
+        shutdown_count += pending.abort()
     try:
         for sock in _iter_pool_sockets(client):
             try:
