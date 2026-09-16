@@ -1,0 +1,54 @@
+[
+  {
+    "cycle": 0,
+    "effective_timeout": 15.0,
+    "elapsed": 15.118789874999493,
+    "worker_ended": true,
+    "registry_retained": false,
+    "wrapper_closed": true,
+    "tcp_force_closed": 0,
+    "owner": [
+      "AuxiliaryExplicitCancellation"
+    ],
+    "provider": [
+      "APITimeoutError"
+    ],
+    "native_failures": [
+      {
+        "type": "ConnectTimeout",
+        "elapsed": 15.002923874999397
+      }
+    ],
+    "sibling": [
+      "sibling-ok"
+    ]
+  },
+  {
+    "cycle": 1,
+    "effective_timeout": 15.0,
+    "elapsed": 15.164371915998345,
+    "worker_ended": true,
+    "registry_retained": false,
+    "wrapper_closed": true,
+    "tcp_force_closed": 0,
+    "owner": [
+      "AuxiliaryExplicitCancellation"
+    ],
+    "provider": [
+      "APITimeoutError"
+    ],
+    "native_failures": [
+      {
+        "type": "ConnectTimeout",
+        "elapsed": 15.002923874999397
+      },
+      {
+        "type": "ConnectTimeout",
+        "elapsed": 15.002875165999285
+      }
+    ],
+    "sibling": [
+      "sibling-ok"
+    ]
+  }
+]
