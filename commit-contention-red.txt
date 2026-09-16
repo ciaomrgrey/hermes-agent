@@ -1,0 +1,150 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~1 tests) under ['tests/agent/test_provider_commit_contention.py']; running with -j 1
+[100.0% |     1/~1 | ✓0 | ✗1] ✗ tests/agent/test_provider_commit_contention.py (1✗, 6.9s)
+
+  ╔╍ Failed: tests/agent/test_provider_commit_contention.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║ 
+  ║ self = <agent.provider_control.Policy object at 0x109a5e710>
+  ║ providers = ('openai-codex', 'openai-codex'), targets = {'openai-codex'}
+  ║ conn = <sqlite3.Connection object at 0x109b55120>
+  ║ 
+  ║     @contextmanager
+  ║     def commit_fence(self, *providers):
+  ║         """Control DB before session DB; reserve only across the native write.
+  ║     
+  ║         A hold writer uses the same SQLite writer exclusion. No distributed
+  ║         atomicity is implied: session commit wins before this reservation ends.
+  ║         """
+  ║         targets = set(providers).intersection(self.providers)
+  ║         if not targets or self.database is None:
+  ║             yield
+  ║             return
+  ║         conn = None
+  ║         try:
+  ║             try:
+  ║                 conn = sqlite3.connect(self.database.as_uri()+'?mode=rw', uri=True, timeout=1)
+  ║                 conn.execute('BEGIN IMMEDIATE')
+  ║                 held = {row[0] for row in conn.execute('SELECT provider FROM holds')}
+  ║             except (sqlite3.Error, OSError):
+  ║ >               raise HeldProvider('Provider control state unavailable; commit refused') from None
+  ║ E               agent.provider_control.HeldProvider: Provider control state unavailable; commit refused
+  ║ 
+  ║ agent/provider_control.py:65: HeldProvider
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_provider_commit_contention.py::test_unaffected_configured_provider_commits_while_native_writer_waits
+  ║ ============================== 1 failed in 3.46s ===============================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_provider_commit_contention.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 1 failed (100% complete) in 6.9s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 6.9s  (runner wall: 6.9s, parallelism: 1x)
+  P50: 6.95s  P90: 6.95s  P95: 6.95s  P99: 6.95s  Max: 6.95s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+      6.95s  tests/agent/test_provider_commit_contention.py
+
+=== Failure output ===
+
+--- tests/agent/test_provider_commit_contention.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 1 item
+
+tests/agent/test_provider_commit_contention.py F                         [100%]
+
+=================================== FAILURES ===================================
+____ test_unaffected_configured_provider_commits_while_native_writer_waits _____
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-mkpwkx4u/pytest-of-claudia/pytest-0/test_unaffected_configured_pro0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109a10290>
+
+    def test_unaffected_configured_provider_commits_while_native_writer_waits(tmp_path, monkeypatch):
+        control = tmp_path/'control.db'
+        with sqlite3.connect(control) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT)')
+        policy = pc.Policy(control, ['anthropic', 'openai-codex'])
+        monkeypatch.setattr(pc, 'current_policy', lambda: policy)
+        db = SessionDB(db_path=tmp_path/'a.db')
+        sibling_db = SessionDB(db_path=tmp_path/'b.db')
+        db.create_session('a', source='cli')
+        sibling_db.create_session('b', source='cli')
+        agent, sibling = _make_flush_agent(db, 'a'), _make_flush_agent(sibling_db, 'b')
+        agent.provider, sibling.provider = 'anthropic', 'openai-codex'
+        entered = threading.Event()
+        native = db._execute_write
+        def blocked_native(*args, **kwargs):
+            entered.set()
+            return native(*args, **kwargs)
+        monkeypatch.setattr(db, '_execute_write', blocked_native)
+        db._lock.acquire()  # genuine native shared writer lock, no interposed wait
+        results = []
+        def write():
+            try:
+                results.append(agent._flush_messages_to_session_db([dict(role='assistant', content='a')], []))
+            except BaseException as exc:
+                results.append(type(exc).__name__)
+        worker = threading.Thread(target=write)
+        worker.start()
+        try:
+            assert entered.wait(5)
+            # Other provider uses a different session DB; no legitimate data lock conflict.
+>           assert sibling._flush_messages_to_session_db([dict(role='assistant', content='b')], []) is True
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/agent/test_provider_commit_contention.py:40: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+agent/session_persistence.py:342: in _flush_messages_to_session_db
+    return self._flush_messages_to_session_db_unlocked(messages, conversation_history)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent/session_persistence.py:378: in _flush_messages_to_session_db_unlocked
+    with fence:
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <agent.provider_control.Policy object at 0x109a5e710>
+providers = ('openai-codex', 'openai-codex'), targets = {'openai-codex'}
+conn = <sqlite3.Connection object at 0x109b55120>
+
+    @contextmanager
+    def commit_fence(self, *providers):
+        """Control DB before session DB; reserve only across the native write.
+    
+        A hold writer uses the same SQLite writer exclusion. No distributed
+        atomicity is implied: session commit wins before this reservation ends.
+        """
+        targets = set(providers).intersection(self.providers)
+        if not targets or self.database is None:
+            yield
+            return
+        conn = None
+        try:
+            try:
+                conn = sqlite3.connect(self.database.as_uri()+'?mode=rw', uri=True, timeout=1)
+                conn.execute('BEGIN IMMEDIATE')
+                held = {row[0] for row in conn.execute('SELECT provider FROM holds')}
+            except (sqlite3.Error, OSError):
+>               raise HeldProvider('Provider control state unavailable; commit refused') from None
+E               agent.provider_control.HeldProvider: Provider control state unavailable; commit refused
+
+agent/provider_control.py:65: HeldProvider
+=========================== short test summary info ============================
+FAILED tests/agent/test_provider_commit_contention.py::test_unaffected_configured_provider_commits_while_native_writer_waits
+============================== 1 failed in 3.46s ===============================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_provider_commit_contention.py  (1 test failed)

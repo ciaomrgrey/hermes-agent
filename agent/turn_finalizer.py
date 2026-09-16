@@ -99,6 +99,8 @@ def _clone_background_review_messages(messages):
 def _invoke_hook_safely(name: str, logger: logging.Logger, **kwargs) -> list:
     """Fire a lifecycle plugin hook; a failing hook is logged, never fatal."""
     try:
+        from agent.provider_control import check_request
+        check_request(kwargs.get('provider', ''))
         from hermes_cli.lifecycle import invoke_hook
         return invoke_hook(name, **kwargs)
     except Exception as exc:
@@ -459,12 +461,7 @@ def finalize_turn(
     _rollback_interrupted_preflight_display(agent, interrupted)
 
     _cleanup_errors: List[str] = []
-    # ``user_message`` may be a multimodal list of parts; the trajectory format wants a string.
-    _guarded_cleanup(
-        "save_trajectory",
-        lambda: agent._save_trajectory(messages, _summarize_user_message_for_log(user_message), completed),
-        _cleanup_errors, logger,
-    )
+    # Completion trajectories are saved only after the guarded native commit.
     _guarded_cleanup(
         "cleanup_task_resources", lambda: agent._cleanup_task_resources(effective_task_id),
         _cleanup_errors, logger,
@@ -483,9 +480,25 @@ def finalize_turn(
         _close_transcript_tail(agent, messages, final_response, interrupted, _recovered_from_stream)
         if not interrupted and not failed:
             _micro_compact_after_turn(agent, messages, final_response, logger)
-        agent._persist_session(messages, conversation_history)
+        persisted = agent._persist_session(messages, conversation_history)
+        if persisted is False:
+            from agent.provider_control import (
+                current_policy, controls_request, reject_uncommitted_completion, PersistenceRejected,
+            )
+            if controls_request(current_policy(), getattr(agent, 'provider', '')):
+                reject_uncommitted_completion(agent, messages)
+                agent._persist_session(messages, conversation_history)
+                raise PersistenceRejected('Native session write failed; completion discarded')
 
     _guarded_cleanup("persist_session", _persist_step, _cleanup_errors, logger)
+
+    from agent.provider_control import check_request
+    check_request(getattr(agent, 'provider', ''))
+    _guarded_cleanup(
+        "save_trajectory",
+        lambda: agent._save_trajectory(messages, _summarize_user_message_for_log(user_message), completed),
+        _cleanup_errors, logger,
+    )
 
     # Keep the gateway's separate in-memory history snapshot current even on
     # cleanup error, so a later prompt isn't sent with a pre-turn snapshot.
@@ -516,6 +529,7 @@ def finalize_turn(
     # ``None`` on turns that never reached a provider response — by contract.
     try:
         from agent.conversation_loop import _notify_context_engine_turn_complete
+        check_request(getattr(agent, 'provider', ''))
         _notify_context_engine_turn_complete(
             agent, messages, usage=getattr(agent, "_last_turn_usage", None), logger=logger,
             turn_id=turn_id, task_id=effective_task_id, api_call_count=api_call_count,
@@ -601,6 +615,7 @@ def finalize_turn(
         agent._iters_since_skill = 0
 
     # External memory provider: sync the completed turn + queue next prefetch.
+    check_request(getattr(agent, 'provider', ''))
     agent._sync_external_memory_for_turn(
         original_user_message=original_user_message, final_response=final_response,
         interrupted=interrupted, messages=messages,

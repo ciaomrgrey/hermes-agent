@@ -209,7 +209,7 @@ def _db_flush_collect(agent, messages: List[Dict], conversation_history: Optiona
     return batch_rows, batch_msgs
 
 
-def _db_flush_write(agent, batch_rows: List[Dict[str, Any]], batch_msgs: List[Dict]) -> None:
+def _db_flush_write(agent, batch_rows: List[Dict[str, Any]], batch_msgs: List[Dict], transaction_guard=None) -> None:
     """One transaction for the turn's new rows: on failure nothing lands and no markers are stamped."""
     if not batch_rows:
         return
@@ -218,6 +218,7 @@ def _db_flush_write(agent, batch_rows: List[Dict[str, Any]], batch_msgs: List[Di
         compression_lock_holder=getattr(agent, "_active_compression_lock_holder", None),
         turn_lease_holder=getattr(agent, "_active_session_turn_lease_holder", None),
         turn_lease_ttl_seconds=getattr(agent, "_active_session_turn_lease_ttl_seconds", 300.0) or 300.0,
+        **({'transaction_guard': transaction_guard} if transaction_guard else {}),
     )
     sync_flushed_message_markers(batch_msgs, batch_rows)
 
@@ -304,11 +305,13 @@ class SessionPersistenceMixin:
         with _persist_lock(self):
             self._drop_trailing_empty_response_scaffolding(messages)
             self._session_messages = messages
-            self._flush_messages_to_session_db(messages, conversation_history)
+            persisted = self._flush_messages_to_session_db(messages, conversation_history)
             # Drain async token-accounting deltas at every persist point; cheap no-op when nothing queued.
             if self._session_db is not None:
                 self._session_db.flush_token_counts()
-            note_turn_persisted(self)
+            if persisted is True:
+                note_turn_persisted(self)
+            return persisted
 
     def _drop_trailing_empty_response_scaffolding(self, messages: List[Dict]) -> None:
         """Pop empty-response retry scaffolding from the tail, then (only if any was present) rewind the
@@ -363,7 +366,22 @@ class SessionPersistenceMixin:
             if not self._session_db_created:  # retry row creation if the earlier attempt failed transiently
                 self._ensure_db_session()
             batch_rows, batch_msgs = _db_flush_collect(self, messages, conversation_history)
-            _db_flush_write(self, batch_rows, batch_msgs)
+            from agent.provider_control import (
+                HeldProvider, persistence_guard, reject_uncommitted_completion,
+            )
+            try:
+                # Only terminal assistant completion requires the hold fence.
+                # Pending input and already-executed tool state remain resumable.
+                guard = persistence_guard(self) if any(
+                    row['role'] == 'assistant' and not row.get('tool_calls')
+                    for row in batch_rows
+                ) else None
+                _db_flush_write(self, batch_rows, batch_msgs, transaction_guard=guard)
+            except HeldProvider:
+                reject_uncommitted_completion(self, messages)
+                pending_rows, pending_msgs = _db_flush_collect(self, messages, conversation_history)
+                _db_flush_write(self, pending_rows, pending_msgs)
+                raise
             # Markers are now the sole truth; reset the one-shot seed so no id() outlives this flush.
             self._flushed_db_message_ids = set()
             self._last_flushed_db_idx = len(messages)
@@ -371,6 +389,14 @@ class SessionPersistenceMixin:
             self._db_flush_scan_prefix = messages[:]
             return True
         except Exception as e:
+            from hermes_state import StateDbCorruptError, StateDbReplacedError
+            from agent.provider_control import persistence_guard, reject_uncommitted_completion
+            if isinstance(e, (StateDbCorruptError, StateDbReplacedError)) and persistence_guard(self):
+                # Native recovery JSONL is also a resumable publication boundary.
+                # Preserve pending input/tool state, never divert a rejected answer.
+                reject_uncommitted_completion(self, messages)
+                batch_rows = [row for row in batch_rows if not (
+                    row['role'] == 'assistant' and not row.get('tool_calls'))]
             if _db_flush_failed(self, e, batch_rows, _adoption_budget):
                 return self._flush_messages_to_session_db_unlocked(messages, conversation_history, _adoption_budget=0)
             return False

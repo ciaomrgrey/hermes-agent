@@ -91,8 +91,6 @@ def test_native_interrupt_can_cancel_one_agent_without_other_provider_child():
     cancelled = []
     agent._active_request_abort = lambda reason: cancelled.append('request')
     agent._active_children = [SimpleNamespace(hard_interrupt=lambda *a, **kw: cancelled.append('child'))]
-    import inspect
-    assert 'propagate_children' in inspect.signature(agent.interrupt).parameters, 'native selective cancellation missing'
     agent.interrupt('hold', hard_cancel=True, propagate_children=False)
     assert cancelled == ['request']
     assert agent._hard_interrupt_requested.is_set()

@@ -20,7 +20,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from agent.message_sanitization import _sanitize_surrogates
@@ -800,6 +800,7 @@ class SessionDB(
 
     def _execute_write(
         self, fn: Callable[[sqlite3.Connection], T], patience_s: Optional[float] = None,
+        transaction_guard=None,
     ) -> T:
         """Run *fn(conn)* inside BEGIN IMMEDIATE with jittered lock retry; commit
         is handled here (callers must not commit). Returns *fn*'s result.
@@ -835,17 +836,21 @@ class SessionDB(
                     self._raise_if_db_replaced()
                     if self._conn is None:  # close() raced this writer
                         self._reopen_after_close_locked(context="write")
-                    self._conn.execute("BEGIN IMMEDIATE")
-                    try:
-                        fn_started = True
-                        result = fn(self._conn)
-                        self._conn.commit()
-                    except BaseException:
+                    # Local lock first (never held by the controller); then
+                    # control SQLite reservation, then session SQLite write.
+                    # Release the reservation before retry sleeps/maintenance.
+                    with transaction_guard() if transaction_guard else nullcontext():
+                        self._conn.execute("BEGIN IMMEDIATE")
                         try:
-                            self._conn.rollback()
-                        except Exception:
-                            pass
-                        raise
+                            fn_started = True
+                            result = fn(self._conn)
+                            self._conn.commit()
+                        except BaseException:
+                            try:
+                                self._conn.rollback()
+                            except Exception:
+                                pass
+                            raise
                 # Success — periodic best-effort checkpoint + FTS merge.
                 self._write_count += 1
                 if self._write_count % self._CHECKPOINT_EVERY_N_WRITES == 0:

@@ -1,0 +1,139 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~1 tests) under ['tests/agent/test_provider_late_persist.py']; running with -j 1
+[100.0% |     1/~1 | ✓3 | ✗1] ✗ tests/agent/test_provider_late_persist.py (3✓ 1✗, 1.7s)
+
+  ╔╍ Failed: tests/agent/test_provider_late_persist.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║                 _turn_exit_reason='text_response(fixture)')
+  ║         hooks = []
+  ║         if hold_edge == 'output_hook':
+  ║             def hook(name, **kwargs):
+  ║                 hooks.append(name)
+  ║                 if name == 'transform_llm_output':
+  ║                     hold_before_persist()
+  ║                 return []
+  ║             monkeypatch.setattr('hermes_cli.lifecycle.invoke_hook', hook)
+  ║         if hold_edge == 'write_failure':
+  ║             original_write = db.append_messages_batch
+  ║             def fail_answer(**kwargs):
+  ║                 if any(m['role'] == 'assistant' for m in kwargs['messages']):
+  ║                     raise sqlite3.OperationalError('synthetic write failure')
+  ║                 return original_write(**kwargs)
+  ║             monkeypatch.setattr(db, 'append_messages_batch', fail_answer)
+  ║         try:
+  ║             result = finish(agent, 'pending input')
+  ║             assert result['interrupted'] and not result['completed']
+  ║             rows = db.get_messages(agent.session_id)
+  ║             assert any(row['role']=='user' for row in rows), rows
+  ║             if hold_edge == 'output_hook':
+  ║ >               assert 'post_llm_call' not in hooks and 'on_session_end' not in hooks, hooks
+  ║ E               AssertionError: ['transform_llm_output', 'post_llm_call', 'on_session_end']
+  ║ E               assert ('post_llm_call' not in ['transform_llm_output', 'post_llm_call', 'on_session_end'])
+  ║ 
+  ║ tests/agent/test_provider_late_persist.py:71: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_provider_late_persist.py::test_hold_before_native_finalizer_persist_rejects_late_answer[output_hook]
+  ║ ========================= 1 failed, 3 passed in 0.66s ==========================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_provider_late_persist.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 3 tests passed, 1 failed (100% complete) in 1.7s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 1.7s  (runner wall: 1.7s, parallelism: 1x)
+  P50: 1.72s  P90: 1.72s  P95: 1.72s  P99: 1.72s  Max: 1.72s
+  <1s: 0 files (0%)  <2s: 1 files (100%)
+  Top 10 slowest:
+      1.72s  tests/agent/test_provider_late_persist.py
+
+=== Failure output ===
+
+--- tests/agent/test_provider_late_persist.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 4 items
+
+tests/agent/test_provider_late_persist.py ...F                           [100%]
+
+=================================== FAILURES ===================================
+__ test_hold_before_native_finalizer_persist_rejects_late_answer[output_hook] __
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-t1pfd1rz/pytest-of-claudia/pytest-0/test_hold_before_native_finali3')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a7b6410>
+hold_edge = 'output_hook'
+
+    @pytest.mark.parametrize('hold_edge', ['cleanup', 'before_finalize', 'write_failure', 'output_hook'])
+    def test_hold_before_native_finalizer_persist_rejects_late_answer(tmp_path, monkeypatch, hold_edge):
+        control = tmp_path / 'holds.sqlite3'
+        with sqlite3.connect(control) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        policy = pc.Policy(control, ('anthropic',))
+        monkeypatch.setattr(pc, 'current_policy', lambda: policy)
+        monkeypatch.setattr('hermes_cli.plugins.invoke_hook', lambda *a, **kw: [])
+        db = SessionDB(db_path=tmp_path / 'state.db')
+        db.create_session('late-persist', source='cli')
+        agent = _LimitAgent()
+        agent.provider = 'anthropic'
+        agent.session_id = 'late-persist'
+        flush_agent = _make_flush_agent(db, agent.session_id)
+        # Use native durability, not a mocked persistence recorder.
+        agent._persist_session = lambda messages, history: flush_agent._flush_messages_to_session_db(messages, history)
+        def hold_before_persist(*args):
+            with sqlite3.connect(control) as conn:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)', ('anthropic', 1, 'synthetic'))
+        agent._cleanup_task_resources = hold_before_persist if hold_edge == 'cleanup' else lambda *a: None
+        trajectories = []
+        agent._save_trajectory = lambda messages, query, completed: trajectories.append(completed)
+    
+        @pc.controlled_turn
+        def finish(agent, user_message):
+            if hold_edge == 'before_finalize':
+                hold_before_persist()
+            return finalize_turn(agent, final_response='late answer', api_call_count=1,
+                interrupted=False, failed=False,
+                messages=[dict(role='user', content=user_message)], conversation_history=[],
+                effective_task_id='fixture', turn_id='fixture', user_message=user_message,
+                original_user_message=user_message, _should_review_memory=False,
+                _turn_exit_reason='text_response(fixture)')
+        hooks = []
+        if hold_edge == 'output_hook':
+            def hook(name, **kwargs):
+                hooks.append(name)
+                if name == 'transform_llm_output':
+                    hold_before_persist()
+                return []
+            monkeypatch.setattr('hermes_cli.lifecycle.invoke_hook', hook)
+        if hold_edge == 'write_failure':
+            original_write = db.append_messages_batch
+            def fail_answer(**kwargs):
+                if any(m['role'] == 'assistant' for m in kwargs['messages']):
+                    raise sqlite3.OperationalError('synthetic write failure')
+                return original_write(**kwargs)
+            monkeypatch.setattr(db, 'append_messages_batch', fail_answer)
+        try:
+            result = finish(agent, 'pending input')
+            assert result['interrupted'] and not result['completed']
+            rows = db.get_messages(agent.session_id)
+            assert any(row['role']=='user' for row in rows), rows
+            if hold_edge == 'output_hook':
+>               assert 'post_llm_call' not in hooks and 'on_session_end' not in hooks, hooks
+E               AssertionError: ['transform_llm_output', 'post_llm_call', 'on_session_end']
+E               assert ('post_llm_call' not in ['transform_llm_output', 'post_llm_call', 'on_session_end'])
+
+tests/agent/test_provider_late_persist.py:71: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_provider_late_persist.py::test_hold_before_native_finalizer_persist_rejects_late_answer[output_hook]
+========================= 1 failed, 3 passed in 0.66s ==========================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_provider_late_persist.py  (1 test failed)

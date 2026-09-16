@@ -1,0 +1,48 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 23 test files (~105 tests) under ['tests/run_agent/test_81641_text_turn_incremental_persistence.py', 'tests/run_agent/test_compression_persistence.py', 'tests/run_agent/test_empty_response_recovery_persistence.py', 'tests/run_agent/test_in_place_persist_marker_98450.py', 'tests/run_agent/test_session_activity_persist.py', 'tests/run_agent/test_thinking_sig_recovery_persistence.py', 'tests/run_agent/test_token_persistence_non_cli.py', 'tests/run_agent/test_tool_call_incremental_persistence.py', 'tests/run_agent/test_tool_name_db_persistence.py', 'tests/agent/test_rotation_flush_persisted_boundary_68196.py', 'tests/agent/test_session_rotation_flush_cold_resume_68454.py', 'tests/agent/test_turn_finalizer_cleanup_guard.py', 'tests/agent/test_turn_finalizer_final_response_persistence.py', 'tests/agent/test_turn_finalizer_interrupt_alternation.py', 'tests/agent/test_turn_finalizer_iteration_limit_exit.py', 'tests/test_state_db_write_durability.py', 'tests/agent/test_provider_commit_contention.py', 'tests/agent/test_provider_commit_order.py', 'tests/agent/test_provider_commit_recovery.py', 'tests/agent/test_provider_late_persist.py', 'tests/agent/test_provider_control.py', 'tests/agent/test_provider_host_results.py', 'tests/agent/test_provider_cli_ingress.py']; running with -j 2
+[  1.0% |     1/~105 | ✓2 | ✗0] ✓ tests/agent/test_provider_cli_ingress.py (2✓, 3.1s)
+[  2.9% |     3/~105 | ✓4 | ✗0] ✓ tests/agent/test_provider_commit_contention.py (2✓, 3.7s)
+[  3.8% |     4/~105 | ✓6 | ✗0] ✓ tests/agent/test_provider_commit_order.py (2✓, 1.4s)
+[ 11.4% |    12/~105 | ✓14 | ✗ 0] ✓ tests/agent/test_provider_control.py (8✓, 0.6s)
+[ 14.3% |    15/~105 | ✓17 | ✗ 0] ✓ tests/agent/test_provider_host_results.py (3✓, 0.5s)
+[ 15.2% |    16/~105 | ✓24 | ✗ 0] ✓ tests/agent/test_provider_late_persist.py (7✓, 1.0s)
+[ 17.1% |    18/~105 | ✓29 | ✗ 0] ✓ tests/agent/test_provider_commit_recovery.py (5✓, 3.8s)
+[ 20.0% |    21/~105 | ✓32 | ✗ 0] ✓ tests/agent/test_session_rotation_flush_cold_resume_68454.py (3✓, 0.9s)
+[ 21.0% |    22/~105 | ✓33 | ✗ 0] ✓ tests/agent/test_rotation_flush_persisted_boundary_68196.py (1✓, 1.9s)
+[ 23.8% |    25/~105 | ✓39 | ✗ 0] ✓ tests/agent/test_turn_finalizer_cleanup_guard.py (6✓, 0.7s)
+[ 31.4% |    33/~105 | ✓47 | ✗ 0] ✓ tests/agent/test_turn_finalizer_final_response_persistence.py (8✓, 0.7s)
+[ 38.1% |    40/~105 | ✓56 | ✗ 0] ✓ tests/agent/test_turn_finalizer_iteration_limit_exit.py (9✓, 0.4s)
+[ 40.0% |    42/~105 | ✓58 | ✗ 0] ✓ tests/agent/test_turn_finalizer_interrupt_alternation.py (2✓, 0.5s)
+[ 41.9% |    44/~105 | ✓60 | ✗ 0] ✓ tests/run_agent/test_81641_text_turn_incremental_persistence.py (2✓, 1.0s)
+[ 45.7% |    48/~105 | ✓64 | ✗ 0] ✓ tests/run_agent/test_empty_response_recovery_persistence.py (4✓, 0.7s)
+[ 57.1% |    60/~105 | ✓76 | ✗ 0] ✓ tests/run_agent/test_compression_persistence.py (12✓, 3.1s)
+[ 59.0% |    62/~105 | ✓78 | ✗ 0] ✓ tests/run_agent/test_in_place_persist_marker_98450.py (2✓, 1.7s)
+[ 62.9% |    66/~105 | ✓82 | ✗ 0] ✓ tests/run_agent/test_thinking_sig_recovery_persistence.py (4✓, 0.3s)
+[ 76.2% |    80/~105 | ✓96 | ✗ 0] ✓ tests/run_agent/test_session_activity_persist.py (14✓, 0.8s)
+[ 79.0% |    83/~105 | ✓99 | ✗ 0] ✓ tests/run_agent/test_token_persistence_non_cli.py (3✓, 1.5s)
+[ 80.0% |    84/~105 | ✓100 | ✗  0] ✓ tests/run_agent/test_tool_name_db_persistence.py (1✓, 0.8s)
+[ 83.8% |    88/~105 | ✓104 | ✗  0] ✓ tests/test_state_db_write_durability.py (4✓, 0.4s)
+[100.0% |   105/~105 | ✓123 | ✗  0] ✓ tests/run_agent/test_tool_call_incremental_persistence.py (19✓, 3.6s)
+
+=== Summary: 23 files, 123 tests passed, 0 failed (100% complete) in 17.0s (2 workers) ===
+  Durations cached to test_durations.json (23 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   23
+  Total subprocess CPU-wall: 32.9s  (runner wall: 17.0s, parallelism: 2x)
+  P50: 0.87s  P90: 3.60s  P95: 3.68s  P99: 3.77s  Max: 3.77s
+  <1s: 13 files (57%)  <2s: 18 files (78%)
+  Top 10 slowest:
+      3.77s  tests/agent/test_provider_commit_recovery.py
+      3.68s  tests/agent/test_provider_commit_contention.py
+      3.60s  tests/run_agent/test_tool_call_incremental_persistence.py
+      3.13s  tests/agent/test_provider_cli_ingress.py
+      3.09s  tests/run_agent/test_compression_persistence.py
+      1.89s  tests/agent/test_rotation_flush_persisted_boundary_68196.py
+      1.75s  tests/run_agent/test_in_place_persist_marker_98450.py
+      1.46s  tests/run_agent/test_token_persistence_non_cli.py
+      1.36s  tests/agent/test_provider_commit_order.py
+      1.04s  tests/run_agent/test_81641_text_turn_incremental_persistence.py

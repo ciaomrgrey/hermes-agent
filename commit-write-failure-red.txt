@@ -1,0 +1,128 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~1 tests) under ['tests/agent/test_provider_late_persist.py']; running with -j 1
+[100.0% |     1/~1 | ✓2 | ✗1] ✗ tests/agent/test_provider_late_persist.py (2✓ 1✗, 1.6s)
+
+  ╔╍ Failed: tests/agent/test_provider_late_persist.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║         agent._save_trajectory = lambda messages, query, completed: trajectories.append(completed)
+  ║     
+  ║         @pc.controlled_turn
+  ║         def finish(agent, user_message):
+  ║             if hold_edge == 'before_finalize':
+  ║                 hold_before_persist()
+  ║             return finalize_turn(agent, final_response='late answer', api_call_count=1,
+  ║                 interrupted=False, failed=False,
+  ║                 messages=[dict(role='user', content=user_message)], conversation_history=[],
+  ║                 effective_task_id='fixture', turn_id='fixture', user_message=user_message,
+  ║                 original_user_message=user_message, _should_review_memory=False,
+  ║                 _turn_exit_reason='text_response(fixture)')
+  ║         if hold_edge == 'write_failure':
+  ║             original_write = db.append_messages_batch
+  ║             def fail_answer(**kwargs):
+  ║                 if any(m['role'] == 'assistant' for m in kwargs['messages']):
+  ║                     raise sqlite3.OperationalError('synthetic write failure')
+  ║                 return original_write(**kwargs)
+  ║             monkeypatch.setattr(db, 'append_messages_batch', fail_answer)
+  ║         try:
+  ║             result = finish(agent, 'pending input')
+  ║ >           assert result['interrupted'] and not result['completed']
+  ║ E           assert (False)
+  ║ 
+  ║ tests/agent/test_provider_late_persist.py:59: AssertionError
+  ║ ------------------------------ Captured log call -------------------------------
+  ║ WARNING  run_agent:session_persistence.py:269 Session DB append_message failed: synthetic write failure
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_provider_late_persist.py::test_hold_before_native_finalizer_persist_rejects_late_answer[write_failure]
+  ║ ========================= 1 failed, 2 passed in 0.63s ==========================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_provider_late_persist.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 2 tests passed, 1 failed (100% complete) in 1.6s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 1.6s  (runner wall: 1.6s, parallelism: 1x)
+  P50: 1.64s  P90: 1.64s  P95: 1.64s  P99: 1.64s  Max: 1.64s
+  <1s: 0 files (0%)  <2s: 1 files (100%)
+  Top 10 slowest:
+      1.64s  tests/agent/test_provider_late_persist.py
+
+=== Failure output ===
+
+--- tests/agent/test_provider_late_persist.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 3 items
+
+tests/agent/test_provider_late_persist.py ..F                            [100%]
+
+=================================== FAILURES ===================================
+_ test_hold_before_native_finalizer_persist_rejects_late_answer[write_failure] _
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-b65j4qyi/pytest-of-claudia/pytest-0/test_hold_before_native_finali2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10af75710>
+hold_edge = 'write_failure'
+
+    @pytest.mark.parametrize('hold_edge', ['cleanup', 'before_finalize', 'write_failure'])
+    def test_hold_before_native_finalizer_persist_rejects_late_answer(tmp_path, monkeypatch, hold_edge):
+        control = tmp_path / 'holds.sqlite3'
+        with sqlite3.connect(control) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        policy = pc.Policy(control, ('anthropic',))
+        monkeypatch.setattr(pc, 'current_policy', lambda: policy)
+        monkeypatch.setattr('hermes_cli.plugins.invoke_hook', lambda *a, **kw: [])
+        db = SessionDB(db_path=tmp_path / 'state.db')
+        db.create_session('late-persist', source='cli')
+        agent = _LimitAgent()
+        agent.provider = 'anthropic'
+        agent.session_id = 'late-persist'
+        flush_agent = _make_flush_agent(db, agent.session_id)
+        # Use native durability, not a mocked persistence recorder.
+        agent._persist_session = lambda messages, history: flush_agent._flush_messages_to_session_db(messages, history)
+        def hold_before_persist(*args):
+            with sqlite3.connect(control) as conn:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)', ('anthropic', 1, 'synthetic'))
+        agent._cleanup_task_resources = hold_before_persist if hold_edge == 'cleanup' else lambda *a: None
+        trajectories = []
+        agent._save_trajectory = lambda messages, query, completed: trajectories.append(completed)
+    
+        @pc.controlled_turn
+        def finish(agent, user_message):
+            if hold_edge == 'before_finalize':
+                hold_before_persist()
+            return finalize_turn(agent, final_response='late answer', api_call_count=1,
+                interrupted=False, failed=False,
+                messages=[dict(role='user', content=user_message)], conversation_history=[],
+                effective_task_id='fixture', turn_id='fixture', user_message=user_message,
+                original_user_message=user_message, _should_review_memory=False,
+                _turn_exit_reason='text_response(fixture)')
+        if hold_edge == 'write_failure':
+            original_write = db.append_messages_batch
+            def fail_answer(**kwargs):
+                if any(m['role'] == 'assistant' for m in kwargs['messages']):
+                    raise sqlite3.OperationalError('synthetic write failure')
+                return original_write(**kwargs)
+            monkeypatch.setattr(db, 'append_messages_batch', fail_answer)
+        try:
+            result = finish(agent, 'pending input')
+>           assert result['interrupted'] and not result['completed']
+E           assert (False)
+
+tests/agent/test_provider_late_persist.py:59: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  run_agent:session_persistence.py:269 Session DB append_message failed: synthetic write failure
+=========================== short test summary info ============================
+FAILED tests/agent/test_provider_late_persist.py::test_hold_before_native_finalizer_persist_rejects_late_answer[write_failure]
+========================= 1 failed, 2 passed in 0.63s ==========================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_provider_late_persist.py  (1 test failed)

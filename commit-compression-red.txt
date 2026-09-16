@@ -1,0 +1,152 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~1 tests) under ['tests/agent/test_provider_late_persist.py']; running with -j 1
+[100.0% |     1/~1 | ✓4 | ✗1] ✗ tests/agent/test_provider_late_persist.py (4✓ 1✗, 11.4s)
+
+  ╔╍ Failed: tests/agent/test_provider_late_persist.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║                 return []
+  ║             monkeypatch.setattr('hermes_cli.lifecycle.invoke_hook', hook)
+  ║         if hold_edge == 'write_failure':
+  ║             # Genuine SQLite transaction abort, not a persistence recorder/fake return.
+  ║             db._conn.execute("""CREATE TRIGGER fail_fixture_answer BEFORE INSERT ON messages
+  ║                 WHEN NEW.role='assistant' BEGIN
+  ║                 SELECT RAISE(ABORT, 'synthetic fixture refuses assistant insert'); END""")
+  ║         try:
+  ║             result = finish(agent, 'pending input')
+  ║             assert result['interrupted'] and not result['completed']
+  ║             rows = db.get_messages(agent.session_id)
+  ║             assert any(row['role']=='user' for row in rows), rows
+  ║             if hold_edge == 'output_hook':
+  ║                 assert 'post_llm_call' not in hooks and 'on_session_end' not in hooks, hooks
+  ║                 assert result['final_response'] != 'late answer'
+  ║                 assert any(row['content']=='late answer' for row in rows)  # legitimate pre-hold commit
+  ║                 return
+  ║             assert not any(row['role']=='assistant' and row['content']=='late answer' for row in rows), rows
+  ║ >           assert 'late answer' not in repr(result), result
+  ║ E           AssertionError: {'agent_persisted': False, 'api_calls': 0, 'completed': False, 'failed': True, ...}
+  ║ E           assert 'late answer' not in "{'final_res...ted': False}"
+  ║ E             
+  ║ E             'late answer' is contained here:
+  ║ E               ontent': 'late answer', 'timestamp': 1789565601.2686021}], 'api_calls': 0, 'agent_persisted': False}
+  ║ E             ?           +++++++++++
+  ║ 
+  ║ tests/agent/test_provider_late_persist.py:80: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_provider_late_persist.py::test_hold_before_native_finalizer_persist_rejects_late_answer[compression]
+  ║ ========================= 1 failed, 4 passed in 3.43s ==========================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_provider_late_persist.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 4 tests passed, 1 failed (100% complete) in 11.4s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 11.4s  (runner wall: 11.4s, parallelism: 1x)
+  P50: 11.37s  P90: 11.37s  P95: 11.37s  P99: 11.37s  Max: 11.37s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+     11.37s  tests/agent/test_provider_late_persist.py
+
+=== Failure output ===
+
+--- tests/agent/test_provider_late_persist.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 5 items
+
+tests/agent/test_provider_late_persist.py ....F                          [100%]
+
+=================================== FAILURES ===================================
+__ test_hold_before_native_finalizer_persist_rejects_late_answer[compression] __
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-nzzhd0cn/pytest-of-claudia/pytest-0/test_hold_before_native_finali4')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10afe8790>
+hold_edge = 'compression'
+
+    @pytest.mark.parametrize('hold_edge', ['cleanup', 'before_finalize', 'write_failure', 'output_hook', 'compression'])
+    def test_hold_before_native_finalizer_persist_rejects_late_answer(tmp_path, monkeypatch, hold_edge):
+        control = tmp_path / 'holds.sqlite3'
+        with sqlite3.connect(control) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        policy = pc.Policy(control, ('anthropic',))
+        monkeypatch.setattr(pc, 'current_policy', lambda: policy)
+        monkeypatch.setattr('hermes_cli.plugins.invoke_hook', lambda *a, **kw: [])
+        db = SessionDB(db_path=tmp_path / 'state.db')
+        db.create_session('late-persist', source='cli')
+        agent = _LimitAgent()
+        agent.provider = 'anthropic'
+        agent.session_id = 'late-persist'
+        flush_agent = _make_flush_agent(db, agent.session_id)
+        # Use native durability, not a mocked persistence recorder.
+        agent._persist_session = lambda messages, history: flush_agent._flush_messages_to_session_db(messages, history)
+        def hold_before_persist(*args):
+            with sqlite3.connect(control) as conn:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)', ('anthropic', 1, 'synthetic'))
+        agent._cleanup_task_resources = hold_before_persist if hold_edge in ('cleanup', 'compression') else lambda *a: None
+        if hold_edge == 'compression':
+            agent.context_compressor._micro_compact_enabled = True
+            agent.context_compressor._micro_compact = lambda messages: pc.check_request('anthropic')
+        trajectories = []
+        agent._save_trajectory = lambda messages, query, completed: trajectories.append(completed)
+    
+        @pc.controlled_turn
+        def finish(agent, user_message):
+            if hold_edge == 'before_finalize':
+                hold_before_persist()
+            messages = [dict(role='user', content=user_message)]
+            agent._persist_session(messages, [])  # real native turn-start durability
+            agent._session_messages = messages
+            return finalize_turn(agent, final_response='late answer', api_call_count=1,
+                interrupted=False, failed=False,
+                messages=messages, conversation_history=[],
+                effective_task_id='fixture', turn_id='fixture', user_message=user_message,
+                original_user_message=user_message, _should_review_memory=False,
+                _turn_exit_reason='text_response(fixture)')
+        hooks = []
+        if hold_edge == 'output_hook':
+            def hook(name, **kwargs):
+                hooks.append(name)
+                if name == 'transform_llm_output':
+                    hold_before_persist()
+                return []
+            monkeypatch.setattr('hermes_cli.lifecycle.invoke_hook', hook)
+        if hold_edge == 'write_failure':
+            # Genuine SQLite transaction abort, not a persistence recorder/fake return.
+            db._conn.execute("""CREATE TRIGGER fail_fixture_answer BEFORE INSERT ON messages
+                WHEN NEW.role='assistant' BEGIN
+                SELECT RAISE(ABORT, 'synthetic fixture refuses assistant insert'); END""")
+        try:
+            result = finish(agent, 'pending input')
+            assert result['interrupted'] and not result['completed']
+            rows = db.get_messages(agent.session_id)
+            assert any(row['role']=='user' for row in rows), rows
+            if hold_edge == 'output_hook':
+                assert 'post_llm_call' not in hooks and 'on_session_end' not in hooks, hooks
+                assert result['final_response'] != 'late answer'
+                assert any(row['content']=='late answer' for row in rows)  # legitimate pre-hold commit
+                return
+            assert not any(row['role']=='assistant' and row['content']=='late answer' for row in rows), rows
+>           assert 'late answer' not in repr(result), result
+E           AssertionError: {'agent_persisted': False, 'api_calls': 0, 'completed': False, 'failed': True, ...}
+E           assert 'late answer' not in "{'final_res...ted': False}"
+E             
+E             'late answer' is contained here:
+E               ontent': 'late answer', 'timestamp': 1789565601.2686021}], 'api_calls': 0, 'agent_persisted': False}
+E             ?           +++++++++++
+
+tests/agent/test_provider_late_persist.py:80: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_provider_late_persist.py::test_hold_before_native_finalizer_persist_rejects_late_answer[compression]
+========================= 1 failed, 4 passed in 3.43s ==========================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_provider_late_persist.py  (1 test failed)
