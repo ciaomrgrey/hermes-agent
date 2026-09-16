@@ -148,6 +148,148 @@ def test_hold_tears_down_nonstream_socket_and_preserves_sibling(hang_server, tmp
         client.close()
 
 
+@pytest.mark.parametrize('mode', ['sync-idle', 'sync-direct', 'async-idle', 'async-read'])
+def test_returned_stream_lifetime_hold(hang_server, tmp_path, monkeypatch, mode):
+    import asyncio
+    import sqlite3
+    from agent import auxiliary_control as control
+    url, entered, peer_closed, paths = hang_server
+    db = tmp_path/'control.sqlite3'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+    policy = provider_control.Policy(db, ('openai-codex',))
+    monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+    def hold():
+        with sqlite3.connect(db) as conn:
+            conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
+    request = dict(model='fixture', messages=[], stream=True)
+    if mode.startswith('sync-'):
+        client = OpenAI(api_key='synthetic', base_url=url, max_retries=0,
+                        http_client=build_keepalive_http_client(url), timeout=5)
+        try:
+            call = aux._relay_sync_stream if mode == 'sync-direct' else aux._relay_sync_completion
+            stream = call(client, request, provider='openai-codex')
+            assert entered.wait(2)
+            hold()
+            assert peer_closed.wait(2), 'idle stream socket remains open'
+            with pytest.raises(aux.AuxiliaryExplicitCancellation):
+                next(iter(stream))
+            stream.close()
+            stream.close()
+            assert not control._ATTEMPTS
+            assert not client.is_closed()
+        finally:
+            client.close()
+    else:
+        from openai import AsyncOpenAI
+        async def run():
+            client = AsyncOpenAI(api_key='synthetic', base_url=url, max_retries=0,
+                                 http_client=build_keepalive_http_client(url, async_mode=True), timeout=5)
+            try:
+                stream = await aux._relay_async_completion(client, request, provider='openai-codex')
+                reader = asyncio.create_task(anext(stream)) if mode == 'async-read' else None
+                await asyncio.sleep(.04)
+                hold()
+                assert await asyncio.to_thread(peer_closed.wait, 2), 'async stream socket remains open'
+                with pytest.raises(aux.AuxiliaryExplicitCancellation):
+                    if reader is not None:
+                        await reader
+                    else:
+                        await anext(stream)
+                await stream.close()
+                await stream.close()
+                assert not control._ATTEMPTS
+                assert not client.is_closed()
+            finally:
+                await client.close()
+        asyncio.run(run())
+    assert paths == ['/chat/completions']
+
+
+def test_explicit_close_interrupts_blocked_raw_reader(hang_server, tmp_path, monkeypatch):
+    import sqlite3
+    url, entered, peer_closed, paths = hang_server
+    db = tmp_path/'control.sqlite3'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+    policy = provider_control.Policy(db, ('openai-codex',))
+    monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+    client = OpenAI(api_key='synthetic', base_url=url, max_retries=0, timeout=5)
+    stream = aux._relay_sync_completion(client, dict(model='fixture', messages=[], stream=True), provider='openai-codex')
+    reading = threading.Event()
+    outcomes = []
+    def read():
+        reading.set()
+        try:
+            next(stream)
+        except BaseException as exc:
+            outcomes.append(type(exc).__name__)
+    reader = threading.Thread(target=read, daemon=True)
+    closer = threading.Thread(target=stream.close, daemon=True)
+    reader.start()
+    assert reading.wait(2)
+    closer.start()
+    try:
+        assert peer_closed.wait(2), 'explicit close blocked behind hung reader'
+        closer.join(2)
+        reader.join(2)
+        assert not closer.is_alive() and not reader.is_alive()
+        assert len(outcomes) == 1
+        assert not stream.observer.is_alive()
+    finally:
+        closer.join(6)
+        reader.join(6)
+        client.close()
+
+
+@pytest.mark.parametrize('async_mode', [False, True])
+def test_active_fallback_retains_original_hold(hang_server, tmp_path, monkeypatch, async_mode):
+    import asyncio
+    import sqlite3
+    from types import SimpleNamespace
+    url, entered, peer_closed, paths = hang_server
+    db = tmp_path/'control.sqlite3'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+    policy = provider_control.Policy(db, ('openai-codex',))
+    monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+    outcomes = []
+    def owner():
+        with policy.track(SimpleNamespace(provider='openai-codex')):
+            try:
+                if async_mode:
+                    from openai import AsyncOpenAI
+                    async def run():
+                        client = AsyncOpenAI(api_key='synthetic', base_url=url, max_retries=0, timeout=5)
+                        try:
+                            return await aux._relay_async_completion(client, dict(model='fixture',messages=[]),provider='xai')
+                        finally:
+                            await client.close()
+                    asyncio.run(run())
+                else:
+                    client = OpenAI(api_key='synthetic', base_url=url, max_retries=0, timeout=5)
+                    try:
+                        aux._relay_sync_completion(client, dict(model='fixture',messages=[]),provider='xai')
+                    finally:
+                        client.close()
+                outcomes.append('late-result')
+            except BaseException as exc:
+                outcomes.append(type(exc).__name__)
+    worker = threading.Thread(target=owner, daemon=True)
+    worker.start()
+    try:
+        assert entered.wait(15)
+        with sqlite3.connect(db) as conn:
+            conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
+        assert peer_closed.wait(2), 'fallback continued under original provider hold'
+        worker.join(2)
+        assert not worker.is_alive()
+        assert outcomes == ['AuxiliaryExplicitCancellation']
+        assert len(paths) == 1
+    finally:
+        worker.join(6)
+
+
 def _cross_process_request(url, database, result_pipe):
     """Spawned process owns its client; parent only writes durable control."""
     from pathlib import Path

@@ -72,7 +72,7 @@ class ConnectAbort:
 
 def bind(client, provider):
     policy = pc.current_policy()
-    if policy.database is None or provider not in policy.providers:
+    if not pc.controls_request(policy, provider):
         return
     scope = pc._SCOPE.get()
     def check():

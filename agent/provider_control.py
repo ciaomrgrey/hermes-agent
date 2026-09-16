@@ -89,6 +89,14 @@ def controlled_turn(fn):
     return run
 
 
+def controls_request(policy, provider):
+    if policy.database is None:
+        return False
+    scope = _SCOPE.get()
+    return provider in policy.providers or (
+        scope is not None and scope.original_provider in scope.policy.providers)
+
+
 def check_request(provider):
     scope = _SCOPE.get()
     if scope is not None:

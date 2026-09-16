@@ -474,6 +474,8 @@ def _run_protected_sync_provider_call(callback: Callable[[dict[str, Any]], Any],
                 if attempt is not None and cancel_check():
                     raise AuxiliaryExplicitCancellation()
                 outcome["result"] = callback(kwargs)
+                if attempt is not None:
+                    outcome["result"] = attempt.retain_stream(outcome["result"], cancel_check)
         except BaseException as exc:
             outcome["exception"] = exc
         finally:
@@ -2495,11 +2497,11 @@ def _relay_sync_completion(
     create_owned=None,
 ) -> Any:
     from agent.auxiliary_wire import prepare_chat_messages
-    from agent.provider_control import current_policy, check_request, HeldProvider
+    from agent.provider_control import current_policy, check_request, controls_request, HeldProvider
     check_request(provider)
     policy = current_policy()
     attempt = None
-    if policy.database is not None and provider in policy.providers:
+    if controls_request(policy, provider):
         policy.check(provider)
         if create is not None:
             raise HeldProvider('Controlled aux callback must bind an attempt-owned client')
@@ -2536,10 +2538,10 @@ async def _relay_async_completion(
     kwargs = prepare_chat_messages(client, kwargs)
     # Async twin of the seam default above (#98466).
     callback = create or (lambda request: _acreate_with_progress(client, request))
-    from agent.provider_control import current_policy, check_request, HeldProvider
+    from agent.provider_control import current_policy, check_request, controls_request, HeldProvider
     check_request(provider)
     policy = current_policy()
-    if policy.database is not None and provider in policy.providers:
+    if controls_request(policy, provider):
         if create is not None:
             raise HeldProvider('Controlled async callback must bind an owned client')
         from agent.auxiliary_control import run_async
@@ -2559,15 +2561,16 @@ def _relay_sync_stream(
     client: Any, kwargs: dict[str, Any], *, provider: str | None = None, api_mode: str | None = None
 ) -> Any:
     from agent.auxiliary_wire import prepare_chat_messages
+    from agent.auxiliary_control import raw_sync
 
     kwargs = prepare_chat_messages(client, kwargs)
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
     if route is None:
-        return client.chat.completions.create(**kwargs)
+        return raw_sync(client, kwargs, provider)
     provider_name, fallback_model, metadata = route
     from agent import relay_llm
     return relay_llm.stream_current(
-        kwargs, lambda request: client.chat.completions.create(**request), name=provider_name,
+        kwargs, lambda request: raw_sync(client, request, provider), name=provider_name,
         model_name=str(kwargs.get("model") or fallback_model), finalizer=dict, metadata=metadata,
         completed_response_predicate=lambda value: hasattr(value, "choices"),
     )
@@ -7391,7 +7394,8 @@ def _call_llm_impl(
         if task == "moa_aggregator" and isinstance(client, CodexAuxiliaryClient):
             # Responses-shim clients consume the stream internally and return a completed
             # object Relay's managed stream would iterate; the MoA facade wraps it as one chunk.
-            return client.chat.completions.create(**kwargs)
+            from agent.auxiliary_control import raw_sync
+            return raw_sync(client, kwargs, request_provider)
         return _relay_sync_stream(client, kwargs, provider=request_provider, api_mode=req.resolved_api_mode)
 
     def _primary(**validate_kw: Any) -> Any:

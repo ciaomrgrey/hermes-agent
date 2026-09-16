@@ -59,6 +59,7 @@ class Attempt:
         self.tcp_force_closed = 0
         self.worker_ended = False
         self.worker_started = False
+        self.stream_lifetime = None
 
     def _abort_request_openai_client(self, client, *, reason):
         self.tcp_force_closed += force_close_tcp_sockets(client)
@@ -90,7 +91,8 @@ class Attempt:
             yield self
         finally:
             with _LOCK:
-                _ATTEMPTS.pop(id(self), None)
+                if self.stream_lifetime is None:
+                    _ATTEMPTS.pop(id(self), None)
             if not self.worker_started:
                 self.wire.close()
 
@@ -101,8 +103,19 @@ class Attempt:
         try:
             yield
         finally:
-            self.registry.close_once('auxiliary worker complete')
+            if self.stream_lifetime is None:
+                self.registry.close_once('auxiliary worker complete')
             self.worker_ended = True
+            if self.stream_lifetime is not None:
+                self.stream_lifetime.start()
+
+    def retain_stream(self, result, cancel_check):
+        from openai import Stream
+        if isinstance(result, Stream):
+            from agent.auxiliary_stream_control import SyncStream
+            self.stream_lifetime = SyncStream(result, self, cancel_check)
+            return self.stream_lifetime
+        return result
 
     def abort_and_join(self, worker):
         # A hold may land between registration and socket assignment. Repeat
@@ -113,6 +126,18 @@ class Attempt:
             worker.join(.02)
         return dict(tcp_force_closed=self.tcp_force_closed, worker_ended=not worker.is_alive(),
                     remote_cancel_ack=None, billing_cessation=None)
+
+
+def raw_sync(client, kwargs, provider):
+    from agent.auxiliary_client import _run_protected_sync_provider_call
+    provider_control.check_request(provider)
+    policy = provider_control.current_policy()
+    if not provider_control.controls_request(policy, provider):
+        return client.chat.completions.create(**kwargs)
+    attempt = Attempt(client, provider, policy)
+    with attempt.registered():
+        return _run_protected_sync_provider_call(
+            lambda request: attempt.client.chat.completions.create(**request), kwargs, attempt=attempt)
 
 
 async def run_async(client, kwargs, provider):
@@ -162,6 +187,16 @@ async def run_async(client, kwargs, provider):
     task = None
     registration = object()
     cancel_check = aux._capture_aux_cancel_check()
+    retained = False
+    scope = provider_control._SCOPE.get()
+    def cancelled():
+        try:
+            if scope is not None:
+                scope.check()
+            policy.check(provider)
+        except provider_control.HeldProvider:
+            return True
+        return callable(cancel_check) and cancel_check()
     try:
         with _LOCK:
             provider_control.check_request(provider)
@@ -176,12 +211,19 @@ async def run_async(client, kwargs, provider):
             if callable(cancel_check) and cancel_check():
                 raise aux.AuxiliaryExplicitCancellation()
             if task.done():
-                return task.result()
+                result = task.result()
+                from openai import AsyncStream
+                if isinstance(result, AsyncStream):
+                    from agent.auxiliary_stream_control import AsyncStream as OwnedStream
+                    result = OwnedStream(result, fresh, cancelled, registration)
+                    retained = True
+                return result
             await asyncio.wait({task}, timeout=.02)
     finally:
         if task is not None and not task.done():
             task.cancel()
-        await fresh.close()
+        if not retained:
+            await fresh.close()
         if task is not None:
             await asyncio.wait({task}, timeout=2)
             if task.done():
@@ -191,4 +233,5 @@ async def run_async(client, kwargs, provider):
                 except BaseException:
                     pass
         with _LOCK:
-            _ATTEMPTS.pop(id(registration), None)
+            if not retained:
+                _ATTEMPTS.pop(id(registration), None)
