@@ -1,0 +1,16 @@
+Final checkpoint source: 04e54927a9a8215ab377aedeb0d427ea7d091d6c
+Branch: cody/usage-guard-t_8dbb6c79
+Base prerequisite: 6cc8c0c5f9d7a2f08971de585e584e0c901d2c28
+
+Focused command (full arguments in CONTINUATION-HANDOFF.md):
+scripts/run_tests.sh [10 named files] -j 1
+Result: exit1;47 passed,1 failed. Failure is current raw-openai-sse socket-lifetime defect, not skipped or waived. Receipt continuation-final-focused.txt.
+
+Expanded existing regressions:
+scripts/run_tests.sh tests/agent/test_auxiliary_client.py tests/agent/test_auxiliary_explicit_cancellation.py tests/agent/test_shared_http_transport.py -j 1
+Initial combined invocation hit outer180-second timeout after focused run consumed151.8seconds. Expanded output incomplete, no success claim; process check found no surviving pytest/test runner.
+Rerun separately with240-second tool limit: exit0,224 passed/0 final failures; ONE FLAKY file (test_auxiliary_client.py). First-attempt failure was known Codex test_enforces_total_timeout_while_stream_keeps_emitting_events, independently baseline-red in earlier receipt. This is pass-on-retry, not pristine green. Receipt continuation-final-existing-retry.txt retains both attempts.
+
+No live send, deployment, production hold or quota-burning test occurred. No final QA released. Code tracked state clean at checkpoint; receipts and local state intentionally untracked and preserved in the durable task worktree. Subsequent bulk archive/bundle command was refused by the security scan before execution and not rerouted; no new package or checksum claimed. Native template acceptance is not a working deployment installation. Original14:20 boundary unchanged. Further stream-lifetime implementation/requalification and owner operational reassessment required.
+
+A read-only Python -c signature introspection command was denied by single-query approval protection; it was not rerun through another execution route. No approval settings changed. Subsequent source documentation reads were non-executing file inspection.
