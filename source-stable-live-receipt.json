@@ -1,0 +1,75 @@
+{
+  "at": "2026-09-16T12:38:16.421977+00:00",
+  "sources": {
+    "anthropic": {
+      "status": "ok",
+      "pp": 34.0,
+      "reset": 1789772400,
+      "raw_reset": 1789772400.244457,
+      "duration": 604800,
+      "field": "seven_day",
+      "grant": "3fea706a80c841e482734265b8ffb26f50a3ccb46016255af1870609a9de3d98",
+      "account": "3fea706a80c841e482734265b8ffb26f50a3ccb46016255af1870609a9de3d98",
+      "identity_kind": "account-organization-fingerprint",
+      "fetched_at": 1789562297.3925278,
+      "source": "oauth_usage_api"
+    },
+    "openai-codex": {
+      "status": "ok",
+      "pp": 40.0,
+      "reset": 1789805425,
+      "raw_reset": 1789805425.0,
+      "duration": 604800,
+      "field": "rate_limit.primary_window",
+      "grant": "33382a2be7d2f2b83829f904124374b2371e82f0ba2236d905dc141a8c970bac",
+      "account": "33382a2be7d2f2b83829f904124374b2371e82f0ba2236d905dc141a8c970bac",
+      "identity_kind": "account-fingerprint",
+      "fetched_at": 1789562297.9266639,
+      "source": "usage_api"
+    },
+    "xai-oauth": {
+      "status": "unsupported",
+      "reason": "no equivalent weekly source"
+    }
+  },
+  "app_server": {
+    "rateLimits": {
+      "primary": {
+        "usedPercent": 40,
+        "windowDurationMins": 10080,
+        "resetsAt": 1789805425
+      },
+      "credits": {}
+    },
+    "rateLimitsByLimitId": {
+      "codex_bengalfox": {
+        "primary": {
+          "usedPercent": 0,
+          "windowDurationMins": 300,
+          "resetsAt": 1789580299
+        },
+        "secondary": {
+          "usedPercent": 0,
+          "windowDurationMins": 10080,
+          "resetsAt": 1790167099
+        }
+      },
+      "codex": {
+        "primary": {
+          "usedPercent": 40,
+          "windowDurationMins": 10080,
+          "resetsAt": 1789805425
+        },
+        "credits": {}
+      }
+    },
+    "rateLimitResetCredits": {
+      "credits": [
+        {},
+        {},
+        {}
+      ]
+    }
+  },
+  "app_server_closed": true
+}

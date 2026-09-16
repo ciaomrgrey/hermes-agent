@@ -1,0 +1,23 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 4 test files (~17 tests) under ['tests/agent/test_usage_guard_sources.py', 'tests/agent/test_usage_guard_identity.py', 'tests/agent/test_usage_guard_cli.py', 'tests/agent/test_usage_guard.py']; running with -j 1
+[ 47.1% |     8/~17 | ✓8 | ✗0] ✓ tests/agent/test_usage_guard.py (8✓, 0.7s)
+[ 70.6% |    12/~17 | ✓12 | ✗ 0] ✓ tests/agent/test_usage_guard_cli.py (4✓, 0.4s)
+[ 88.2% |    15/~17 | ✓15 | ✗ 0] ✓ tests/agent/test_usage_guard_identity.py (3✓, 0.3s)
+[100.0% |    17/~17 | ✓17 | ✗ 0] ✓ tests/agent/test_usage_guard_sources.py (2✓, 0.3s)
+
+=== Summary: 4 files, 17 tests passed, 0 failed (100% complete) in 1.7s (1 workers) ===
+  Durations cached to test_durations.json (4 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   4
+  Total subprocess CPU-wall: 1.7s  (runner wall: 1.7s, parallelism: 1x)
+  P50: 0.42s  P90: 0.65s  P95: 0.65s  P99: 0.65s  Max: 0.65s
+  <1s: 4 files (100%)  <2s: 4 files (100%)
+  Top 10 slowest:
+      0.65s  tests/agent/test_usage_guard.py
+      0.42s  tests/agent/test_usage_guard_cli.py
+      0.31s  tests/agent/test_usage_guard_identity.py
+      0.30s  tests/agent/test_usage_guard_sources.py

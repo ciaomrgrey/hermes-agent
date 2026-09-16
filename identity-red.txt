@@ -1,0 +1,155 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~3 tests) under ['tests/agent/test_usage_guard_identity.py']; running with -j 1
+[100.0% |     3/~3 | ✓0 | ✗3] ✗ tests/agent/test_usage_guard_identity.py (3✗, 0.7s)
+
+  ╔╍ Failed: tests/agent/test_usage_guard_identity.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║ 
+  ║     def test_snapshot_reads_never_call_mutating_resolvers(tmp_path, monkeypatch):
+  ║         from agent import anthropic_credentials as anth, credential_pool
+  ║         from hermes_cli import auth
+  ║         from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+  ║         from agent.secret_scope import set_secret_scope, reset_secret_scope
+  ║         import agent.secret_scope as scope
+  ║         # Native low-level snapshot, with all refresh/heal/select routes made fatal.
+  ║         def forbidden(*args,**kwargs):
+  ║             raise AssertionError('mutating credential resolver invoked')
+  ║         monkeypatch.setattr(anth,'resolve_anthropic_token',forbidden)
+  ║         monkeypatch.setattr(credential_pool,'load_pool',forbidden)
+  ║         monkeypatch.setattr(native,'_resolve_codex_usage_credentials',forbidden)
+  ║         monkeypatch.setattr(auth,'read_credential_pool',lambda p:[{'access_token':'saved-token'}] if p=='openai-codex' else [])
+  ║         monkeypatch.setattr(anth,'read_claude_code_credentials',lambda:{'accessToken':'borrowed-token','expiresAt':1})
+  ║         monkeypatch.setattr(anth,'read_hermes_oauth_credentials',lambda:None)
+  ║         monkeypatch.setattr(scope,'_MULTIPLEX_ACTIVE',True)
+  ║         token = set_hermes_home_override(tmp_path)
+  ║         secret_token = set_secret_scope({})
+  ║         try:
+  ║ >           assert source.credential_snapshots('anthropic') == [('borrowed-token','',None)]
+  ║                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ║ E           AttributeError: module 'agent.usage_guard_sources' has no attribute 'credential_snapshots'
+  ║ 
+  ║ tests/agent/test_usage_guard_identity.py:74: AttributeError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_usage_guard_identity.py::test_anthropic_rotation_uses_native_stable_grant_not_token
+  ║ FAILED tests/agent/test_usage_guard_identity.py::test_multiple_tokens_same_grant_dedupe_but_distinct_grants_refuse
+  ║ FAILED tests/agent/test_usage_guard_identity.py::test_snapshot_reads_never_call_mutating_resolvers
+  ║ ============================== 3 failed in 0.18s ===============================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_usage_guard_identity.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 3 failed (100% complete) in 0.7s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 0.7s  (runner wall: 0.7s, parallelism: 1x)
+  P50: 0.67s  P90: 0.67s  P95: 0.67s  P99: 0.67s  Max: 0.67s
+  <1s: 1 files (100%)  <2s: 1 files (100%)
+  Top 10 slowest:
+      0.67s  tests/agent/test_usage_guard_identity.py
+
+=== Failure output ===
+
+--- tests/agent/test_usage_guard_identity.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 3 items
+
+tests/agent/test_usage_guard_identity.py FFF                             [100%]
+
+=================================== FAILURES ===================================
+__________ test_anthropic_rotation_uses_native_stable_grant_not_token __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1081c1a90>
+
+    def test_anthropic_rotation_uses_native_stable_grant_not_token(monkeypatch):
+        from agent import anthropic_credentials as anth
+        token = ['synthetic-oauth-1']
+        monkeypatch.setattr(anth, 'resolve_anthropic_token', lambda: token[0])
+        monkeypatch.setattr(anth, '_is_oauth_token', lambda value: True)
+        monkeypatch.setattr(native, '_get_json', _usage)
+        monkeypatch.setattr(source.time, 'time', lambda:1789550000)
+        # New snapshot seam patched once present; old implementation still runs RED.
+        monkeypatch.setattr(source, 'credential_snapshots', lambda provider: [(token[0],'',None)], raising=False)
+        first = source.fetch('anthropic')
+        token[0] = 'synthetic-oauth-2'
+        second = source.fetch('anthropic')
+>       assert first['grant'] == second['grant']
+E       AssertionError: assert '9378385cf23d...1a97d751dbddc' == '2e9daa786f5e...81fbe9efd41b4'
+E         
+E         - 2e9daa786f5ea790e7e0a52cb9bd84912952645c1705baea27081fbe9efd41b4
+E         + 9378385cf23d3846faf257093dcfb7aba62bcbcfcf7a605703c1a97d751dbddc
+
+tests/agent/test_usage_guard_identity.py:28: AssertionError
+______ test_multiple_tokens_same_grant_dedupe_but_distinct_grants_refuse _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1081c1c50>
+
+    def test_multiple_tokens_same_grant_dedupe_but_distinct_grants_refuse(monkeypatch):
+        monkeypatch.setattr(source, 'credential_snapshots', lambda provider:[('token-A','',None),('token-B','',None)], raising=False)
+        monkeypatch.setattr(source.time, 'time', lambda:1789550000)
+        from agent import anthropic_credentials as anth
+        monkeypatch.setattr(anth,'_is_oauth_token',lambda value:True)
+        identity = ['account-fixture']
+        def get(url,headers,**kwargs):
+            data = _usage(url,headers,**kwargs)
+            if url.endswith('/profile') and headers['Authorization'].endswith('token-B'):
+                data['account']['uuid'] = identity[0]
+            return data
+        monkeypatch.setattr(native,'_get_json',get)
+        first = source.fetch('anthropic')
+        assert first['status'] == 'ok' and first['pp'] == .5
+        identity[0] = 'different-account'
+        result = source.fetch('anthropic')
+>       assert result['status'] == 'unavailable'
+E       AssertionError: assert 'ok' == 'unavailable'
+E         
+E         - unavailable
+E         + ok
+
+tests/agent/test_usage_guard_identity.py:51: AssertionError
+______________ test_snapshot_reads_never_call_mutating_resolvers _______________
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-38na8k_i/pytest-of-claudia/pytest-0/test_snapshot_reads_never_call0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107fb4550>
+
+    def test_snapshot_reads_never_call_mutating_resolvers(tmp_path, monkeypatch):
+        from agent import anthropic_credentials as anth, credential_pool
+        from hermes_cli import auth
+        from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+        from agent.secret_scope import set_secret_scope, reset_secret_scope
+        import agent.secret_scope as scope
+        # Native low-level snapshot, with all refresh/heal/select routes made fatal.
+        def forbidden(*args,**kwargs):
+            raise AssertionError('mutating credential resolver invoked')
+        monkeypatch.setattr(anth,'resolve_anthropic_token',forbidden)
+        monkeypatch.setattr(credential_pool,'load_pool',forbidden)
+        monkeypatch.setattr(native,'_resolve_codex_usage_credentials',forbidden)
+        monkeypatch.setattr(auth,'read_credential_pool',lambda p:[{'access_token':'saved-token'}] if p=='openai-codex' else [])
+        monkeypatch.setattr(anth,'read_claude_code_credentials',lambda:{'accessToken':'borrowed-token','expiresAt':1})
+        monkeypatch.setattr(anth,'read_hermes_oauth_credentials',lambda:None)
+        monkeypatch.setattr(scope,'_MULTIPLEX_ACTIVE',True)
+        token = set_hermes_home_override(tmp_path)
+        secret_token = set_secret_scope({})
+        try:
+>           assert source.credential_snapshots('anthropic') == [('borrowed-token','',None)]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: module 'agent.usage_guard_sources' has no attribute 'credential_snapshots'
+
+tests/agent/test_usage_guard_identity.py:74: AttributeError
+=========================== short test summary info ============================
+FAILED tests/agent/test_usage_guard_identity.py::test_anthropic_rotation_uses_native_stable_grant_not_token
+FAILED tests/agent/test_usage_guard_identity.py::test_multiple_tokens_same_grant_dedupe_but_distinct_grants_refuse
+FAILED tests/agent/test_usage_guard_identity.py::test_snapshot_reads_never_call_mutating_resolvers
+============================== 3 failed in 0.18s ===============================
+
+=== 1 file with test failures (3 tests failed) ===
+  tests/agent/test_usage_guard_identity.py  (3 tests failed)

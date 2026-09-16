@@ -1,0 +1,207 @@
+{
+  "at": "2026-09-16T12:35:30.098769+00:00",
+  "profiles": [
+    {
+      "profile": "default",
+      "provider": "openai-codex",
+      "candidates": [
+        {
+          "source": "pool:device_code",
+          "status": "ok",
+          "pp": 39.0,
+          "reset": 1789805425,
+          "raw_reset": 1789805425.0,
+          "duration": 604800,
+          "field": "rate_limit.primary_window",
+          "grant": "33382a2be7d2f2b83829f904124374b2371e82f0ba2236d905dc141a8c970bac",
+          "identity_fields": [
+            "https://api.openai.com/auth.chatgpt_account_id"
+          ]
+        }
+      ]
+    },
+    {
+      "profile": "chas",
+      "provider": "openai-codex",
+      "candidates": [
+        {
+          "source": "pool:device_code",
+          "status": "ok",
+          "pp": 39.0,
+          "reset": 1789805425,
+          "raw_reset": 1789805425.0,
+          "duration": 604800,
+          "field": "rate_limit.primary_window",
+          "grant": "33382a2be7d2f2b83829f904124374b2371e82f0ba2236d905dc141a8c970bac",
+          "identity_fields": [
+            "https://api.openai.com/auth.chatgpt_account_id"
+          ]
+        }
+      ]
+    },
+    {
+      "profile": "cody",
+      "provider": "openai-codex",
+      "candidates": [
+        {
+          "source": "pool:device_code",
+          "status": "ok",
+          "pp": 39.0,
+          "reset": 1789805425,
+          "raw_reset": 1789805425.0,
+          "duration": 604800,
+          "field": "rate_limit.primary_window",
+          "grant": "33382a2be7d2f2b83829f904124374b2371e82f0ba2236d905dc141a8c970bac",
+          "identity_fields": [
+            "https://api.openai.com/auth.chatgpt_account_id"
+          ]
+        }
+      ]
+    },
+    {
+      "profile": "emma",
+      "provider": "anthropic",
+      "candidates": [
+        {
+          "source": "claude_code",
+          "status": "ok",
+          "pp": 34.0,
+          "reset": 1789772400,
+          "raw_reset": 1789772400.52737,
+          "duration": 604800,
+          "field": "seven_day",
+          "grant": "3fea706a80c841e482734265b8ffb26f50a3ccb46016255af1870609a9de3d98",
+          "identity_fields": [
+            "account.uuid",
+            "organization.uuid"
+          ]
+        }
+      ]
+    },
+    {
+      "profile": "generalist",
+      "provider": "openai-codex",
+      "candidates": [
+        {
+          "source": "pool:device_code",
+          "status": "ok",
+          "pp": 39.0,
+          "reset": 1789805425,
+          "raw_reset": 1789805425.0,
+          "duration": 604800,
+          "field": "rate_limit.primary_window",
+          "grant": "33382a2be7d2f2b83829f904124374b2371e82f0ba2236d905dc141a8c970bac",
+          "identity_fields": [
+            "https://api.openai.com/auth.chatgpt_account_id"
+          ]
+        }
+      ]
+    },
+    {
+      "profile": "gurney",
+      "provider": "xai-oauth",
+      "candidates": [],
+      "weekly_supported": false
+    },
+    {
+      "profile": "jared",
+      "provider": "anthropic",
+      "candidates": [
+        {
+          "source": "claude_code",
+          "status": "ok",
+          "pp": 34.0,
+          "reset": 1789772400,
+          "raw_reset": 1789772400.52737,
+          "duration": 604800,
+          "field": "seven_day",
+          "grant": "3fea706a80c841e482734265b8ffb26f50a3ccb46016255af1870609a9de3d98",
+          "identity_fields": [
+            "account.uuid",
+            "organization.uuid"
+          ]
+        }
+      ]
+    },
+    {
+      "profile": "plutus",
+      "provider": "openai-codex",
+      "candidates": [
+        {
+          "source": "pool:device_code",
+          "status": "ok",
+          "pp": 39.0,
+          "reset": 1789805425,
+          "raw_reset": 1789805425.0,
+          "duration": 604800,
+          "field": "rate_limit.primary_window",
+          "grant": "33382a2be7d2f2b83829f904124374b2371e82f0ba2236d905dc141a8c970bac",
+          "identity_fields": [
+            "https://api.openai.com/auth.chatgpt_account_id"
+          ]
+        }
+      ]
+    },
+    {
+      "profile": "ripley",
+      "provider": "openai-codex",
+      "candidates": [
+        {
+          "source": "pool:device_code",
+          "status": "ok",
+          "pp": 39.0,
+          "reset": 1789805425,
+          "raw_reset": 1789805425.0,
+          "duration": 604800,
+          "field": "rate_limit.primary_window",
+          "grant": "33382a2be7d2f2b83829f904124374b2371e82f0ba2236d905dc141a8c970bac",
+          "identity_fields": [
+            "https://api.openai.com/auth.chatgpt_account_id"
+          ]
+        }
+      ]
+    },
+    {
+      "profile": "sophia",
+      "provider": "anthropic",
+      "candidates": [
+        {
+          "source": "claude_code",
+          "status": "ok",
+          "pp": 34.0,
+          "reset": 1789772400,
+          "raw_reset": 1789772400.52737,
+          "duration": 604800,
+          "field": "seven_day",
+          "grant": "3fea706a80c841e482734265b8ffb26f50a3ccb46016255af1870609a9de3d98",
+          "identity_fields": [
+            "account.uuid",
+            "organization.uuid"
+          ]
+        }
+      ]
+    }
+  ],
+  "grants": {
+    "33382a2be7d2f2b83829f904124374b2371e82f0ba2236d905dc141a8c970bac": {
+      "provider": "openai-codex",
+      "profiles": [
+        "default",
+        "chas",
+        "cody",
+        "generalist",
+        "plutus",
+        "ripley"
+      ]
+    },
+    "3fea706a80c841e482734265b8ffb26f50a3ccb46016255af1870609a9de3d98": {
+      "provider": "anthropic",
+      "profiles": [
+        "emma",
+        "jared",
+        "sophia"
+      ]
+    }
+  },
+  "auth_mutations": false
+}
