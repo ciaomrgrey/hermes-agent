@@ -18,3 +18,23 @@ def test_native_template_paused_creation_resume_and_rollback(tmp_path):
         assert resumed['enabled'] and resumed['next_run_at']
         assert remove_job(job['id'])
         assert get_job(job['id']) is None
+
+
+def test_tick_wrapper_runs_real_cli_under_profile_home(tmp_path, monkeypatch, capsys):
+    import runpy
+    import sqlite3
+    import shutil
+    import usage_guard as cli
+    from hermes_constants import get_hermes_home
+    root = Path(__file__).resolve().parents[2]
+    home = get_hermes_home()
+    data = home/'usage-guard'
+    data.mkdir(parents=True)
+    shutil.copyfile(root/'config.json', data/'config.json')
+    monkeypatch.setattr(cli, 'fetch', lambda provider: dict(status='unsupported', reason='synthetic offline fixture'))
+    runpy.run_path(str(root/'deploy/usage-guard-tick.py'), run_name='__main__')
+    result = json.loads(capsys.readouterr().out)
+    assert set(result) == {'anthropic','openai-codex','xai-oauth'}
+    with sqlite3.connect(data/'state.sqlite3') as conn:
+        assert conn.execute('SELECT COUNT(*) FROM samples').fetchone()[0] == 3
+        assert conn.execute('SELECT COUNT(*) FROM holds').fetchone()[0] == 0

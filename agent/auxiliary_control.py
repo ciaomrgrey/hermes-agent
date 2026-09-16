@@ -59,6 +59,7 @@ class Attempt:
         self.tcp_force_closed = 0
         self.worker_ended = False
         self.worker_started = False
+        self.owner_ended = False
         self.stream_lifetime = None
 
     def _abort_request_openai_client(self, client, *, reason):
@@ -91,7 +92,8 @@ class Attempt:
             yield self
         finally:
             with _LOCK:
-                if self.stream_lifetime is None:
+                self.owner_ended = True
+                if self.stream_lifetime is None and (not self.worker_started or self.worker_ended):
                     _ATTEMPTS.pop(id(self), None)
             if not self.worker_started:
                 self.wire.close()
@@ -105,7 +107,10 @@ class Attempt:
         finally:
             if self.stream_lifetime is None:
                 self.registry.close_once('auxiliary worker complete')
-            self.worker_ended = True
+            with _LOCK:
+                self.worker_ended = True
+                if self.owner_ended and self.stream_lifetime is None:
+                    _ATTEMPTS.pop(id(self), None)
             if self.stream_lifetime is not None:
                 self.stream_lifetime.start()
 

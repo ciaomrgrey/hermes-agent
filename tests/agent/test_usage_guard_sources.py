@@ -23,3 +23,27 @@ def test_native_read_adapter_is_secret_free(monkeypatch):
     assert 'secret' not in repr([a, c])
     assert a['grant'] != c['grant']
     assert source.fetch('xai-oauth')['status'] == 'unsupported'
+
+
+def test_codex_native_claim_binds_rotations_and_rejects_conflicts(monkeypatch):
+    import base64
+    import json
+    from agent import usage_guard_sources as source, account_usage as native
+    payload = base64.urlsafe_b64encode(json.dumps({'https://api.openai.com/auth': {'chatgpt_account_id': 'synthetic-A'}}).encode()).decode()
+    credential = ['synthetic.'+payload+'.rotation1', None]
+    monkeypatch.setattr(native, '_resolve_codex_usage_credentials', lambda *args: (credential[0], '', credential[1]))
+    monkeypatch.setattr(source.time, 'time', lambda: 1789550000)
+    requested = []
+    def fetch(url, headers, **kwargs):
+        requested.append(headers.get('ChatGPT-Account-Id'))
+        return {'rate_limit': {'primary_window': {'used_percent': .5, 'limit_window_seconds': 604800, 'reset_at': 1789772400}}}
+    monkeypatch.setattr(native, '_get_json', fetch)
+    first = source.fetch('openai-codex')
+    credential[0] = 'synthetic.'+payload+'.rotation2'
+    second = source.fetch('openai-codex')
+    assert first['account'] == second['account'] == first['grant']
+    assert first['identity_kind'] == 'account-fingerprint'
+    assert requested == ['synthetic-A','synthetic-A']
+    credential[1] = 'synthetic-B'
+    assert source.fetch('openai-codex')['status'] == 'unavailable'
+    assert len(requested) == 2, 'ambiguous account dispatched usage request'

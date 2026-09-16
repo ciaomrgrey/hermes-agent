@@ -484,6 +484,8 @@ def _run_protected_sync_provider_call(callback: Callable[[dict[str, Any]], Any],
     worker = threading.Thread(
         target=provider_context.run, args=(_provider_worker,), name="hermes-protected-aux-provider",
         daemon=True)
+    if attempt is not None:
+        attempt.provider_thread = worker
     worker.start()
     def cancelled():
         if _captured_aux_cancel_requested(cancel_check):

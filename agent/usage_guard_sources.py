@@ -24,6 +24,11 @@ def fetch(provider):
             }, timeout=15)
         else:
             token, base, account = native._resolve_codex_usage_credentials(None, None)
+            from agent.codex_headers import codex_cloudflare_headers
+            claim = codex_cloudflare_headers(token).get('ChatGPT-Account-ID')
+            if account and claim and account != claim:
+                raise ValueError('conflicting account bindings')
+            account = claim or account
             identity = account or token
             identity_kind = 'account-fingerprint' if account else 'credential-fingerprint; rotation starts new coverage'
             payload = native._get_json(native._codex_backend_urls(base)[0], native._codex_headers(token, account), timeout=15)

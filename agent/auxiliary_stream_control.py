@@ -32,8 +32,10 @@ class SyncStream:
                 if self.cancel_check():
                     self.attempt.abort()
                     self._cleanup()
+                    self.attempt.provider_thread.join(2)
                     logging.getLogger(__name__).warning('Auxiliary local cancellation evidence: %s',
-                        dict(tcp_force_closed=self.attempt.tcp_force_closed, worker_ended=True,
+                        dict(tcp_force_closed=self.attempt.tcp_force_closed,
+                             worker_ended=not self.attempt.provider_thread.is_alive(), reader_quiesced=True,
                              remote_cancel_ack=None, billing_cessation=None))
                     return
         finally:

@@ -14,7 +14,7 @@ def test_presocket_hold_prevents_late_http_dispatch(tmp_path, monkeypatch, caplo
     listener = socket.socket()
     listener.bind(('127.0.0.1',0))
     listener.listen()
-    listener.settimeout(8)
+    listener.settimeout(30)
     received = []
     peer_done = threading.Event()
     def serve():
@@ -41,6 +41,12 @@ def test_presocket_hold_prevents_late_http_dispatch(tmp_path, monkeypatch, caplo
     monkeypatch.setattr(pc, 'current_policy', lambda: policy)
     client = OpenAI(api_key='synthetic',base_url=f'http://127.0.0.1:{listener.getsockname()[1]}',max_retries=0,timeout=5)
     attempt = control.Attempt(client, 'openai-codex', policy)
+    wrapper_closed = threading.Event()
+    native_close = attempt.wire.close
+    def close_wrapper():
+        native_close()
+        wrapper_closed.set()
+    monkeypatch.setattr(attempt.wire, 'close', close_wrapper)
     outcomes = []
     def call(request):
         try:
@@ -57,18 +63,20 @@ def test_presocket_hold_prevents_late_http_dispatch(tmp_path, monkeypatch, caplo
     worker = threading.Thread(target=owner, daemon=True)
     worker.start()
     try:
-        assert entered.wait(3)
+        assert entered.wait(15), f'provider never entered delayed connect: {outcomes}'
         with sqlite3.connect(db) as conn:
             conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
         worker.join(3)
         assert not worker.is_alive()
         assert outcomes == ['AuxiliaryExplicitCancellation']
         assert not provider_done.is_set(), 'fixture must retain genuinely pending provider worker'
+        assert id(attempt) in control._ATTEMPTS, 'pending transport lost its active ownership record'
         assert "'worker_ended': False" in caplog.text
         assert "'tcp_force_closed': 0" in caplog.text
         release.set()
         assert peer_done.wait(3)
         assert provider_done.wait(3)
+        assert wrapper_closed.wait(2)
         assert received == [b''], 'late connection sent HTTP after durable hold'
         assert attempt.wire.is_closed()
     finally:
