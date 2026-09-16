@@ -54,7 +54,7 @@ def hang_server(monkeypatch):
     server.server_close()
 
 
-@pytest.mark.parametrize('wire', ['openai-block', 'openai-sse', 'codex', 'anthropic', 'main-block', 'main-sse', 'main-inline', 'main-inline-sse', 'async-openai', 'async-codex', 'async-anthropic'])
+@pytest.mark.parametrize('wire', ['openai-block', 'openai-sse', 'codex', 'anthropic', 'main-block', 'main-sse', 'main-inline', 'main-inline-sse', 'async-openai', 'async-codex', 'async-anthropic', 'main-anthropic', 'main-sse-anthropic', 'main-inline-anthropic'])
 def test_hold_tears_down_nonstream_socket_and_preserves_sibling(hang_server, tmp_path, monkeypatch, caplog, wire):
     import sqlite3
     url, entered, peer_closed, paths = hang_server
@@ -103,11 +103,16 @@ def test_hold_tears_down_nonstream_socket_and_preserves_sibling(hang_server, tmp
                 agent = _build_agent(original)
                 agent.base_url = url
                 agent._client_kwargs = dict(api_key='synthetic-not-a-secret', base_url=url)
+                if wire.endswith('anthropic'):
+                    setattr(agent, 'provider', provider)
+                    agent.api_mode = 'anthropic_messages'
+                    agent._anthropic_api_key, agent._anthropic_base_url = 'synthetic-not-a-secret', url
+                    agent._try_refresh_anthropic_client_credentials = lambda: False
                 if 'inline' in wire:
                     agent.platform = 'cron'
                 with policy.track(agent):
                     call = agent._interruptible_streaming_api_call if 'sse' in wire else agent._interruptible_api_call
-                    call(dict(model='fixture', messages=[dict(role='user',content='local only')]))
+                    call(dict(model='fixture', max_tokens=16, messages=[dict(role='user',content='local only')]))
                 outcomes.append('late-result')
                 return
             with aux.aux_progress_hook((lambda: None) if wire == 'openai-sse' else None):
