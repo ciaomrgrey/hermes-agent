@@ -361,6 +361,7 @@ def auto_title_session(
     ``llm``/``user`` title (a ``derived`` one is expected — upgrading it is the point). Never lets an
     exception escape (the threading excepthook would spray a traceback into the terminal); the canonical
     trigger is the post-``hermes update`` window where lazy imports read NEW source against OLD modules."""
+    from agent.provider_control import HeldProvider
     try:
         if not session_db or not session_id or _has_upgraded_title(session_db, session_id):
             return
@@ -390,6 +391,9 @@ def auto_title_session(
         if persisted is not None:
             logger.debug("Auto-generated session title: %s", persisted)
             _notify_title(title_callback, persisted, source, "Auto-title")
+    except HeldProvider:
+        # Expected control outcome, not a daemon failure or title retry.
+        return
     except Exception as e:
         # WARNING so operators see it in agent.log; names the likely cause.
         logger.warning("Auto-title failed (harmless; if this started after an update, restart the running Hermes process): %s", e)

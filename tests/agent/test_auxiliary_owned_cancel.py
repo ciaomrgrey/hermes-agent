@@ -297,6 +297,7 @@ def _cross_process_request(url, database, result_pipe):
     provider_control.current_policy = lambda: policy
     client = OpenAI(api_key='synthetic-not-a-secret', base_url=url, max_retries=0,
                     http_client=build_keepalive_http_client(url), timeout=5)
+    result_pipe.send('ready')
     try:
         aux._relay_sync_completion(client, dict(model='fixture', messages=[]), provider='openai-codex')
         result_pipe.send('late-result')
@@ -320,6 +321,8 @@ def test_other_process_observes_hold_and_closes_own_socket(hang_server, tmp_path
     process.start()
     send.close()
     try:
+        assert receive.poll(45), 'child setup did not become ready'
+        assert receive.recv() == 'ready'
         assert entered.wait(15)
         with sqlite3.connect(db) as conn:
             conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))

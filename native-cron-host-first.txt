@@ -1,0 +1,581 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~1 tests) under ['tests/agent/test_provider_cli_ingress.py']; running with -j 1
+[100.0% |     1/~1 | ✓0 | ✗6] ✗ tests/agent/test_provider_cli_ingress.py (6✗, 17.5s)
+
+  ╔╍ Failed: tests/agent/test_provider_cli_ingress.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║             from tools.bot_relay import BOT_CHAT_TURN_ARGS
+  ║             args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+  ║         elif bot_chat == 'cron':
+  ║             args=[sys.executable,'-c',
+  ║                   'import json; from cron.scheduler import run_job; '
+  ║                   'r=run_job(dict(id="synthetic-hold",name="synthetic",prompt='+repr(query)+',deliver="none")); '
+  ║                   'print(json.dumps(r)); assert r[0] is False and r[2] == ""']
+  ║         try:
+  ║             result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+  ║             (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+  ║ >           assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+  ║ E           AssertionError: (0, '[false, "# Cron Job: synthetic\
+  ║ E             \
+  ║ E             **Job ID:** synthetic-hold\
+  ║ E             **Run Time:** 2026-09-16 14:00:53\
+  ║ E             **Status:** ...ivery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)
+  ║ E             ")
+  ║ E           assert 'Provider held; explicit operator resume required' in ('[false, "# Cron Job: synthetic\\n\\n**Job ID:** synthetic-hold\\n**Run Time:** 2026-09-16 14:00:53\\n**Status:** BLOC...not a known cron delivery target. Fix the job\'s `deliver` value or configure the platform\'s gateway credentials."]\n' + "Job 'synthetic' (ID: synthetic-hold): BLOCKED by pre-dispatch config validation — delivery platform 'none' is not a k...livery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n")
+  ║ E            +  where '[false, "# Cron Job: synthetic\\n\\n**Job ID:** synthetic-hold\\n**Run Time:** 2026-09-16 14:00:53\\n**Status:** BLOC...not a known cron delivery target. Fix the job\'s `deliver` value or configure the platform\'s gateway credentials."]\n' = CompletedProcess(args=['/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/.venv/...ivery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n").stdout
+  ║ E            +  and   "Job 'synthetic' (ID: synthetic-hold): BLOCKED by pre-dispatch config validation — delivery platform 'none' is not a k...livery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n" = CompletedProcess(args=['/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/.venv/...ivery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n").stderr
+  ║ 
+  ║ tests/agent/test_provider_cli_ingress.py:80: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[admission-direct-cli]
+  ║ FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[admission-canonical-bot-chat]
+  ║ FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[admission-native-cron]
+  ║ FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-direct-cli]
+  ║ FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-canonical-bot-chat]
+  ║ FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-native-cron]
+  ║ ============================== 6 failed in 8.34s ===============================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_provider_cli_ingress.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 6 failed (100% complete) in 17.5s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 17.5s  (runner wall: 17.5s, parallelism: 1x)
+  P50: 17.50s  P90: 17.50s  P95: 17.50s  P99: 17.50s  Max: 17.50s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+     17.50s  tests/agent/test_provider_cli_ingress.py
+
+=== Failure output ===
+
+--- tests/agent/test_provider_cli_ingress.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 6 items
+
+tests/agent/test_provider_cli_ingress.py FFFFFF                          [100%]
+
+=================================== FAILURES ===================================
+_ test_native_cli_ingress_hold_is_resumable_without_inference[admission-direct-cli] _
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-01lijnlq/pytest-of-claudia/pytest-0/test_native_cli_ingress_hold_i0')
+bot_chat = False, active = False
+
+    @pytest.mark.parametrize('bot_chat',[False,True,'cron'],ids=['direct-cli','canonical-bot-chat','native-cron'])
+    @pytest.mark.parametrize('active',[False,True],ids=['admission','active-wire'])
+    def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat,active):
+        root=Path(__file__).resolve().parents[2]
+        home=tmp_path/'estate'
+        home.mkdir()
+        db=home/'holds.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
+            if not active:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        requests=[]
+        closed = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+                requests.append((self.path,body))
+                if active and self.path != '/api/show':
+                    with sqlite3.connect(db) as conn:
+                        conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.end_headers()
+                    self.wfile.flush()
+                    self.connection.settimeout(2)
+                    try:
+                        if self.connection.recv(1) == b'':
+                            closed.set()
+                    except ConnectionResetError:
+                        closed.set()
+                    except TimeoutError:
+                        pass
+                    return
+                self.send_response(500); self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server.daemon_threads=True
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        url=f'http://127.0.0.1:{server.server_port}'
+        cfg=dict(model=dict(provider='anthropic',default='claude-sonnet-4-5',base_url=url),
+            provider_control=dict(database=str(db),providers=['anthropic','openai-codex']),
+            memory=dict(memory_enabled=False,user_profile_enabled=False),
+            compression=dict(enabled=False),curator=dict(enabled=False),
+            agent=dict(max_iterations=1),display=dict(interface='cli'),
+            auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+                       for name in ('compression','vision','title','session_title')})
+        (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+        env=dict(os.environ,HOME=str(tmp_path),HERMES_HOME=str(home),HERMES_PROFILE='default',
+            ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+            OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+        for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+            env.pop(key,None)
+        query='Preserve this synthetic pending message without inference.'
+        args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+        if bot_chat is True:
+            from tools.bot_relay import BOT_CHAT_TURN_ARGS
+            args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+        elif bot_chat == 'cron':
+            args=[sys.executable,'-c',
+                  'import json; from cron.scheduler import run_job; '
+                  'r=run_job(dict(id="synthetic-hold",name="synthetic",prompt='+repr(query)+',deliver="none")); '
+                  'print(json.dumps(r)); assert r[0] is False and r[2] == ""']
+        try:
+            result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+            (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+            assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+            if bot_chat != 'cron' and 'Traceback' in result.stderr:
+                print(result.stderr)
+            assert bot_chat == 'cron' or 'Traceback' not in result.stderr
+>           assert result.returncode == 0, result.stdout+result.stderr
+E           AssertionError:   ⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only
+E             Provider held; explicit operator resume required.
+E             
+E             session_id: 20260916_140045_aa0c7a
+E             
+E           assert 1 == 0
+E            +  where 1 = CompletedProcess(args=['/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/.venv/...n matching only\nProvider held; explicit operator resume required.\n', stderr='\nsession_id: 20260916_140045_aa0c7a\n').returncode
+
+tests/agent/test_provider_cli_ingress.py:84: AssertionError
+_ test_native_cli_ingress_hold_is_resumable_without_inference[admission-canonical-bot-chat] _
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-01lijnlq/pytest-of-claudia/pytest-0/test_native_cli_ingress_hold_i1')
+bot_chat = True, active = False
+
+    @pytest.mark.parametrize('bot_chat',[False,True,'cron'],ids=['direct-cli','canonical-bot-chat','native-cron'])
+    @pytest.mark.parametrize('active',[False,True],ids=['admission','active-wire'])
+    def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat,active):
+        root=Path(__file__).resolve().parents[2]
+        home=tmp_path/'estate'
+        home.mkdir()
+        db=home/'holds.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
+            if not active:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        requests=[]
+        closed = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+                requests.append((self.path,body))
+                if active and self.path != '/api/show':
+                    with sqlite3.connect(db) as conn:
+                        conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.end_headers()
+                    self.wfile.flush()
+                    self.connection.settimeout(2)
+                    try:
+                        if self.connection.recv(1) == b'':
+                            closed.set()
+                    except ConnectionResetError:
+                        closed.set()
+                    except TimeoutError:
+                        pass
+                    return
+                self.send_response(500); self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server.daemon_threads=True
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        url=f'http://127.0.0.1:{server.server_port}'
+        cfg=dict(model=dict(provider='anthropic',default='claude-sonnet-4-5',base_url=url),
+            provider_control=dict(database=str(db),providers=['anthropic','openai-codex']),
+            memory=dict(memory_enabled=False,user_profile_enabled=False),
+            compression=dict(enabled=False),curator=dict(enabled=False),
+            agent=dict(max_iterations=1),display=dict(interface='cli'),
+            auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+                       for name in ('compression','vision','title','session_title')})
+        (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+        env=dict(os.environ,HOME=str(tmp_path),HERMES_HOME=str(home),HERMES_PROFILE='default',
+            ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+            OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+        for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+            env.pop(key,None)
+        query='Preserve this synthetic pending message without inference.'
+        args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+        if bot_chat is True:
+            from tools.bot_relay import BOT_CHAT_TURN_ARGS
+            args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+        elif bot_chat == 'cron':
+            args=[sys.executable,'-c',
+                  'import json; from cron.scheduler import run_job; '
+                  'r=run_job(dict(id="synthetic-hold",name="synthetic",prompt='+repr(query)+',deliver="none")); '
+                  'print(json.dumps(r)); assert r[0] is False and r[2] == ""']
+        try:
+            result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+            (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+            assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+            if bot_chat != 'cron' and 'Traceback' in result.stderr:
+                print(result.stderr)
+            assert bot_chat == 'cron' or 'Traceback' not in result.stderr
+>           assert result.returncode == 0, result.stdout+result.stderr
+E           AssertionError:   ⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only
+E             Provider held; explicit operator resume required.
+E             Session 20260916_140047_ffb126 found but has no messages. Starting fresh.
+E             
+E             session_id: 20260916_140047_ffb126
+E             
+E           assert 1 == 0
+E            +  where 1 = CompletedProcess(args=['/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/.venv/...rr='Session 20260916_140047_ffb126 found but has no messages. Starting fresh.\n\nsession_id: 20260916_140047_ffb126\n').returncode
+
+tests/agent/test_provider_cli_ingress.py:84: AssertionError
+_ test_native_cli_ingress_hold_is_resumable_without_inference[admission-native-cron] _
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-01lijnlq/pytest-of-claudia/pytest-0/test_native_cli_ingress_hold_i2')
+bot_chat = 'cron', active = False
+
+    @pytest.mark.parametrize('bot_chat',[False,True,'cron'],ids=['direct-cli','canonical-bot-chat','native-cron'])
+    @pytest.mark.parametrize('active',[False,True],ids=['admission','active-wire'])
+    def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat,active):
+        root=Path(__file__).resolve().parents[2]
+        home=tmp_path/'estate'
+        home.mkdir()
+        db=home/'holds.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
+            if not active:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        requests=[]
+        closed = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+                requests.append((self.path,body))
+                if active and self.path != '/api/show':
+                    with sqlite3.connect(db) as conn:
+                        conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.end_headers()
+                    self.wfile.flush()
+                    self.connection.settimeout(2)
+                    try:
+                        if self.connection.recv(1) == b'':
+                            closed.set()
+                    except ConnectionResetError:
+                        closed.set()
+                    except TimeoutError:
+                        pass
+                    return
+                self.send_response(500); self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server.daemon_threads=True
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        url=f'http://127.0.0.1:{server.server_port}'
+        cfg=dict(model=dict(provider='anthropic',default='claude-sonnet-4-5',base_url=url),
+            provider_control=dict(database=str(db),providers=['anthropic','openai-codex']),
+            memory=dict(memory_enabled=False,user_profile_enabled=False),
+            compression=dict(enabled=False),curator=dict(enabled=False),
+            agent=dict(max_iterations=1),display=dict(interface='cli'),
+            auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+                       for name in ('compression','vision','title','session_title')})
+        (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+        env=dict(os.environ,HOME=str(tmp_path),HERMES_HOME=str(home),HERMES_PROFILE='default',
+            ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+            OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+        for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+            env.pop(key,None)
+        query='Preserve this synthetic pending message without inference.'
+        args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+        if bot_chat is True:
+            from tools.bot_relay import BOT_CHAT_TURN_ARGS
+            args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+        elif bot_chat == 'cron':
+            args=[sys.executable,'-c',
+                  'import json; from cron.scheduler import run_job; '
+                  'r=run_job(dict(id="synthetic-hold",name="synthetic",prompt='+repr(query)+',deliver="none")); '
+                  'print(json.dumps(r)); assert r[0] is False and r[2] == ""']
+        try:
+            result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+            (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+>           assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+E           AssertionError: (0, '[false, "# Cron Job: synthetic\
+E             \
+E             **Job ID:** synthetic-hold\
+E             **Run Time:** 2026-09-16 14:00:48\
+E             **Status:** ...ivery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)
+E             ")
+E           assert 'Provider held; explicit operator resume required' in ('[false, "# Cron Job: synthetic\\n\\n**Job ID:** synthetic-hold\\n**Run Time:** 2026-09-16 14:00:48\\n**Status:** BLOC...not a known cron delivery target. Fix the job\'s `deliver` value or configure the platform\'s gateway credentials."]\n' + "Job 'synthetic' (ID: synthetic-hold): BLOCKED by pre-dispatch config validation — delivery platform 'none' is not a k...livery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n")
+E            +  where '[false, "# Cron Job: synthetic\\n\\n**Job ID:** synthetic-hold\\n**Run Time:** 2026-09-16 14:00:48\\n**Status:** BLOC...not a known cron delivery target. Fix the job\'s `deliver` value or configure the platform\'s gateway credentials."]\n' = CompletedProcess(args=['/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/.venv/...ivery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n").stdout
+E            +  and   "Job 'synthetic' (ID: synthetic-hold): BLOCKED by pre-dispatch config validation — delivery platform 'none' is not a k...livery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n" = CompletedProcess(args=['/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/.venv/...ivery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n").stderr
+
+tests/agent/test_provider_cli_ingress.py:80: AssertionError
+_ test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-direct-cli] _
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-01lijnlq/pytest-of-claudia/pytest-0/test_native_cli_ingress_hold_i3')
+bot_chat = False, active = True
+
+    @pytest.mark.parametrize('bot_chat',[False,True,'cron'],ids=['direct-cli','canonical-bot-chat','native-cron'])
+    @pytest.mark.parametrize('active',[False,True],ids=['admission','active-wire'])
+    def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat,active):
+        root=Path(__file__).resolve().parents[2]
+        home=tmp_path/'estate'
+        home.mkdir()
+        db=home/'holds.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
+            if not active:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        requests=[]
+        closed = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+                requests.append((self.path,body))
+                if active and self.path != '/api/show':
+                    with sqlite3.connect(db) as conn:
+                        conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.end_headers()
+                    self.wfile.flush()
+                    self.connection.settimeout(2)
+                    try:
+                        if self.connection.recv(1) == b'':
+                            closed.set()
+                    except ConnectionResetError:
+                        closed.set()
+                    except TimeoutError:
+                        pass
+                    return
+                self.send_response(500); self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server.daemon_threads=True
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        url=f'http://127.0.0.1:{server.server_port}'
+        cfg=dict(model=dict(provider='anthropic',default='claude-sonnet-4-5',base_url=url),
+            provider_control=dict(database=str(db),providers=['anthropic','openai-codex']),
+            memory=dict(memory_enabled=False,user_profile_enabled=False),
+            compression=dict(enabled=False),curator=dict(enabled=False),
+            agent=dict(max_iterations=1),display=dict(interface='cli'),
+            auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+                       for name in ('compression','vision','title','session_title')})
+        (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+        env=dict(os.environ,HOME=str(tmp_path),HERMES_HOME=str(home),HERMES_PROFILE='default',
+            ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+            OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+        for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+            env.pop(key,None)
+        query='Preserve this synthetic pending message without inference.'
+        args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+        if bot_chat is True:
+            from tools.bot_relay import BOT_CHAT_TURN_ARGS
+            args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+        elif bot_chat == 'cron':
+            args=[sys.executable,'-c',
+                  'import json; from cron.scheduler import run_job; '
+                  'r=run_job(dict(id="synthetic-hold",name="synthetic",prompt='+repr(query)+',deliver="none")); '
+                  'print(json.dumps(r)); assert r[0] is False and r[2] == ""']
+        try:
+            result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+            (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+            assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+            if bot_chat != 'cron' and 'Traceback' in result.stderr:
+                print(result.stderr)
+            assert bot_chat == 'cron' or 'Traceback' not in result.stderr
+>           assert result.returncode == 0, result.stdout+result.stderr
+E           AssertionError:   ⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only
+E             Provider held; explicit operator resume required.
+E             
+E             session_id: 20260916_140049_4149cc
+E             
+E           assert 1 == 0
+E            +  where 1 = CompletedProcess(args=['/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/.venv/...n matching only\nProvider held; explicit operator resume required.\n', stderr='\nsession_id: 20260916_140049_4149cc\n').returncode
+
+tests/agent/test_provider_cli_ingress.py:84: AssertionError
+_ test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-canonical-bot-chat] _
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-01lijnlq/pytest-of-claudia/pytest-0/test_native_cli_ingress_hold_i4')
+bot_chat = True, active = True
+
+    @pytest.mark.parametrize('bot_chat',[False,True,'cron'],ids=['direct-cli','canonical-bot-chat','native-cron'])
+    @pytest.mark.parametrize('active',[False,True],ids=['admission','active-wire'])
+    def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat,active):
+        root=Path(__file__).resolve().parents[2]
+        home=tmp_path/'estate'
+        home.mkdir()
+        db=home/'holds.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
+            if not active:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        requests=[]
+        closed = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+                requests.append((self.path,body))
+                if active and self.path != '/api/show':
+                    with sqlite3.connect(db) as conn:
+                        conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.end_headers()
+                    self.wfile.flush()
+                    self.connection.settimeout(2)
+                    try:
+                        if self.connection.recv(1) == b'':
+                            closed.set()
+                    except ConnectionResetError:
+                        closed.set()
+                    except TimeoutError:
+                        pass
+                    return
+                self.send_response(500); self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server.daemon_threads=True
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        url=f'http://127.0.0.1:{server.server_port}'
+        cfg=dict(model=dict(provider='anthropic',default='claude-sonnet-4-5',base_url=url),
+            provider_control=dict(database=str(db),providers=['anthropic','openai-codex']),
+            memory=dict(memory_enabled=False,user_profile_enabled=False),
+            compression=dict(enabled=False),curator=dict(enabled=False),
+            agent=dict(max_iterations=1),display=dict(interface='cli'),
+            auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+                       for name in ('compression','vision','title','session_title')})
+        (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+        env=dict(os.environ,HOME=str(tmp_path),HERMES_HOME=str(home),HERMES_PROFILE='default',
+            ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+            OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+        for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+            env.pop(key,None)
+        query='Preserve this synthetic pending message without inference.'
+        args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+        if bot_chat is True:
+            from tools.bot_relay import BOT_CHAT_TURN_ARGS
+            args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+        elif bot_chat == 'cron':
+            args=[sys.executable,'-c',
+                  'import json; from cron.scheduler import run_job; '
+                  'r=run_job(dict(id="synthetic-hold",name="synthetic",prompt='+repr(query)+',deliver="none")); '
+                  'print(json.dumps(r)); assert r[0] is False and r[2] == ""']
+        try:
+            result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+            (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+            assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+            if bot_chat != 'cron' and 'Traceback' in result.stderr:
+                print(result.stderr)
+            assert bot_chat == 'cron' or 'Traceback' not in result.stderr
+>           assert result.returncode == 0, result.stdout+result.stderr
+E           AssertionError:   ⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only
+E             Provider held; explicit operator resume required.
+E             Session 20260916_140051_b456df found but has no messages. Starting fresh.
+E             
+E             session_id: 20260916_140051_b456df
+E             
+E           assert 1 == 0
+E            +  where 1 = CompletedProcess(args=['/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/.venv/...rr='Session 20260916_140051_b456df found but has no messages. Starting fresh.\n\nsession_id: 20260916_140051_b456df\n').returncode
+
+tests/agent/test_provider_cli_ingress.py:84: AssertionError
+_ test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-native-cron] _
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-01lijnlq/pytest-of-claudia/pytest-0/test_native_cli_ingress_hold_i5')
+bot_chat = 'cron', active = True
+
+    @pytest.mark.parametrize('bot_chat',[False,True,'cron'],ids=['direct-cli','canonical-bot-chat','native-cron'])
+    @pytest.mark.parametrize('active',[False,True],ids=['admission','active-wire'])
+    def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat,active):
+        root=Path(__file__).resolve().parents[2]
+        home=tmp_path/'estate'
+        home.mkdir()
+        db=home/'holds.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
+            if not active:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        requests=[]
+        closed = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+                requests.append((self.path,body))
+                if active and self.path != '/api/show':
+                    with sqlite3.connect(db) as conn:
+                        conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.end_headers()
+                    self.wfile.flush()
+                    self.connection.settimeout(2)
+                    try:
+                        if self.connection.recv(1) == b'':
+                            closed.set()
+                    except ConnectionResetError:
+                        closed.set()
+                    except TimeoutError:
+                        pass
+                    return
+                self.send_response(500); self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server.daemon_threads=True
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        url=f'http://127.0.0.1:{server.server_port}'
+        cfg=dict(model=dict(provider='anthropic',default='claude-sonnet-4-5',base_url=url),
+            provider_control=dict(database=str(db),providers=['anthropic','openai-codex']),
+            memory=dict(memory_enabled=False,user_profile_enabled=False),
+            compression=dict(enabled=False),curator=dict(enabled=False),
+            agent=dict(max_iterations=1),display=dict(interface='cli'),
+            auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+                       for name in ('compression','vision','title','session_title')})
+        (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+        env=dict(os.environ,HOME=str(tmp_path),HERMES_HOME=str(home),HERMES_PROFILE='default',
+            ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+            OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+        for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+            env.pop(key,None)
+        query='Preserve this synthetic pending message without inference.'
+        args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+        if bot_chat is True:
+            from tools.bot_relay import BOT_CHAT_TURN_ARGS
+            args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+        elif bot_chat == 'cron':
+            args=[sys.executable,'-c',
+                  'import json; from cron.scheduler import run_job; '
+                  'r=run_job(dict(id="synthetic-hold",name="synthetic",prompt='+repr(query)+',deliver="none")); '
+                  'print(json.dumps(r)); assert r[0] is False and r[2] == ""']
+        try:
+            result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+            (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+>           assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+E           AssertionError: (0, '[false, "# Cron Job: synthetic\
+E             \
+E             **Job ID:** synthetic-hold\
+E             **Run Time:** 2026-09-16 14:00:53\
+E             **Status:** ...ivery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)
+E             ")
+E           assert 'Provider held; explicit operator resume required' in ('[false, "# Cron Job: synthetic\\n\\n**Job ID:** synthetic-hold\\n**Run Time:** 2026-09-16 14:00:53\\n**Status:** BLOC...not a known cron delivery target. Fix the job\'s `deliver` value or configure the platform\'s gateway credentials."]\n' + "Job 'synthetic' (ID: synthetic-hold): BLOCKED by pre-dispatch config validation — delivery platform 'none' is not a k...livery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n")
+E            +  where '[false, "# Cron Job: synthetic\\n\\n**Job ID:** synthetic-hold\\n**Run Time:** 2026-09-16 14:00:53\\n**Status:** BLOC...not a known cron delivery target. Fix the job\'s `deliver` value or configure the platform\'s gateway credentials."]\n' = CompletedProcess(args=['/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/.venv/...ivery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n").stdout
+E            +  and   "Job 'synthetic' (ID: synthetic-hold): BLOCKED by pre-dispatch config validation — delivery platform 'none' is not a k...livery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n" = CompletedProcess(args=['/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/.venv/...ivery target. Fix the job's `deliver` value or configure the platform's gateway credentials. (no LLM call was made)\n").stderr
+
+tests/agent/test_provider_cli_ingress.py:80: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[admission-direct-cli]
+FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[admission-canonical-bot-chat]
+FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[admission-native-cron]
+FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-direct-cli]
+FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-canonical-bot-chat]
+FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-native-cron]
+============================== 6 failed in 8.34s ===============================
+
+=== 1 file with test failures (6 tests failed) ===
+  tests/agent/test_provider_cli_ingress.py  (6 tests failed)

@@ -1,0 +1,106 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 24 test files (~66 tests) under ['tests/agent/test_provider_admission.py', 'tests/agent/test_provider_cli_ingress.py', 'tests/agent/test_provider_client_seam.py', 'tests/agent/test_provider_commit_contention.py', 'tests/agent/test_provider_commit_order.py', 'tests/agent/test_provider_commit_recovery.py', 'tests/agent/test_provider_control.py', 'tests/agent/test_provider_control_concurrency.py', 'tests/agent/test_provider_control_races.py', 'tests/agent/test_provider_host_results.py', 'tests/agent/test_provider_late_persist.py', 'tests/agent/test_provider_presocket.py', 'tests/agent/test_provider_projection.py', 'tests/agent/test_provider_tcp_timeout.py', 'tests/agent/test_usage_guard.py', 'tests/agent/test_usage_guard_cli.py', 'tests/agent/test_usage_guard_delivery.py', 'tests/agent/test_usage_guard_deploy.py', 'tests/agent/test_usage_guard_identity.py', 'tests/agent/test_usage_guard_native_install.py', 'tests/agent/test_usage_guard_retention.py', 'tests/agent/test_usage_guard_sources.py', 'tests/agent/test_auxiliary_owned_cancel.py', 'tests/agent/test_auxiliary_stream_lifetime.py']; running with -j 2
+[  1.5% |     1/~66 | ✓8 | ✗0] ✓ tests/agent/test_auxiliary_stream_lifetime.py (8✓, 5.3s)
+[  4.5% |     3/~66 | ✓10 | ✗ 0] ✓ tests/agent/test_provider_admission.py (2✓, 1.0s)
+[  6.1% |     4/~66 | ✓12 | ✗ 0] ✓ tests/agent/test_provider_cli_ingress.py (2✓, 53.1s)
+[ 12.1% |     8/~66 | ✓16 | ✗ 0] ✓ tests/agent/test_provider_client_seam.py (4✓, 8.4s)
+[ 15.2% |    10/~66 | ✓18 | ✗ 0] ✓ tests/agent/test_provider_commit_contention.py (2✓, 9.3s)
+[ 16.7% |    11/~66 | ✓20 | ✗ 0] ✓ tests/agent/test_provider_commit_order.py (2✓, 6.7s)
+[ 25.8% |    17/~66 | ✓46 | ✗ 0] ✓ tests/agent/test_auxiliary_owned_cancel.py (26✓, 86.4s)
+[ 37.9% |    25/~66 | ✓54 | ✗ 0] ✓ tests/agent/test_provider_control.py (8✓, 2.1s)
+[ 39.4% |    26/~66 | ✓55 | ✗ 0] ✓ tests/agent/test_provider_control_concurrency.py (1✓, 2.5s)
+[ 42.4% |    28/~66 | ✓60 | ✗ 0] ✓ tests/agent/test_provider_commit_recovery.py (5✓, 8.0s)
+[ 43.9% |    29/~66 | ✓63 | ✗ 0] ✓ tests/agent/test_provider_control_races.py (3✓, 2.9s)
+[ 45.5% |    30/~66 | ✓70 | ✗ 0] ✓ tests/agent/test_provider_late_persist.py (7✓, 2.4s)
+[ 50.0% |    33/~66 | ✓73 | ✗ 0] ✓ tests/agent/test_provider_host_results.py (3✓, 4.5s)
+[ 51.5% |    34/~66 | ✓74 | ✗ 0] ✓ tests/agent/test_provider_presocket.py (1✓, 6.4s)
+[ 63.6% |    42/~66 | ✓82 | ✗ 0] ✓ tests/agent/test_provider_projection.py (8✓, 14.3s)
+[ 75.8% |    50/~66 | ✓90 | ✗ 0] ✓ tests/agent/test_usage_guard.py (8✓, 4.2s)
+[ 81.8% |    54/~66 | ✓94 | ✗ 0] ✓ tests/agent/test_usage_guard_cli.py (4✓, 4.4s)
+[ 83.3% |    55/~66 | ✓95 | ✗ 0] ✓ tests/agent/test_usage_guard_delivery.py (1✓, 0.9s)
+[ 86.4% |    57/~66 | ✓97 | ✗ 0] ✓ tests/agent/test_usage_guard_deploy.py (2✓, 0.6s)
+[ 90.9% |    60/~66 | ✓100 | ✗  0] ✓ tests/agent/test_usage_guard_identity.py (3✓, 0.8s)
+[ 92.4% |    61/~66 | ✓101 | ✗  0] ✓ tests/agent/test_provider_tcp_timeout.py (1✓, 36.1s)
+[ 95.5% |    63/~66 | ✓103 | ✗  0] ✓ tests/agent/test_usage_guard_retention.py (2✓, 0.7s)
+[ 98.5% |    65/~66 | ✓105 | ✗  0] ✓ tests/agent/test_usage_guard_sources.py (2✓, 0.8s)
+[100.0% |    66/~66 | ✓106 | ✗  0] ✓ tests/agent/test_usage_guard_native_install.py (1✓, 36.0s)
+
+=== Summary: 24 files, 106 tests passed, 0 failed (100% complete) in 157.9s (2 workers) ===
+
+=== ⚠ 1 FLAKY file (failed once, passed on retry — fix these) ===
+  tests/agent/test_auxiliary_owned_cancel.py
+⚠ FLAKY: failed on attempt 1, passed on retry (attempt 2). Fix the flake — do not ignore this.
+--- first-attempt output ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 26 items
+
+tests/agent/test_auxiliary_owned_cancel.py .......................F..    [100%]
+
+=================================== FAILURES ===================================
+____________ test_other_process_observes_hold_and_closes_own_socket ____________
+
+hang_server = ('http://127.0.0.1:53692', <threading.Event at 0x10d53bed0: set>, <threading.Event at 0x10d53b450: set>, ['/chat/completions'])
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-xoduws8i/pytest-of-claudia/pytest-0/test_other_process_observes_ho0')
+
+    def test_other_process_observes_hold_and_closes_own_socket(hang_server, tmp_path):
+        import multiprocessing
+        import sqlite3
+        url, entered, closed, paths = hang_server
+        db = tmp_path/'multiprocess.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        context = multiprocessing.get_context('spawn')
+        receive, send = context.Pipe(duplex=False)
+        process = context.Process(target=_cross_process_request, args=(url, str(db), send))
+        process.start()
+        send.close()
+        try:
+>           assert entered.wait(15)
+E           assert False
+E            +  where False = wait(15)
+E            +    where wait = <threading.Event at 0x10d53bed0: unset>.wait
+
+tests/agent/test_auxiliary_owned_cancel.py:323: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_auxiliary_owned_cancel.py::test_other_process_observes_hold_and_closes_own_socket
+======================== 1 failed, 25 passed in 41.17s =========================
+
+
+--- retry output ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 26 items
+
+tests/agent/test_auxiliary_owned_cancel.py ..........................    [100%]
+
+============================= 26 passed in 40.16s ==============================
+  Durations cached to test_durations.json (24 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   24
+  Total subprocess CPU-wall: 298.0s  (runner wall: 157.9s, parallelism: 2x)
+  P50: 4.54s  P90: 36.07s  P95: 53.08s  P99: 86.43s  Max: 86.43s
+  <1s: 6 files (25%)  <2s: 6 files (25%)
+  Top 10 slowest:
+     86.43s  tests/agent/test_auxiliary_owned_cancel.py
+     53.08s  tests/agent/test_provider_cli_ingress.py
+     36.07s  tests/agent/test_provider_tcp_timeout.py
+     36.04s  tests/agent/test_usage_guard_native_install.py
+     14.32s  tests/agent/test_provider_projection.py
+      9.34s  tests/agent/test_provider_commit_contention.py
+      8.42s  tests/agent/test_provider_client_seam.py
+      7.97s  tests/agent/test_provider_commit_recovery.py
+      6.71s  tests/agent/test_provider_commit_order.py
+      6.38s  tests/agent/test_provider_presocket.py

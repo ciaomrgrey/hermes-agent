@@ -1,0 +1,153 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~1 tests) under ['tests/agent/test_provider_cli_ingress.py']; running with -j 1
+[100.0% |     1/~1 | ✓3 | ✗1] ✗ tests/agent/test_provider_cli_ingress.py (3✓ 1✗, 17.2s)
+
+  ╔╍ Failed: tests/agent/test_provider_cli_ingress.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║         env=dict(os.environ,HOME=str(tmp_path),HERMES_HOME=str(home),HERMES_PROFILE='default',
+  ║             ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+  ║             OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+  ║         for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+  ║             env.pop(key,None)
+  ║         query='Preserve this synthetic pending message without inference.'
+  ║         args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+  ║         if bot_chat:
+  ║             from tools.bot_relay import BOT_CHAT_TURN_ARGS
+  ║             args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+  ║         try:
+  ║             result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+  ║             (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+  ║             assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+  ║ >           assert 'Traceback' not in result.stderr
+  ║ E           assert 'Traceback' not in 'Exception i...740_d71f45\n'
+  ║ E             
+  ║ E             'Traceback' is contained here:
+  ║ E               Exception in thread auto-title:
+  ║ E               Traceback (most recent call last):
+  ║ E             ? +++++++++
+  ║ E                 File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
+  ║ E                   self.run()...
+  ║ E             
+  ║ E             ...Full output truncated (28 lines hidden), use '-vv' to show
+  ║ 
+  ║ tests/agent/test_provider_cli_ingress.py:76: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-direct-cli]
+  ║ ========================= 1 failed, 3 passed in 7.80s ==========================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_provider_cli_ingress.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 3 tests passed, 1 failed (100% complete) in 17.2s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 17.2s  (runner wall: 17.2s, parallelism: 1x)
+  P50: 17.17s  P90: 17.17s  P95: 17.17s  P99: 17.17s  Max: 17.17s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+     17.17s  tests/agent/test_provider_cli_ingress.py
+
+=== Failure output ===
+
+--- tests/agent/test_provider_cli_ingress.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 4 items
+
+tests/agent/test_provider_cli_ingress.py ..F.                            [100%]
+
+=================================== FAILURES ===================================
+_ test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-direct-cli] _
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-j013ehxk/pytest-of-claudia/pytest-0/test_native_cli_ingress_hold_i2')
+bot_chat = False, active = True
+
+    @pytest.mark.parametrize('bot_chat',[False,True],ids=['direct-cli','canonical-bot-chat'])
+    @pytest.mark.parametrize('active',[False,True],ids=['admission','active-wire'])
+    def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat,active):
+        root=Path(__file__).resolve().parents[2]
+        home=tmp_path/'estate'
+        home.mkdir()
+        db=home/'holds.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
+            if not active:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        requests=[]
+        closed = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+                requests.append((self.path,body))
+                if active and self.path != '/api/show':
+                    with sqlite3.connect(db) as conn:
+                        conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.end_headers()
+                    self.wfile.flush()
+                    self.connection.settimeout(2)
+                    try:
+                        if self.connection.recv(1) == b'':
+                            closed.set()
+                    except ConnectionResetError:
+                        closed.set()
+                    except TimeoutError:
+                        pass
+                    return
+                self.send_response(500); self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server.daemon_threads=True
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        url=f'http://127.0.0.1:{server.server_port}'
+        cfg=dict(model=dict(provider='anthropic',default='claude-sonnet-4-5',base_url=url),
+            provider_control=dict(database=str(db),providers=['anthropic','openai-codex']),
+            memory=dict(memory_enabled=False,user_profile_enabled=False),
+            compression=dict(enabled=False),curator=dict(enabled=False),
+            agent=dict(max_iterations=1),display=dict(interface='cli'),
+            auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+                       for name in ('compression','vision','title','session_title')})
+        (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+        env=dict(os.environ,HOME=str(tmp_path),HERMES_HOME=str(home),HERMES_PROFILE='default',
+            ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+            OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+        for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+            env.pop(key,None)
+        query='Preserve this synthetic pending message without inference.'
+        args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+        if bot_chat:
+            from tools.bot_relay import BOT_CHAT_TURN_ARGS
+            args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+        try:
+            result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+            (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+            assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+>           assert 'Traceback' not in result.stderr
+E           assert 'Traceback' not in 'Exception i...740_d71f45\n'
+E             
+E             'Traceback' is contained here:
+E               Exception in thread auto-title:
+E               Traceback (most recent call last):
+E             ? +++++++++
+E                 File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
+E                   self.run()...
+E             
+E             ...Full output truncated (28 lines hidden), use '-vv' to show
+
+tests/agent/test_provider_cli_ingress.py:76: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-direct-cli]
+========================= 1 failed, 3 passed in 7.80s ==========================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_provider_cli_ingress.py  (1 test failed)

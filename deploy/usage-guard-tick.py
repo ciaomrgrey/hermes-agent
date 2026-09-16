@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Inactive no_agent cron entry; installation/release is owned by Hermes.
 
-Native scheduler supplies the selected profile home and repository Python path.
+Native scheduler supplies the selected profile home and its Python interpreter.
+Install the candidate into that interpreter; checkout PYTHONPATH is not guaranteed.
 Configuration/state live outside the code checkout so upgrades preserve history.
 """
 import sys

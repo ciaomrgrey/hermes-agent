@@ -12,21 +12,40 @@ import pytest
 import yaml
 
 
-@pytest.mark.parametrize('bot_chat',[False,True],ids=['direct-cli','canonical-bot-chat'])
-def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat):
+@pytest.mark.parametrize('bot_chat',[False,True,'cron','gateway'],ids=['direct-cli','canonical-bot-chat','native-cron','gateway-turn-runner'])
+@pytest.mark.parametrize('active',[False,True],ids=['admission','active-wire'])
+def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat,active):
     root=Path(__file__).resolve().parents[2]
     home=tmp_path/'estate'
     home.mkdir()
     db=home/'holds.sqlite3'
     with sqlite3.connect(db) as conn:
         conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
-        conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        if not active:
+            conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
     requests=[]
+    closed = threading.Event()
     class Handler(BaseHTTPRequestHandler):
         def log_message(self,*args): pass
         def do_POST(self):
             body=self.rfile.read(int(self.headers.get('Content-Length',0)))
             requests.append((self.path,body))
+            if active and self.path != '/api/show':
+                with sqlite3.connect(db) as conn:
+                    conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+                self.send_response(200)
+                self.send_header('Content-Type','text/event-stream')
+                self.end_headers()
+                self.wfile.flush()
+                self.connection.settimeout(2)
+                try:
+                    if self.connection.recv(1) == b'':
+                        closed.set()
+                except ConnectionResetError:
+                    closed.set()
+                except TimeoutError:
+                    pass
+                return
             self.send_response(500); self.end_headers()
     server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
     server.daemon_threads=True
@@ -46,21 +65,42 @@ def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_cha
     for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
         env.pop(key,None)
     query='Preserve this synthetic pending message without inference.'
+    env['FIXTURE_QUERY'] = query
     args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
-    if bot_chat:
+    if bot_chat is True:
         from tools.bot_relay import BOT_CHAT_TURN_ARGS
         args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+    elif bot_chat == 'cron':
+        args=[sys.executable,'-c',
+              'import json; from cron.scheduler import run_job; '
+              'r=run_job(dict(id="synthetic-hold",name="synthetic",prompt='+repr(query)+',deliver="local")); '
+              'print(json.dumps(r)); assert r[0] is False and r[2] == ""']
+    elif bot_chat == 'gateway':
+        args=[sys.executable,'-m','tests.agent.provider_gateway_fixture']
     try:
         result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
         (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
         assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
-        assert 'Traceback' not in result.stderr
+        if bot_chat != 'cron' and 'Traceback' in result.stderr:
+            print(result.stderr)
+        assert bot_chat == 'cron' or 'Traceback' not in result.stderr
+        assert result.returncode == (0 if bot_chat in ('cron','gateway') else 1), result.stdout+result.stderr
         # Local endpoints trigger native Ollama model metadata probing during
         # construction; /api/show is not inference. Reject every other POST.
-        assert all(path=='/api/show' and 'messages' not in json.loads(body) for path,body in requests), requests
+        if active:
+            inference = [(path,body) for path,body in requests if path != '/api/show']
+            assert len(inference) == 1, requests
+            assert closed.is_set(), 'active provider socket did not close within two seconds'
+        else:
+            assert all(path=='/api/show' and 'messages' not in json.loads(body) for path,body in requests), requests
         with sqlite3.connect(home/'state.db') as conn:
             rows=conn.execute('SELECT role,content FROM messages ORDER BY timestamp').fetchall()
-            assert any(role=='user' and content==query for role,content in rows), rows
+            if bot_chat == 'cron':
+                # Native cron deliberately prefixes delivery instructions.
+                assert len(rows) == 1 and rows[0][0] == 'user', rows
+                assert rows[0][1].endswith('\n\n'+query), rows
+            else:
+                assert any(role=='user' and content==query for role,content in rows), rows
             assert not any(role=='assistant' for role,content in rows), rows
         assert db.exists()
         with sqlite3.connect(db) as conn:
