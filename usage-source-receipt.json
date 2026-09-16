@@ -1,0 +1,71 @@
+{
+  "at": "2026-09-16T09:45:26.305127+00:00",
+  "sources": {
+    "anthropic": {
+      "status": "ok",
+      "pp": 33.0,
+      "reset": 1789772400.643485,
+      "duration": 604800,
+      "field": "seven_day",
+      "grant": "f28803fa674704b1f4efe4ba500d8510628433e6b789ccdab4da42d7cd550da0",
+      "identity_kind": "credential-fingerprint; rotation starts new coverage",
+      "fetched_at": 1789551926.732502,
+      "source": "oauth_usage_api"
+    },
+    "openai-codex": {
+      "status": "ok",
+      "pp": 32.0,
+      "reset": 1789805425.0,
+      "duration": 604800,
+      "field": "rate_limit.primary_window",
+      "grant": "14e344affcb3e45b6f777ecbd809ca9998bf5a9c1519d3c8fcd5c9ca79eb5925",
+      "identity_kind": "credential-fingerprint; rotation starts new coverage",
+      "fetched_at": 1789551927.3401,
+      "source": "usage_api"
+    },
+    "xai-oauth": {
+      "status": "unsupported",
+      "reason": "no equivalent weekly source"
+    }
+  },
+  "app_server": {
+    "rateLimits": {
+      "primary": {
+        "usedPercent": 32,
+        "windowDurationMins": 10080,
+        "resetsAt": 1789805425
+      },
+      "credits": {}
+    },
+    "rateLimitsByLimitId": {
+      "codex": {
+        "primary": {
+          "usedPercent": 32,
+          "windowDurationMins": 10080,
+          "resetsAt": 1789805425
+        },
+        "credits": {}
+      },
+      "codex_bengalfox": {
+        "primary": {
+          "usedPercent": 0,
+          "windowDurationMins": 300,
+          "resetsAt": 1789569927
+        },
+        "secondary": {
+          "usedPercent": 0,
+          "windowDurationMins": 10080,
+          "resetsAt": 1790156727
+        }
+      }
+    },
+    "rateLimitResetCredits": {
+      "credits": [
+        {},
+        {},
+        {}
+      ]
+    }
+  },
+  "app_server_closed": true
+}

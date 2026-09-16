@@ -1,0 +1,29 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 7 test files (~29 tests) under ['tests/agent/test_usage_guard.py', 'tests/agent/test_usage_guard_sources.py', 'tests/agent/test_usage_guard_cli.py', 'tests/agent/test_provider_control.py', 'tests/agent/test_turn_facade_lease.py', 'tests/agent/test_cascading_interrupt_6600.py', 'tests/run_agent/test_cross_process_turn_lease.py']; running with -j 2
+[ 13.8% |     4/~29 | ✓4 | ✗0] ✓ tests/agent/test_provider_control.py (4✓, 0.3s)
+[ 27.6% |     8/~29 | ✓8 | ✗0] ✓ tests/agent/test_turn_facade_lease.py (4✓, 0.3s)
+[ 44.8% |    13/~29 | ✓13 | ✗ 0] ✓ tests/agent/test_usage_guard.py (5✓, 0.5s)
+[ 48.3% |    14/~29 | ✓14 | ✗ 0] ✓ tests/agent/test_usage_guard_cli.py (1✓, 0.4s)
+[ 51.7% |    15/~29 | ✓15 | ✗ 0] ✓ tests/agent/test_usage_guard_sources.py (1✓, 0.3s)
+[ 58.6% |    17/~29 | ✓17 | ✗ 0] ✓ tests/agent/test_cascading_interrupt_6600.py (2✓, 3.5s)
+[100.0% |    29/~29 | ✓29 | ✗ 0] ✓ tests/run_agent/test_cross_process_turn_lease.py (12✓, 2.7s)
+
+=== Summary: 7 files, 29 tests passed, 0 failed (100% complete) in 4.5s (2 workers) ===
+  Durations cached to test_durations.json (7 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   7
+  Total subprocess CPU-wall: 7.9s  (runner wall: 4.5s, parallelism: 2x)
+  P50: 0.42s  P90: 3.46s  P95: 3.46s  P99: 3.46s  Max: 3.46s
+  <1s: 5 files (71%)  <2s: 5 files (71%)
+  Top 10 slowest:
+      3.46s  tests/agent/test_cascading_interrupt_6600.py
+      2.65s  tests/run_agent/test_cross_process_turn_lease.py
+      0.51s  tests/agent/test_usage_guard.py
+      0.42s  tests/agent/test_usage_guard_cli.py
+      0.34s  tests/agent/test_usage_guard_sources.py
+      0.30s  tests/agent/test_provider_control.py
+      0.25s  tests/agent/test_turn_facade_lease.py

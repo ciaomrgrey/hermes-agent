@@ -1,0 +1,54 @@
+{
+  "anthropic": {
+    "source": {
+      "status": "ok",
+      "pp": 33.0,
+      "reset": 1789772400,
+      "raw_reset": 1789772400.532755,
+      "duration": 604800,
+      "field": "seven_day",
+      "grant": "f28803fa674704b1f4efe4ba500d8510628433e6b789ccdab4da42d7cd550da0",
+      "identity_kind": "credential-fingerprint; rotation starts new coverage",
+      "fetched_at": 1789552357.735713,
+      "source": "oauth_usage_api"
+    },
+    "rolling": {
+      "pp": 0.0,
+      "start": 1789552357.735713,
+      "end": 1789552357.735713,
+      "coverage": "partial"
+    }
+  },
+  "openai-codex": {
+    "source": {
+      "status": "ok",
+      "pp": 33.0,
+      "reset": 1789805425,
+      "raw_reset": 1789805425.0,
+      "duration": 604800,
+      "field": "rate_limit.primary_window",
+      "grant": "14e344affcb3e45b6f777ecbd809ca9998bf5a9c1519d3c8fcd5c9ca79eb5925",
+      "identity_kind": "credential-fingerprint; rotation starts new coverage",
+      "fetched_at": 1789552358.2504199,
+      "source": "usage_api"
+    },
+    "rolling": {
+      "pp": 0.0,
+      "start": 1789552358.2504199,
+      "end": 1789552358.2504199,
+      "coverage": "partial"
+    }
+  },
+  "xai-oauth": {
+    "source": {
+      "status": "unsupported",
+      "reason": "no equivalent weekly source"
+    },
+    "rolling": {
+      "pp": null,
+      "start": null,
+      "end": 1789552358.2514508,
+      "coverage": "unavailable"
+    }
+  }
+}

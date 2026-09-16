@@ -1,0 +1,5 @@
+{
+  "native_owner_cancelled": true,
+  "provider_callback_still_running_after_owner_cancelled": true,
+  "fixture_callback_cleaned_up": true
+}

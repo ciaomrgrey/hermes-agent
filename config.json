@@ -1,0 +1,12 @@
+{
+  "threshold_pp": 10.0,
+  "window_seconds": 21600,
+  "sample_seconds": 60,
+  "timezone": "Europe/Zurich",
+  "night_start": "22:00",
+  "night_end": "06:00",
+  "report_time": "06:05",
+  "telegram_target": "telegram:471605389",
+  "retention_days": 7,
+  "armed": false
+}

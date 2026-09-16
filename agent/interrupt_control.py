@@ -93,6 +93,7 @@ class InterruptControlMixin:
     def interrupt(
         self, message: Optional[str] = None, *, hard_cancel: bool = False,
         tool_reason: Optional[str] = None, require_generation: Optional[int] = None,
+        propagate_children: bool = True,
     ) -> bool:
         """Request the agent to interrupt its current tool-calling loop (call from another thread).
 
@@ -175,7 +176,7 @@ class InterruptControlMixin:
         _ic_signal_tool_workers(self, True, reason=tool_interrupt_reason)
         # Propagate interrupt to any running child agents (subagent delegation)
         with self._active_children_lock:
-            children_copy = list(self._active_children)
+            children_copy = list(self._active_children) if propagate_children else []
         for child in children_copy:
             try:
                 if hard_cancel:

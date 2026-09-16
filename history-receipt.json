@@ -1,0 +1,29 @@
+{
+  "inspected_at": "2026-09-16T09:58:44.144514+00:00",
+  "source": "/Users/claudia/hermes/home/profiles/gurney/cron/burn-rate-watch/state.json",
+  "history_samples": 60,
+  "anthropic_weekly_samples": 59,
+  "first": "2026-09-06T22:00:21.317029+00:00",
+  "last": "2026-09-16T06:00:52.144272+00:00",
+  "minimum_gap_seconds": 54.293089866638184,
+  "maximum_gap_seconds": 14455.119616031647,
+  "retrospective_60second_coverage": false,
+  "import_decision": "Not imported: old history lacks grant identity and Codex weekly duration; sparse timestamps cannot establish sampled rolling six-hour maxima.",
+  "configured_provider_targets": {
+    "openai-codex": [
+      "chas",
+      "cody",
+      "generalist",
+      "plutus",
+      "ripley"
+    ],
+    "anthropic": [
+      "emma",
+      "jared",
+      "sophia"
+    ],
+    "xai-oauth": [
+      "gurney"
+    ]
+  }
+}

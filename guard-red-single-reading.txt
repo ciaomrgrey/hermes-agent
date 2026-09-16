@@ -1,0 +1,100 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~5 tests) under ['tests/agent/test_usage_guard.py']; running with -j 1
+[100.0% |     5/~5 | ✓4 | ✗1] ✗ tests/agent/test_usage_guard.py (4✓ 1✗, 1.1s)
+
+  ╔╍ Failed: tests/agent/test_usage_guard.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║ =================================== FAILURES ===================================
+  ║ ______________ test_rolling_every_offset_and_incomplete_segments _______________
+  ║
+  ║     def test_rolling_every_offset_and_incomplete_segments():
+  ║         from agent import usage_guard as g
+  ║         assert hasattr(g, 'rolling'), 'rolling calculation missing'
+  ║         # Synthetic peak is 01:00–07:00 UTC, not aligned to six-hour buckets.
+  ║         rows = [dict(t=t, pp=max(0, min(12, (t-3600)/1800)), reset=604800,
+  ║                      grant='synthetic-account', status='ok') for t in range(0, 108001, 60)]
+  ║         peaks = [g.rolling(rows, t, 21600, 90) for t in range(8640, 108001, 60)]
+  ║         peak = max(peaks, key=lambda p: p['pp'] if p['pp'] is not None else -1)
+  ║         assert (peak['pp'], peak['start'], peak['end'], peak['coverage']) == (12, 3600, 25200, 'sampled')
+  ║         assert g.rolling(rows[:10], 540, 21600, 90)['coverage'] == 'partial'
+  ║         broken = [dict(r) for r in rows[:361]]
+  ║         broken[200]['status'] = 'unavailable'
+  ║         assert g.rolling(broken, 21600, 21600, 90)['coverage'] == 'partial'
+  ║         broken = [dict(r) for r in rows[:361]]
+  ║         broken[300]['grant'] = 'changed-account'
+  ║         assert g.rolling(broken, 21600, 21600, 90)['coverage'] == 'partial'
+  ║         broken = [dict(r, reset=700000 if r['t'] >= 12000 else 604800) for r in rows[:361]]
+  ║         assert g.rolling(broken, 21600, 21600, 90)['coverage'] == 'partial'
+  ║         assert g.rolling(rows, 109000, 21600, 90)['pp'] is None
+  ║ >       assert g.rolling(rows[:1], 0, 21600, 90)['pp'] is None  # one reading cannot establish burn
+  ║         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ║ E       assert 0 is None
+  ║
+  ║ tests/agent/test_usage_guard.py:41: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_usage_guard.py::test_rolling_every_offset_and_incomplete_segments
+  ║ ========================= 1 failed, 4 passed in 0.38s ==========================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_usage_guard.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 4 tests passed, 1 failed (100% complete) in 1.1s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 1.1s  (runner wall: 1.1s, parallelism: 1x)
+  P50: 1.08s  P90: 1.08s  P95: 1.08s  P99: 1.08s  Max: 1.08s
+  <1s: 0 files (0%)  <2s: 1 files (100%)
+  Top 10 slowest:
+      1.08s  tests/agent/test_usage_guard.py
+
+=== Failure output ===
+
+--- tests/agent/test_usage_guard.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 5 items
+
+tests/agent/test_usage_guard.py .F...                                    [100%]
+
+=================================== FAILURES ===================================
+______________ test_rolling_every_offset_and_incomplete_segments _______________
+
+    def test_rolling_every_offset_and_incomplete_segments():
+        from agent import usage_guard as g
+        assert hasattr(g, 'rolling'), 'rolling calculation missing'
+        # Synthetic peak is 01:00–07:00 UTC, not aligned to six-hour buckets.
+        rows = [dict(t=t, pp=max(0, min(12, (t-3600)/1800)), reset=604800,
+                     grant='synthetic-account', status='ok') for t in range(0, 108001, 60)]
+        peaks = [g.rolling(rows, t, 21600, 90) for t in range(8640, 108001, 60)]
+        peak = max(peaks, key=lambda p: p['pp'] if p['pp'] is not None else -1)
+        assert (peak['pp'], peak['start'], peak['end'], peak['coverage']) == (12, 3600, 25200, 'sampled')
+        assert g.rolling(rows[:10], 540, 21600, 90)['coverage'] == 'partial'
+        broken = [dict(r) for r in rows[:361]]
+        broken[200]['status'] = 'unavailable'
+        assert g.rolling(broken, 21600, 21600, 90)['coverage'] == 'partial'
+        broken = [dict(r) for r in rows[:361]]
+        broken[300]['grant'] = 'changed-account'
+        assert g.rolling(broken, 21600, 21600, 90)['coverage'] == 'partial'
+        broken = [dict(r, reset=700000 if r['t'] >= 12000 else 604800) for r in rows[:361]]
+        assert g.rolling(broken, 21600, 21600, 90)['coverage'] == 'partial'
+        assert g.rolling(rows, 109000, 21600, 90)['pp'] is None
+>       assert g.rolling(rows[:1], 0, 21600, 90)['pp'] is None  # one reading cannot establish burn
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       assert 0 is None
+
+tests/agent/test_usage_guard.py:41: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_usage_guard.py::test_rolling_every_offset_and_incomplete_segments
+========================= 1 failed, 4 passed in 0.38s ==========================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_usage_guard.py  (1 test failed)

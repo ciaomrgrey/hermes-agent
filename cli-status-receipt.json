@@ -1,0 +1,9 @@
+{
+  "armed": false,
+  "release_ready": false,
+  "release_blocker": "request-owned auxiliary cancellation and all admission integrations are not qualified",
+  "held": [],
+  "pending_alerts": 1,
+  "sampling_seconds": 60,
+  "no_live_controls_installed": true
+}

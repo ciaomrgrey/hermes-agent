@@ -1,0 +1,28 @@
+{
+  "id": "report:2026-09-16",
+  "at": "2026-09-16T12:00:53.671655+02:00",
+  "lookback_seconds": 86400,
+  "sampling_seconds": 60,
+  "held": [],
+  "providers": {
+    "anthropic": {
+      "coverage": "unavailable",
+      "peak_pp": null,
+      "start": null,
+      "end": null,
+      "peak_coverage": null
+    },
+    "openai-codex": {
+      "coverage": "unavailable",
+      "peak_pp": null,
+      "start": null,
+      "end": null,
+      "peak_coverage": null
+    },
+    "xai-oauth": {
+      "coverage": "unsupported",
+      "peak_pp": null
+    }
+  },
+  "external_clients": "uncontrolled; shared quota can keep increasing"
+}
