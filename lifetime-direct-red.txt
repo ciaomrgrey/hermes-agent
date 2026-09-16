@@ -1,0 +1,111 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~4 tests) under ['tests/agent/test_auxiliary_owned_cancel.py']; running with -j 1
+[100.0% |     4/~4 | ✓0 | ✗1] ✗ tests/agent/test_auxiliary_owned_cancel.py (1✗, 6.3s)
+
+  ╔╍ Failed: tests/agent/test_auxiliary_owned_cancel.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║         import sqlite3
+  ║         from agent import auxiliary_control as control
+  ║         url, entered, peer_closed, paths = hang_server
+  ║         db = tmp_path/'control.sqlite3'
+  ║         with sqlite3.connect(db) as conn:
+  ║             conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+  ║         policy = provider_control.Policy(db, ('openai-codex',))
+  ║         monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+  ║         def hold():
+  ║             with sqlite3.connect(db) as conn:
+  ║                 conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
+  ║         request = dict(model='fixture', messages=[], stream=True)
+  ║         if mode.startswith('sync-'):
+  ║             client = OpenAI(api_key='synthetic', base_url=url, max_retries=0,
+  ║                             http_client=build_keepalive_http_client(url), timeout=5)
+  ║             try:
+  ║                 call = aux._relay_sync_stream if mode == 'sync-direct' else aux._relay_sync_completion
+  ║                 stream = call(client, request, provider='openai-codex')
+  ║                 assert entered.wait(2)
+  ║                 hold()
+  ║ >               assert peer_closed.wait(2), 'idle stream socket remains open'
+  ║ E               AssertionError: idle stream socket remains open
+  ║ E               assert False
+  ║ E                +  where False = wait(2)
+  ║ E                +    where wait = <threading.Event at 0x10721ce90: unset>.wait
+  ║ 
+  ║ tests/agent/test_auxiliary_owned_cancel.py:174: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_auxiliary_owned_cancel.py::test_returned_stream_lifetime_hold[sync-direct]
+  ║ ======================= 1 failed, 22 deselected in 2.92s =======================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_auxiliary_owned_cancel.py -k sync-direct
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 1 failed (100% complete) in 6.3s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 6.3s  (runner wall: 6.3s, parallelism: 1x)
+  P50: 6.35s  P90: 6.35s  P95: 6.35s  P99: 6.35s  Max: 6.35s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+      6.35s  tests/agent/test_auxiliary_owned_cancel.py
+
+=== Failure output ===
+
+--- tests/agent/test_auxiliary_owned_cancel.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 23 items / 22 deselected / 1 selected
+
+tests/agent/test_auxiliary_owned_cancel.py F                             [100%]
+
+=================================== FAILURES ===================================
+_______________ test_returned_stream_lifetime_hold[sync-direct] ________________
+
+hang_server = ('http://127.0.0.1:56583', <threading.Event at 0x10721cf10: set>, <threading.Event at 0x10721ce90: unset>, ['/chat/completions'])
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-o1smky1l/pytest-of-claudia/pytest-0/test_returned_stream_lifetime_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1093f2350>
+mode = 'sync-direct'
+
+    @pytest.mark.parametrize('mode', ['sync-idle', 'sync-direct', 'async-idle', 'async-read'])
+    def test_returned_stream_lifetime_hold(hang_server, tmp_path, monkeypatch, mode):
+        import asyncio
+        import sqlite3
+        from agent import auxiliary_control as control
+        url, entered, peer_closed, paths = hang_server
+        db = tmp_path/'control.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        policy = provider_control.Policy(db, ('openai-codex',))
+        monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+        def hold():
+            with sqlite3.connect(db) as conn:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
+        request = dict(model='fixture', messages=[], stream=True)
+        if mode.startswith('sync-'):
+            client = OpenAI(api_key='synthetic', base_url=url, max_retries=0,
+                            http_client=build_keepalive_http_client(url), timeout=5)
+            try:
+                call = aux._relay_sync_stream if mode == 'sync-direct' else aux._relay_sync_completion
+                stream = call(client, request, provider='openai-codex')
+                assert entered.wait(2)
+                hold()
+>               assert peer_closed.wait(2), 'idle stream socket remains open'
+E               AssertionError: idle stream socket remains open
+E               assert False
+E                +  where False = wait(2)
+E                +    where wait = <threading.Event at 0x10721ce90: unset>.wait
+
+tests/agent/test_auxiliary_owned_cancel.py:174: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_auxiliary_owned_cancel.py::test_returned_stream_lifetime_hold[sync-direct]
+======================= 1 failed, 22 deselected in 2.92s =======================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_auxiliary_owned_cancel.py  (1 test failed)

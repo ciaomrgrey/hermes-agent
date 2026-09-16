@@ -1,0 +1,37 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 12 test files (~37 tests) under ['tests/agent/test_usage_guard.py', 'tests/agent/test_usage_guard_sources.py', 'tests/agent/test_usage_guard_cli.py', 'tests/agent/test_usage_guard_delivery.py', 'tests/agent/test_usage_guard_deploy.py', 'tests/agent/test_provider_control.py', 'tests/agent/test_provider_control_races.py', 'tests/agent/test_provider_admission.py', 'tests/agent/test_auxiliary_owned_cancel.py', 'tests/agent/test_auxiliary_stream_lifetime.py', 'tests/agent/test_provider_presocket.py', 'tests/agent/test_provider_control_concurrency.py']; running with -j 1
+[ 16.2% |     6/~37 | ✓26 | ✗ 0] ✓ tests/agent/test_auxiliary_owned_cancel.py (26✓, 19.5s)
+[ 18.9% |     7/~37 | ✓34 | ✗ 0] ✓ tests/agent/test_auxiliary_stream_lifetime.py (8✓, 5.1s)
+[ 24.3% |     9/~37 | ✓36 | ✗ 0] ✓ tests/agent/test_provider_admission.py (2✓, 0.3s)
+[ 45.9% |    17/~37 | ✓44 | ✗ 0] ✓ tests/agent/test_provider_control.py (8✓, 0.5s)
+[ 48.6% |    18/~37 | ✓45 | ✗ 0] ✓ tests/agent/test_provider_control_concurrency.py (1✓, 1.2s)
+[ 51.4% |    19/~37 | ✓48 | ✗ 0] ✓ tests/agent/test_provider_control_races.py (3✓, 0.5s)
+[ 54.1% |    20/~37 | ✓49 | ✗ 0] ✓ tests/agent/test_provider_presocket.py (1✓, 2.8s)
+[ 75.7% |    28/~37 | ✓57 | ✗ 0] ✓ tests/agent/test_usage_guard.py (8✓, 0.7s)
+[ 86.5% |    32/~37 | ✓61 | ✗ 0] ✓ tests/agent/test_usage_guard_cli.py (4✓, 0.4s)
+[ 89.2% |    33/~37 | ✓62 | ✗ 0] ✓ tests/agent/test_usage_guard_delivery.py (1✓, 0.2s)
+[ 94.6% |    35/~37 | ✓64 | ✗ 0] ✓ tests/agent/test_usage_guard_deploy.py (2✓, 0.2s)
+[100.0% |    37/~37 | ✓66 | ✗ 0] ✓ tests/agent/test_usage_guard_sources.py (2✓, 0.3s)
+
+=== Summary: 12 files, 66 tests passed, 0 failed (100% complete) in 31.6s (1 workers) ===
+  Durations cached to test_durations.json (12 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   12
+  Total subprocess CPU-wall: 31.6s  (runner wall: 31.6s, parallelism: 1x)
+  P50: 0.54s  P90: 5.05s  P95: 19.54s  P99: 19.54s  Max: 19.54s
+  <1s: 8 files (67%)  <2s: 9 files (75%)
+  Top 10 slowest:
+     19.54s  tests/agent/test_auxiliary_owned_cancel.py
+      5.05s  tests/agent/test_auxiliary_stream_lifetime.py
+      2.78s  tests/agent/test_provider_presocket.py
+      1.15s  tests/agent/test_provider_control_concurrency.py
+      0.66s  tests/agent/test_usage_guard.py
+      0.54s  tests/agent/test_provider_control_races.py
+      0.46s  tests/agent/test_provider_control.py
+      0.39s  tests/agent/test_usage_guard_cli.py
+      0.30s  tests/agent/test_usage_guard_sources.py
+      0.25s  tests/agent/test_provider_admission.py

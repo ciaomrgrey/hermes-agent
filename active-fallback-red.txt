@@ -1,0 +1,181 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~5 tests) under ['tests/agent/test_auxiliary_owned_cancel.py']; running with -j 1
+[100.0% |     5/~5 | ✓0 | ✗2] ✗ tests/agent/test_auxiliary_owned_cancel.py (2✗, 18.9s)
+
+  ╔╍ Failed: tests/agent/test_auxiliary_owned_cancel.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║                                 return await aux._relay_async_completion(client, dict(model='fixture',messages=[]),provider='xai')
+  ║                             finally:
+  ║                                 await client.close()
+  ║                         asyncio.run(run())
+  ║                     else:
+  ║                         client = OpenAI(api_key='synthetic', base_url=url, max_retries=0, timeout=5)
+  ║                         try:
+  ║                             aux._relay_sync_completion(client, dict(model='fixture',messages=[]),provider='xai')
+  ║                         finally:
+  ║                             client.close()
+  ║                     outcomes.append('late-result')
+  ║                 except BaseException as exc:
+  ║                     outcomes.append(type(exc).__name__)
+  ║         worker = threading.Thread(target=owner, daemon=True)
+  ║         worker.start()
+  ║         try:
+  ║             assert entered.wait(15)
+  ║             with sqlite3.connect(db) as conn:
+  ║                 conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
+  ║ >           assert peer_closed.wait(2), 'fallback continued under original provider hold'
+  ║ E           AssertionError: fallback continued under original provider hold
+  ║ E           assert False
+  ║ E            +  where False = wait(2)
+  ║ E            +    where wait = <threading.Event at 0x109bc8390: unset>.wait
+  ║ 
+  ║ tests/agent/test_auxiliary_owned_cancel.py:248: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_auxiliary_owned_cancel.py::test_active_fallback_retains_original_hold[False]
+  ║ FAILED tests/agent/test_auxiliary_owned_cancel.py::test_active_fallback_retains_original_hold[True]
+  ║ ======================= 2 failed, 23 deselected in 8.93s =======================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_auxiliary_owned_cancel.py -k active_fallback
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 2 failed (100% complete) in 18.9s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 18.9s  (runner wall: 18.9s, parallelism: 1x)
+  P50: 18.85s  P90: 18.85s  P95: 18.85s  P99: 18.85s  Max: 18.85s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+     18.85s  tests/agent/test_auxiliary_owned_cancel.py
+
+=== Failure output ===
+
+--- tests/agent/test_auxiliary_owned_cancel.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 25 items / 23 deselected / 2 selected
+
+tests/agent/test_auxiliary_owned_cancel.py FF                            [100%]
+
+=================================== FAILURES ===================================
+______________ test_active_fallback_retains_original_hold[False] _______________
+
+hang_server = ('http://127.0.0.1:56876', <threading.Event at 0x106f89b50: set>, <threading.Event at 0x106f89ad0: unset>, ['/chat/completions'])
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-tjvfrvo5/pytest-of-claudia/pytest-0/test_active_fallback_retains_o0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109171690>
+async_mode = False
+
+    @pytest.mark.parametrize('async_mode', [False, True])
+    def test_active_fallback_retains_original_hold(hang_server, tmp_path, monkeypatch, async_mode):
+        import asyncio
+        import sqlite3
+        from types import SimpleNamespace
+        url, entered, peer_closed, paths = hang_server
+        db = tmp_path/'control.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        policy = provider_control.Policy(db, ('openai-codex',))
+        monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+        outcomes = []
+        def owner():
+            with policy.track(SimpleNamespace(provider='openai-codex')):
+                try:
+                    if async_mode:
+                        from openai import AsyncOpenAI
+                        async def run():
+                            client = AsyncOpenAI(api_key='synthetic', base_url=url, max_retries=0, timeout=5)
+                            try:
+                                return await aux._relay_async_completion(client, dict(model='fixture',messages=[]),provider='xai')
+                            finally:
+                                await client.close()
+                        asyncio.run(run())
+                    else:
+                        client = OpenAI(api_key='synthetic', base_url=url, max_retries=0, timeout=5)
+                        try:
+                            aux._relay_sync_completion(client, dict(model='fixture',messages=[]),provider='xai')
+                        finally:
+                            client.close()
+                    outcomes.append('late-result')
+                except BaseException as exc:
+                    outcomes.append(type(exc).__name__)
+        worker = threading.Thread(target=owner, daemon=True)
+        worker.start()
+        try:
+            assert entered.wait(15)
+            with sqlite3.connect(db) as conn:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
+>           assert peer_closed.wait(2), 'fallback continued under original provider hold'
+E           AssertionError: fallback continued under original provider hold
+E           assert False
+E            +  where False = wait(2)
+E            +    where wait = <threading.Event at 0x106f89ad0: unset>.wait
+
+tests/agent/test_auxiliary_owned_cancel.py:248: AssertionError
+_______________ test_active_fallback_retains_original_hold[True] _______________
+
+hang_server = ('http://127.0.0.1:56881', <threading.Event at 0x109bc8290: set>, <threading.Event at 0x109bc8390: unset>, ['/chat/completions'])
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-tjvfrvo5/pytest-of-claudia/pytest-0/test_active_fallback_retains_o1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1091c8b50>
+async_mode = True
+
+    @pytest.mark.parametrize('async_mode', [False, True])
+    def test_active_fallback_retains_original_hold(hang_server, tmp_path, monkeypatch, async_mode):
+        import asyncio
+        import sqlite3
+        from types import SimpleNamespace
+        url, entered, peer_closed, paths = hang_server
+        db = tmp_path/'control.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        policy = provider_control.Policy(db, ('openai-codex',))
+        monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+        outcomes = []
+        def owner():
+            with policy.track(SimpleNamespace(provider='openai-codex')):
+                try:
+                    if async_mode:
+                        from openai import AsyncOpenAI
+                        async def run():
+                            client = AsyncOpenAI(api_key='synthetic', base_url=url, max_retries=0, timeout=5)
+                            try:
+                                return await aux._relay_async_completion(client, dict(model='fixture',messages=[]),provider='xai')
+                            finally:
+                                await client.close()
+                        asyncio.run(run())
+                    else:
+                        client = OpenAI(api_key='synthetic', base_url=url, max_retries=0, timeout=5)
+                        try:
+                            aux._relay_sync_completion(client, dict(model='fixture',messages=[]),provider='xai')
+                        finally:
+                            client.close()
+                    outcomes.append('late-result')
+                except BaseException as exc:
+                    outcomes.append(type(exc).__name__)
+        worker = threading.Thread(target=owner, daemon=True)
+        worker.start()
+        try:
+            assert entered.wait(15)
+            with sqlite3.connect(db) as conn:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
+>           assert peer_closed.wait(2), 'fallback continued under original provider hold'
+E           AssertionError: fallback continued under original provider hold
+E           assert False
+E            +  where False = wait(2)
+E            +    where wait = <threading.Event at 0x109bc8390: unset>.wait
+
+tests/agent/test_auxiliary_owned_cancel.py:248: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_auxiliary_owned_cancel.py::test_active_fallback_retains_original_hold[False]
+FAILED tests/agent/test_auxiliary_owned_cancel.py::test_active_fallback_retains_original_hold[True]
+======================= 2 failed, 23 deselected in 8.93s =======================
+
+=== 1 file with test failures (2 tests failed) ===
+  tests/agent/test_auxiliary_owned_cancel.py  (2 tests failed)

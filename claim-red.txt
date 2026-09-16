@@ -1,0 +1,98 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~2 tests) under ['tests/agent/test_usage_guard_sources.py']; running with -j 1
+[100.0% |     2/~2 | ✓1 | ✗1] ✗ tests/agent/test_usage_guard_sources.py (1✓ 1✗, 0.7s)
+
+  ╔╍ Failed: tests/agent/test_usage_guard_sources.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║ tests/agent/test_usage_guard_sources.py .F                               [100%]
+  ║ 
+  ║ =================================== FAILURES ===================================
+  ║ ________ test_codex_native_claim_binds_rotations_and_rejects_conflicts _________
+  ║ 
+  ║ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b7c8850>
+  ║ 
+  ║     def test_codex_native_claim_binds_rotations_and_rejects_conflicts(monkeypatch):
+  ║         import base64
+  ║         import json
+  ║         from agent import usage_guard_sources as source, account_usage as native
+  ║         payload = base64.urlsafe_b64encode(json.dumps({'https://api.openai.com/auth': {'chatgpt_account_id': 'synthetic-A'}}).encode()).decode()
+  ║         credential = ['synthetic.'+payload+'.rotation1', None]
+  ║         monkeypatch.setattr(native, '_resolve_codex_usage_credentials', lambda *args: (credential[0], '', credential[1]))
+  ║         monkeypatch.setattr(source.time, 'time', lambda: 1789550000)
+  ║         requested = []
+  ║         def fetch(url, headers, **kwargs):
+  ║             requested.append(headers.get('ChatGPT-Account-Id'))
+  ║             return {'rate_limit': {'primary_window': {'used_percent': .5, 'limit_window_seconds': 604800, 'reset_at': 1789772400}}}
+  ║         monkeypatch.setattr(native, '_get_json', fetch)
+  ║         first = source.fetch('openai-codex')
+  ║         credential[0] = 'synthetic.'+payload+'.rotation2'
+  ║         second = source.fetch('openai-codex')
+  ║ >       assert first['account'] == second['account'] == first['grant']
+  ║ E       AssertionError: assert None == 'c486f8286746986e1c116dbfd41e4b9d608826ac33ae288678fe6e2abcc71cba'
+  ║ 
+  ║ tests/agent/test_usage_guard_sources.py:44: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_usage_guard_sources.py::test_codex_native_claim_binds_rotations_and_rejects_conflicts
+  ║ ========================= 1 failed, 1 passed in 0.17s ==========================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_usage_guard_sources.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 1 tests passed, 1 failed (100% complete) in 0.7s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 0.7s  (runner wall: 0.7s, parallelism: 1x)
+  P50: 0.67s  P90: 0.67s  P95: 0.67s  P99: 0.67s  Max: 0.67s
+  <1s: 1 files (100%)  <2s: 1 files (100%)
+  Top 10 slowest:
+      0.67s  tests/agent/test_usage_guard_sources.py
+
+=== Failure output ===
+
+--- tests/agent/test_usage_guard_sources.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 2 items
+
+tests/agent/test_usage_guard_sources.py .F                               [100%]
+
+=================================== FAILURES ===================================
+________ test_codex_native_claim_binds_rotations_and_rejects_conflicts _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b7c8850>
+
+    def test_codex_native_claim_binds_rotations_and_rejects_conflicts(monkeypatch):
+        import base64
+        import json
+        from agent import usage_guard_sources as source, account_usage as native
+        payload = base64.urlsafe_b64encode(json.dumps({'https://api.openai.com/auth': {'chatgpt_account_id': 'synthetic-A'}}).encode()).decode()
+        credential = ['synthetic.'+payload+'.rotation1', None]
+        monkeypatch.setattr(native, '_resolve_codex_usage_credentials', lambda *args: (credential[0], '', credential[1]))
+        monkeypatch.setattr(source.time, 'time', lambda: 1789550000)
+        requested = []
+        def fetch(url, headers, **kwargs):
+            requested.append(headers.get('ChatGPT-Account-Id'))
+            return {'rate_limit': {'primary_window': {'used_percent': .5, 'limit_window_seconds': 604800, 'reset_at': 1789772400}}}
+        monkeypatch.setattr(native, '_get_json', fetch)
+        first = source.fetch('openai-codex')
+        credential[0] = 'synthetic.'+payload+'.rotation2'
+        second = source.fetch('openai-codex')
+>       assert first['account'] == second['account'] == first['grant']
+E       AssertionError: assert None == 'c486f8286746986e1c116dbfd41e4b9d608826ac33ae288678fe6e2abcc71cba'
+
+tests/agent/test_usage_guard_sources.py:44: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_usage_guard_sources.py::test_codex_native_claim_binds_rotations_and_rejects_conflicts
+========================= 1 failed, 1 passed in 0.17s ==========================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_usage_guard_sources.py  (1 test failed)

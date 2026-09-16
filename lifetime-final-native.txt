@@ -1,0 +1,29 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 7 test files (~225 tests) under ['tests/agent/test_auxiliary_client.py', 'tests/agent/test_auxiliary_explicit_cancellation.py', 'tests/agent/test_shared_http_transport.py', 'tests/run_agent/test_openai_client_lifecycle.py', 'tests/agent/test_turn_facade_lease.py', 'tests/agent/test_cascading_interrupt_6600.py', 'tests/run_agent/test_cross_process_turn_lease.py']; running with -j 1
+[ 81.3% |   183/~225 | ✓204 | ✗  0] ✓ tests/agent/test_auxiliary_client.py (204✓, 6.8s)
+[ 86.7% |   195/~225 | ✓217 | ✗  0] ✓ tests/agent/test_auxiliary_explicit_cancellation.py (13✓, 1.9s)
+[ 87.6% |   197/~225 | ✓219 | ✗  0] ✓ tests/agent/test_cascading_interrupt_6600.py (2✓, 3.5s)
+[ 90.7% |   204/~225 | ✓226 | ✗  0] ✓ tests/agent/test_shared_http_transport.py (7✓, 2.0s)
+[ 92.4% |   208/~225 | ✓230 | ✗  0] ✓ tests/agent/test_turn_facade_lease.py (4✓, 0.3s)
+[ 97.8% |   220/~225 | ✓242 | ✗  0] ✓ tests/run_agent/test_cross_process_turn_lease.py (12✓, 1.8s)
+[100.0% |   225/~225 | ✓247 | ✗  0] ✓ tests/run_agent/test_openai_client_lifecycle.py (5✓, 1.2s)
+
+=== Summary: 7 files, 247 tests passed, 0 failed (100% complete) in 17.5s (1 workers) ===
+  Durations cached to test_durations.json (7 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   7
+  Total subprocess CPU-wall: 17.5s  (runner wall: 17.5s, parallelism: 1x)
+  P50: 1.87s  P90: 6.85s  P95: 6.85s  P99: 6.85s  Max: 6.85s
+  <1s: 1 files (14%)  <2s: 4 files (57%)
+  Top 10 slowest:
+      6.85s  tests/agent/test_auxiliary_client.py
+      3.53s  tests/agent/test_cascading_interrupt_6600.py
+      2.03s  tests/agent/test_shared_http_transport.py
+      1.87s  tests/agent/test_auxiliary_explicit_cancellation.py
+      1.80s  tests/run_agent/test_cross_process_turn_lease.py
+      1.16s  tests/run_agent/test_openai_client_lifecycle.py
+      0.25s  tests/agent/test_turn_facade_lease.py

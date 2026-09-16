@@ -1,0 +1,114 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 3 test files (~202 tests) under ['tests/agent/test_auxiliary_client.py', 'tests/agent/test_auxiliary_explicit_cancellation.py', 'tests/agent/test_shared_http_transport.py']; running with -j 1
+[ 90.6% |   183/~202 | ✓203 | ✗  1] ✗ tests/agent/test_auxiliary_client.py (203✓ 1✗, 50.0s)
+
+  ╔╍ Failed: tests/agent/test_auxiliary_client.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║             def __iter__(self):
+  ║                 for _ in range(5):
+  ║                     time.sleep(0.03)
+  ║                     yield SimpleNamespace(type="response.in_progress")
+  ║     
+  ║             def close(self): pass
+  ║     
+  ║         class FakeResponses:
+  ║             def create(self, **kwargs):
+  ║                 return _SlowAliveCreateStream()
+  ║     
+  ║         fake_client = SimpleNamespace(responses=FakeResponses(), close=lambda: None)
+  ║         adapter = _CodexCompletionsAdapter(fake_client, "gpt-5.5")
+  ║     
+  ║         started = time.monotonic()
+  ║         with pytest.raises(TimeoutError):
+  ║             adapter.create(
+  ║                 messages=[{"role": "user", "content": "summarize this"}],
+  ║                 timeout=0.05,
+  ║             )
+  ║     
+  ║ >       assert time.monotonic() - started < 0.14
+  ║ E       assert (23270.157250708 - 23269.984059875) < 0.14
+  ║ E        +  where 23270.157250708 = <built-in function monotonic>()
+  ║ E        +    where <built-in function monotonic> = time.monotonic
+  ║ 
+  ║ tests/agent/test_auxiliary_client.py:3475: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_auxiliary_client.py::TestCodexAuxiliaryAdapterTimeout::test_enforces_total_timeout_while_stream_keeps_emitting_events
+  ║ ======================== 1 failed, 203 passed in 17.98s ========================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_auxiliary_client.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+[ 96.5% |   195/~202 | ✓216 | ✗  1] ✓ tests/agent/test_auxiliary_explicit_cancellation.py (13✓, 6.0s)
+[100.0% |   202/~202 | ✓223 | ✗  1] ✓ tests/agent/test_shared_http_transport.py (7✓, 5.7s)
+
+=== Summary: 3 files, 223 tests passed, 1 failed (100% complete) in 61.8s (1 workers) ===
+  Durations cached to test_durations.json (3 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   3
+  Total subprocess CPU-wall: 61.7s  (runner wall: 61.8s, parallelism: 1x)
+  P50: 6.02s  P90: 50.03s  P95: 50.03s  P99: 50.03s  Max: 50.03s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+     50.03s  tests/agent/test_auxiliary_client.py
+      6.02s  tests/agent/test_auxiliary_explicit_cancellation.py
+      5.68s  tests/agent/test_shared_http_transport.py
+
+=== Failure output ===
+
+--- tests/agent/test_auxiliary_client.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 204 items
+
+tests/agent/test_auxiliary_client.py ................................... [ 17%]
+........................................................................ [ 52%]
+.................................................F...................... [ 87%]
+.........................                                                [100%]
+
+=================================== FAILURES ===================================
+_ TestCodexAuxiliaryAdapterTimeout.test_enforces_total_timeout_while_stream_keeps_emitting_events _
+
+self = <tests.agent.test_auxiliary_client.TestCodexAuxiliaryAdapterTimeout object at 0x10836b690>
+
+    def test_enforces_total_timeout_while_stream_keeps_emitting_events(self):
+        class _SlowAliveCreateStream:
+            def __iter__(self):
+                for _ in range(5):
+                    time.sleep(0.03)
+                    yield SimpleNamespace(type="response.in_progress")
+    
+            def close(self): pass
+    
+        class FakeResponses:
+            def create(self, **kwargs):
+                return _SlowAliveCreateStream()
+    
+        fake_client = SimpleNamespace(responses=FakeResponses(), close=lambda: None)
+        adapter = _CodexCompletionsAdapter(fake_client, "gpt-5.5")
+    
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            adapter.create(
+                messages=[{"role": "user", "content": "summarize this"}],
+                timeout=0.05,
+            )
+    
+>       assert time.monotonic() - started < 0.14
+E       assert (23270.157250708 - 23269.984059875) < 0.14
+E        +  where 23270.157250708 = <built-in function monotonic>()
+E        +    where <built-in function monotonic> = time.monotonic
+
+tests/agent/test_auxiliary_client.py:3475: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_auxiliary_client.py::TestCodexAuxiliaryAdapterTimeout::test_enforces_total_timeout_while_stream_keeps_emitting_events
+======================== 1 failed, 203 passed in 17.98s ========================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_auxiliary_client.py  (1 test failed)

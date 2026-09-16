@@ -1,0 +1,111 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~6 tests) under ['tests/agent/test_auxiliary_owned_cancel.py']; running with -j 1
+[100.0% |     6/~6 | ✓0 | ✗1] ✗ tests/agent/test_auxiliary_owned_cancel.py (1✗, 10.4s)
+
+  ╔╍ Failed: tests/agent/test_auxiliary_owned_cancel.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║         with sqlite3.connect(db) as conn:
+  ║             conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+  ║         policy = provider_control.Policy(db, ('openai-codex',))
+  ║         monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+  ║         client = OpenAI(api_key='synthetic', base_url=url, max_retries=0, timeout=5)
+  ║         stream = aux._relay_sync_completion(client, dict(model='fixture', messages=[], stream=True), provider='openai-codex')
+  ║         reading = threading.Event()
+  ║         outcomes = []
+  ║         def read():
+  ║             reading.set()
+  ║             try:
+  ║                 next(stream)
+  ║             except BaseException as exc:
+  ║                 outcomes.append(type(exc).__name__)
+  ║         reader = threading.Thread(target=read, daemon=True)
+  ║         closer = threading.Thread(target=stream.close, daemon=True)
+  ║         reader.start()
+  ║         assert reading.wait(2)
+  ║         closer.start()
+  ║         try:
+  ║ >           assert peer_closed.wait(2), 'explicit close blocked behind hung reader'
+  ║ E           AssertionError: explicit close blocked behind hung reader
+  ║ E           assert False
+  ║ E            +  where False = wait(2)
+  ║ E            +    where wait = <threading.Event at 0x108de4c10: unset>.wait
+  ║ 
+  ║ tests/agent/test_auxiliary_owned_cancel.py:233: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_auxiliary_owned_cancel.py::test_explicit_close_interrupts_blocked_raw_reader
+  ║ ======================= 1 failed, 25 deselected in 4.92s =======================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_auxiliary_owned_cancel.py -k explicit_close
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 1 failed (100% complete) in 10.4s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 10.4s  (runner wall: 10.4s, parallelism: 1x)
+  P50: 10.36s  P90: 10.36s  P95: 10.36s  P99: 10.36s  Max: 10.36s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+     10.36s  tests/agent/test_auxiliary_owned_cancel.py
+
+=== Failure output ===
+
+--- tests/agent/test_auxiliary_owned_cancel.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 26 items / 25 deselected / 1 selected
+
+tests/agent/test_auxiliary_owned_cancel.py F                             [100%]
+
+=================================== FAILURES ===================================
+______________ test_explicit_close_interrupts_blocked_raw_reader _______________
+
+hang_server = ('http://127.0.0.1:57031', <threading.Event at 0x108de4a10: set>, <threading.Event at 0x108de4c10: unset>, ['/chat/completions'])
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-fmrht4p5/pytest-of-claudia/pytest-0/test_explicit_close_interrupts0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b02ded0>
+
+    def test_explicit_close_interrupts_blocked_raw_reader(hang_server, tmp_path, monkeypatch):
+        import sqlite3
+        url, entered, peer_closed, paths = hang_server
+        db = tmp_path/'control.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        policy = provider_control.Policy(db, ('openai-codex',))
+        monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+        client = OpenAI(api_key='synthetic', base_url=url, max_retries=0, timeout=5)
+        stream = aux._relay_sync_completion(client, dict(model='fixture', messages=[], stream=True), provider='openai-codex')
+        reading = threading.Event()
+        outcomes = []
+        def read():
+            reading.set()
+            try:
+                next(stream)
+            except BaseException as exc:
+                outcomes.append(type(exc).__name__)
+        reader = threading.Thread(target=read, daemon=True)
+        closer = threading.Thread(target=stream.close, daemon=True)
+        reader.start()
+        assert reading.wait(2)
+        closer.start()
+        try:
+>           assert peer_closed.wait(2), 'explicit close blocked behind hung reader'
+E           AssertionError: explicit close blocked behind hung reader
+E           assert False
+E            +  where False = wait(2)
+E            +    where wait = <threading.Event at 0x108de4c10: unset>.wait
+
+tests/agent/test_auxiliary_owned_cancel.py:233: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_auxiliary_owned_cancel.py::test_explicit_close_interrupts_blocked_raw_reader
+======================= 1 failed, 25 deselected in 4.92s =======================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_auxiliary_owned_cancel.py  (1 test failed)

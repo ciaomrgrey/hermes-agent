@@ -1,0 +1,167 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~3 tests) under ['tests/agent/test_auxiliary_owned_cancel.py']; running with -j 1
+[100.0% |     3/~3 | ✓0 | ✗1] ✗ tests/agent/test_auxiliary_owned_cancel.py (1✗, 10.3s)
+
+  ╔╍ Failed: tests/agent/test_auxiliary_owned_cancel.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║                         call(dict(model='fixture', max_tokens=16, messages=[dict(role='user',content='local only')]))
+  ║                     outcomes.append('late-result')
+  ║                     return
+  ║                 with aux.aux_progress_hook((lambda: None) if wire == 'openai-sse' else None):
+  ║                     request = dict(model='fixture', max_tokens=16, messages=[dict(role='user',content='local only')])
+  ║                     if wire == 'raw-openai-sse':
+  ║                         request['stream'] = True
+  ║                     response = aux._relay_sync_completion(client, request, provider=provider)
+  ║                     if wire == 'raw-openai-sse':
+  ║                         for _ in response:
+  ║                             pass
+  ║                 outcomes.append('late-result')
+  ║             except BaseException as exc:
+  ║                 outcomes.append(type(exc).__name__)
+  ║         worker = threading.Thread(target=owner, daemon=True)
+  ║         worker.start()
+  ║         try:
+  ║             assert entered.wait(15), f'request never reached local server: {outcomes}'
+  ║             with sqlite3.connect(db) as conn:
+  ║                 conn.execute('INSERT INTO holds VALUES(?,?,?)', (provider,1,'synthetic'))
+  ║ >           assert peer_closed.wait(2), 'owner-only cancel: server still sees open provider socket'
+  ║ E           AssertionError: owner-only cancel: server still sees open provider socket
+  ║ E           assert False
+  ║ E            +  where False = wait(2)
+  ║ E            +    where wait = <threading.Event at 0x1073b49d0: unset>.wait
+  ║ 
+  ║ tests/agent/test_auxiliary_owned_cancel.py:135: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_auxiliary_owned_cancel.py::test_hold_tears_down_nonstream_socket_and_preserves_sibling[raw-openai-sse]
+  ║ ======================= 1 failed, 18 deselected in 4.91s =======================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_auxiliary_owned_cancel.py -k raw-openai-sse
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 1 failed (100% complete) in 10.3s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 10.3s  (runner wall: 10.3s, parallelism: 1x)
+  P50: 10.32s  P90: 10.32s  P95: 10.32s  P99: 10.32s  Max: 10.32s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+     10.32s  tests/agent/test_auxiliary_owned_cancel.py
+
+=== Failure output ===
+
+--- tests/agent/test_auxiliary_owned_cancel.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 19 items / 18 deselected / 1 selected
+
+tests/agent/test_auxiliary_owned_cancel.py F                             [100%]
+
+=================================== FAILURES ===================================
+_ test_hold_tears_down_nonstream_socket_and_preserves_sibling[raw-openai-sse] __
+
+hang_server = ('http://127.0.0.1:56339', <threading.Event at 0x1073b4dd0: set>, <threading.Event at 0x1073b49d0: unset>, ['/chat/completions'])
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-ndk16ktb/pytest-of-claudia/pytest-0/test_hold_tears_down_nonstream0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1095a6710>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x1073c6550>
+wire = 'raw-openai-sse'
+
+    @pytest.mark.parametrize('wire', ['openai-block', 'openai-sse', 'codex', 'anthropic', 'main-block', 'main-sse', 'main-inline', 'main-inline-sse', 'async-openai', 'async-codex', 'async-anthropic', 'main-anthropic', 'main-sse-anthropic', 'main-inline-anthropic', 'main-inline-sse-anthropic', 'raw-openai-sse'])
+    def test_hold_tears_down_nonstream_socket_and_preserves_sibling(hang_server, tmp_path, monkeypatch, caplog, wire):
+        import sqlite3
+        url, entered, peer_closed, paths = hang_server
+        db = tmp_path/'control.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        provider = 'anthropic' if wire.endswith('anthropic') else 'openai-codex'
+        policy = provider_control.Policy(db, (provider,))
+        monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+        if wire.endswith('anthropic'):
+            from anthropic import Anthropic
+            original = Anthropic(api_key='synthetic-not-a-secret', base_url=url,
+                                 http_client=build_keepalive_http_client(url), max_retries=0, timeout=5)
+            client = aux.AnthropicAuxiliaryClient(original, 'fixture', 'synthetic-not-a-secret', url)
+        else:
+            original = OpenAI(api_key='synthetic-not-a-secret', base_url=url,
+                              http_client=build_keepalive_http_client(url), max_retries=0, timeout=5)
+            client = aux.CodexAuxiliaryClient(original, 'fixture') if 'codex' in wire else original
+        sibling = build_keepalive_http_client(url)
+        outcomes = []
+        def owner():
+            try:
+                if wire == 'async-openai':
+                    import asyncio
+                    from openai import AsyncOpenAI
+                    async def call_async():
+                        async_client = AsyncOpenAI(api_key='synthetic-not-a-secret', base_url=url, max_retries=0,
+                                                   http_client=build_keepalive_http_client(url, async_mode=True))
+                        try:
+                            return await aux._relay_async_completion(async_client,
+                                dict(model='fixture', messages=[dict(role='user', content='local only')]), provider=provider)
+                        finally:
+                            await async_client.close()
+                    asyncio.run(call_async())
+                    outcomes.append('late-result')
+                    return
+                if wire in ('async-codex','async-anthropic'):
+                    import asyncio
+                    wrapper = aux.AsyncCodexAuxiliaryClient if wire == 'async-codex' else aux.AsyncAnthropicAuxiliaryClient
+                    asyncio.run(aux._relay_async_completion(wrapper(client),
+                        dict(model='fixture',max_tokens=16,messages=[dict(role='user',content='local only')]),provider=provider))
+                    outcomes.append('late-result')
+                    return
+                if wire.startswith('main-'):
+                    from tests.run_agent.test_openai_client_lifecycle import _build_agent
+                    agent = _build_agent(original)
+                    agent.base_url = url
+                    agent._client_kwargs = dict(api_key='synthetic-not-a-secret', base_url=url)
+                    if wire.endswith('anthropic'):
+                        setattr(agent, 'provider', provider)
+                        agent.api_mode = 'anthropic_messages'
+                        agent._anthropic_api_key, agent._anthropic_base_url = 'synthetic-not-a-secret', url
+                        agent._try_refresh_anthropic_client_credentials = lambda: False
+                    if 'inline' in wire:
+                        agent.platform = 'cron'
+                    with policy.track(agent):
+                        call = agent._interruptible_streaming_api_call if 'sse' in wire else agent._interruptible_api_call
+                        call(dict(model='fixture', max_tokens=16, messages=[dict(role='user',content='local only')]))
+                    outcomes.append('late-result')
+                    return
+                with aux.aux_progress_hook((lambda: None) if wire == 'openai-sse' else None):
+                    request = dict(model='fixture', max_tokens=16, messages=[dict(role='user',content='local only')])
+                    if wire == 'raw-openai-sse':
+                        request['stream'] = True
+                    response = aux._relay_sync_completion(client, request, provider=provider)
+                    if wire == 'raw-openai-sse':
+                        for _ in response:
+                            pass
+                outcomes.append('late-result')
+            except BaseException as exc:
+                outcomes.append(type(exc).__name__)
+        worker = threading.Thread(target=owner, daemon=True)
+        worker.start()
+        try:
+            assert entered.wait(15), f'request never reached local server: {outcomes}'
+            with sqlite3.connect(db) as conn:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)', (provider,1,'synthetic'))
+>           assert peer_closed.wait(2), 'owner-only cancel: server still sees open provider socket'
+E           AssertionError: owner-only cancel: server still sees open provider socket
+E           assert False
+E            +  where False = wait(2)
+E            +    where wait = <threading.Event at 0x1073b49d0: unset>.wait
+
+tests/agent/test_auxiliary_owned_cancel.py:135: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_auxiliary_owned_cancel.py::test_hold_tears_down_nonstream_socket_and_preserves_sibling[raw-openai-sse]
+======================= 1 failed, 18 deselected in 4.91s =======================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_auxiliary_owned_cancel.py  (1 test failed)

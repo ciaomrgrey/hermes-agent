@@ -1,0 +1,23 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 4 test files (~16 tests) under ['tests/agent/test_auxiliary_owned_cancel.py', 'tests/agent/test_auxiliary_stream_lifetime.py', 'tests/agent/test_provider_control.py', 'tests/agent/test_provider_control_races.py']; running with -j 1
+[ 37.5% |     6/~16 | ✓26 | ✗ 0] ✓ tests/agent/test_auxiliary_owned_cancel.py (26✓, 19.5s)
+[ 43.8% |     7/~16 | ✓34 | ✗ 0] ✓ tests/agent/test_auxiliary_stream_lifetime.py (8✓, 5.2s)
+[ 93.8% |    15/~16 | ✓42 | ✗ 0] ✓ tests/agent/test_provider_control.py (8✓, 0.5s)
+[100.0% |    16/~16 | ✓45 | ✗ 0] ✓ tests/agent/test_provider_control_races.py (3✓, 0.5s)
+
+=== Summary: 4 files, 45 tests passed, 0 failed (100% complete) in 25.7s (1 workers) ===
+  Durations cached to test_durations.json (4 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   4
+  Total subprocess CPU-wall: 25.7s  (runner wall: 25.7s, parallelism: 1x)
+  P50: 5.15s  P90: 19.53s  P95: 19.53s  P99: 19.53s  Max: 19.53s
+  <1s: 2 files (50%)  <2s: 2 files (50%)
+  Top 10 slowest:
+     19.53s  tests/agent/test_auxiliary_owned_cancel.py
+      5.15s  tests/agent/test_auxiliary_stream_lifetime.py
+      0.52s  tests/agent/test_provider_control_races.py
+      0.48s  tests/agent/test_provider_control.py

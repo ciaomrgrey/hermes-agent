@@ -1,0 +1,456 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~4 tests) under ['tests/agent/test_auxiliary_owned_cancel.py']; running with -j 1
+[100.0% |     4/~4 | ✓0 | ✗3] ✗ tests/agent/test_auxiliary_owned_cancel.py (3✗, 8.5s)
+
+  ╔╍ Failed: tests/agent/test_auxiliary_owned_cancel.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║         global HTTPCORE_EXC_MAP
+  ║         if len(HTTPCORE_EXC_MAP) == 0:
+  ║             HTTPCORE_EXC_MAP = _load_httpcore_exceptions()
+  ║         try:
+  ║             yield
+  ║         except Exception as exc:
+  ║             mapped_exc = None
+  ║     
+  ║             for from_exc, to_exc in HTTPCORE_EXC_MAP.items():
+  ║                 if not isinstance(exc, from_exc):
+  ║                     continue
+  ║                 # We want to map to the most specific exception we can find.
+  ║                 # Eg if `exc` is an `httpcore.ReadTimeout`, we want to map to
+  ║                 # `httpx.ReadTimeout`, not just `httpx.TimeoutException`.
+  ║                 if mapped_exc is None or issubclass(to_exc, mapped_exc):
+  ║                     mapped_exc = to_exc
+  ║     
+  ║             if mapped_exc is None:  # pragma: no cover
+  ║                 raise
+  ║     
+  ║             message = str(exc)
+  ║ >           raise mapped_exc(message) from exc
+  ║ E           httpx.ReadError
+  ║ 
+  ║ .venv/lib/python3.11/site-packages/httpx/_transports/default.py:118: ReadError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_auxiliary_owned_cancel.py::test_returned_stream_lifetime_hold[sync-idle]
+  ║ FAILED tests/agent/test_auxiliary_owned_cancel.py::test_returned_stream_lifetime_hold[async-idle]
+  ║ FAILED tests/agent/test_auxiliary_owned_cancel.py::test_returned_stream_lifetime_hold[async-read]
+  ║ ======================= 3 failed, 19 deselected in 4.04s =======================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_auxiliary_owned_cancel.py -k returned_stream_lifetime
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 3 failed (100% complete) in 8.5s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 8.5s  (runner wall: 8.5s, parallelism: 1x)
+  P50: 8.54s  P90: 8.54s  P95: 8.54s  P99: 8.54s  Max: 8.54s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+      8.54s  tests/agent/test_auxiliary_owned_cancel.py
+
+=== Failure output ===
+
+--- tests/agent/test_auxiliary_owned_cancel.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 22 items / 19 deselected / 3 selected
+
+tests/agent/test_auxiliary_owned_cancel.py FFF                           [100%]
+
+=================================== FAILURES ===================================
+________________ test_returned_stream_lifetime_hold[sync-idle] _________________
+
+hang_server = ('http://127.0.0.1:56446', <threading.Event at 0x109008350: set>, <threading.Event at 0x109008510: unset>, ['/chat/completions'])
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-3toki9ih/pytest-of-claudia/pytest-0/test_returned_stream_lifetime_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b1e7f90>
+mode = 'sync-idle'
+
+    @pytest.mark.parametrize('mode', ['sync-idle', 'async-idle', 'async-read'])
+    def test_returned_stream_lifetime_hold(hang_server, tmp_path, monkeypatch, mode):
+        import asyncio
+        import sqlite3
+        from agent import auxiliary_control as control
+        url, entered, peer_closed, paths = hang_server
+        db = tmp_path/'control.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        policy = provider_control.Policy(db, ('openai-codex',))
+        monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+        def hold():
+            with sqlite3.connect(db) as conn:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
+        request = dict(model='fixture', messages=[], stream=True)
+        if mode == 'sync-idle':
+            client = OpenAI(api_key='synthetic', base_url=url, max_retries=0,
+                            http_client=build_keepalive_http_client(url), timeout=5)
+            try:
+                stream = aux._relay_sync_completion(client, request, provider='openai-codex')
+                assert entered.wait(2)
+                hold()
+>               assert peer_closed.wait(2), 'idle stream socket remains open'
+E               AssertionError: idle stream socket remains open
+E               assert False
+E                +  where False = wait(2)
+E                +    where wait = <threading.Event at 0x109008510: unset>.wait
+
+tests/agent/test_auxiliary_owned_cancel.py:173: AssertionError
+________________ test_returned_stream_lifetime_hold[async-idle] ________________
+
+    @contextlib.contextmanager
+    def map_httpcore_exceptions() -> typing.Iterator[None]:
+        global HTTPCORE_EXC_MAP
+        if len(HTTPCORE_EXC_MAP) == 0:
+            HTTPCORE_EXC_MAP = _load_httpcore_exceptions()
+        try:
+>           yield
+
+.venv/lib/python3.11/site-packages/httpx/_transports/default.py:101: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.venv/lib/python3.11/site-packages/httpx/_transports/default.py:271: in __aiter__
+    async for part in self._httpcore_stream:
+.venv/lib/python3.11/site-packages/httpcore/_async/connection_pool.py:407: in __aiter__
+    raise exc from None
+.venv/lib/python3.11/site-packages/httpcore/_async/connection_pool.py:403: in __aiter__
+    async for part in self._stream:
+.venv/lib/python3.11/site-packages/httpcore/_async/http11.py:342: in __aiter__
+    raise exc
+.venv/lib/python3.11/site-packages/httpcore/_async/http11.py:334: in __aiter__
+    async for chunk in self._connection._receive_response_body(**kwargs):
+.venv/lib/python3.11/site-packages/httpcore/_async/http11.py:203: in _receive_response_body
+    event = await self._receive_event(timeout=timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpcore/_async/http11.py:217: in _receive_event
+    data = await self._network_stream.read(
+.venv/lib/python3.11/site-packages/httpcore/_backends/anyio.py:32: in read
+    with map_exceptions(exc_map):
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+map = {<class 'TimeoutError'>: <class 'httpcore.ReadTimeout'>, <class 'anyio.BrokenResourceError'>: <class 'httpcore.ReadErr... 'anyio.ClosedResourceError'>: <class 'httpcore.ReadError'>, <class 'anyio.EndOfStream'>: <class 'httpcore.ReadError'>}
+
+    @contextlib.contextmanager
+    def map_exceptions(map: ExceptionMapping) -> typing.Iterator[None]:
+        try:
+            yield
+        except Exception as exc:  # noqa: PIE786
+            for from_exc, to_exc in map.items():
+                if isinstance(exc, from_exc):
+>                   raise to_exc(exc) from exc
+E                   httpcore.ReadError
+
+.venv/lib/python3.11/site-packages/httpcore/_exceptions.py:14: ReadError
+
+The above exception was the direct cause of the following exception:
+
+hang_server = ('http://127.0.0.1:56453', <threading.Event at 0x10c31eb50: set>, <threading.Event at 0x10c31e850: set>, ['/chat/completions'])
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-3toki9ih/pytest-of-claudia/pytest-0/test_returned_stream_lifetime_1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10900b910>
+mode = 'async-idle'
+
+    @pytest.mark.parametrize('mode', ['sync-idle', 'async-idle', 'async-read'])
+    def test_returned_stream_lifetime_hold(hang_server, tmp_path, monkeypatch, mode):
+        import asyncio
+        import sqlite3
+        from agent import auxiliary_control as control
+        url, entered, peer_closed, paths = hang_server
+        db = tmp_path/'control.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        policy = provider_control.Policy(db, ('openai-codex',))
+        monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+        def hold():
+            with sqlite3.connect(db) as conn:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
+        request = dict(model='fixture', messages=[], stream=True)
+        if mode == 'sync-idle':
+            client = OpenAI(api_key='synthetic', base_url=url, max_retries=0,
+                            http_client=build_keepalive_http_client(url), timeout=5)
+            try:
+                stream = aux._relay_sync_completion(client, request, provider='openai-codex')
+                assert entered.wait(2)
+                hold()
+                assert peer_closed.wait(2), 'idle stream socket remains open'
+                with pytest.raises(aux.AuxiliaryExplicitCancellation):
+                    next(iter(stream))
+                stream.close()
+                stream.close()
+                assert not control._ATTEMPTS
+                assert not client.is_closed()
+            finally:
+                client.close()
+        else:
+            from openai import AsyncOpenAI
+            async def run():
+                client = AsyncOpenAI(api_key='synthetic', base_url=url, max_retries=0,
+                                     http_client=build_keepalive_http_client(url, async_mode=True), timeout=5)
+                try:
+                    stream = await aux._relay_async_completion(client, request, provider='openai-codex')
+                    reader = asyncio.create_task(anext(stream)) if mode == 'async-read' else None
+                    await asyncio.sleep(.04)
+                    hold()
+                    assert await asyncio.to_thread(peer_closed.wait, 2), 'async stream socket remains open'
+                    with pytest.raises(aux.AuxiliaryExplicitCancellation):
+                        if reader is not None:
+                            await reader
+                        else:
+                            await anext(stream)
+                    await stream.close()
+                    await stream.close()
+                    assert not control._ATTEMPTS
+                    assert not client.is_closed()
+                finally:
+                    await client.close()
+>           asyncio.run(run())
+
+tests/agent/test_auxiliary_owned_cancel.py:204: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/agent/test_auxiliary_owned_cancel.py:197: in run
+    await anext(stream)
+.venv/lib/python3.11/site-packages/openai/_streaming.py:155: in __anext__
+    return await self._iterator.__anext__()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/openai/_streaming.py:172: in __stream__
+    async for sse in iterator:
+.venv/lib/python3.11/site-packages/openai/_streaming.py:162: in _iter_events
+    async for sse in self._decoder.aiter_bytes(self.response.aiter_bytes()):
+.venv/lib/python3.11/site-packages/openai/_streaming.py:319: in aiter_bytes
+    async for chunk in self._aiter_chunks(iterator):
+.venv/lib/python3.11/site-packages/openai/_streaming.py:330: in _aiter_chunks
+    async for chunk in iterator:
+.venv/lib/python3.11/site-packages/httpx/_models.py:997: in aiter_bytes
+    async for raw_bytes in self.aiter_raw():
+.venv/lib/python3.11/site-packages/httpx/_models.py:1055: in aiter_raw
+    async for raw_stream_bytes in self.stream:
+.venv/lib/python3.11/site-packages/httpx/_client.py:176: in __aiter__
+    async for chunk in self._stream:
+.venv/lib/python3.11/site-packages/httpx/_transports/default.py:270: in __aiter__
+    with map_httpcore_exceptions():
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    @contextlib.contextmanager
+    def map_httpcore_exceptions() -> typing.Iterator[None]:
+        global HTTPCORE_EXC_MAP
+        if len(HTTPCORE_EXC_MAP) == 0:
+            HTTPCORE_EXC_MAP = _load_httpcore_exceptions()
+        try:
+            yield
+        except Exception as exc:
+            mapped_exc = None
+    
+            for from_exc, to_exc in HTTPCORE_EXC_MAP.items():
+                if not isinstance(exc, from_exc):
+                    continue
+                # We want to map to the most specific exception we can find.
+                # Eg if `exc` is an `httpcore.ReadTimeout`, we want to map to
+                # `httpx.ReadTimeout`, not just `httpx.TimeoutException`.
+                if mapped_exc is None or issubclass(to_exc, mapped_exc):
+                    mapped_exc = to_exc
+    
+            if mapped_exc is None:  # pragma: no cover
+                raise
+    
+            message = str(exc)
+>           raise mapped_exc(message) from exc
+E           httpx.ReadError
+
+.venv/lib/python3.11/site-packages/httpx/_transports/default.py:118: ReadError
+________________ test_returned_stream_lifetime_hold[async-read] ________________
+
+    @contextlib.contextmanager
+    def map_httpcore_exceptions() -> typing.Iterator[None]:
+        global HTTPCORE_EXC_MAP
+        if len(HTTPCORE_EXC_MAP) == 0:
+            HTTPCORE_EXC_MAP = _load_httpcore_exceptions()
+        try:
+>           yield
+
+.venv/lib/python3.11/site-packages/httpx/_transports/default.py:101: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.venv/lib/python3.11/site-packages/httpx/_transports/default.py:271: in __aiter__
+    async for part in self._httpcore_stream:
+.venv/lib/python3.11/site-packages/httpcore/_async/connection_pool.py:407: in __aiter__
+    raise exc from None
+.venv/lib/python3.11/site-packages/httpcore/_async/connection_pool.py:403: in __aiter__
+    async for part in self._stream:
+.venv/lib/python3.11/site-packages/httpcore/_async/http11.py:342: in __aiter__
+    raise exc
+.venv/lib/python3.11/site-packages/httpcore/_async/http11.py:334: in __aiter__
+    async for chunk in self._connection._receive_response_body(**kwargs):
+.venv/lib/python3.11/site-packages/httpcore/_async/http11.py:203: in _receive_response_body
+    event = await self._receive_event(timeout=timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpcore/_async/http11.py:217: in _receive_event
+    data = await self._network_stream.read(
+.venv/lib/python3.11/site-packages/httpcore/_backends/anyio.py:32: in read
+    with map_exceptions(exc_map):
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+map = {<class 'TimeoutError'>: <class 'httpcore.ReadTimeout'>, <class 'anyio.BrokenResourceError'>: <class 'httpcore.ReadErr... 'anyio.ClosedResourceError'>: <class 'httpcore.ReadError'>, <class 'anyio.EndOfStream'>: <class 'httpcore.ReadError'>}
+
+    @contextlib.contextmanager
+    def map_exceptions(map: ExceptionMapping) -> typing.Iterator[None]:
+        try:
+            yield
+        except Exception as exc:  # noqa: PIE786
+            for from_exc, to_exc in map.items():
+                if isinstance(exc, from_exc):
+>                   raise to_exc(exc) from exc
+E                   httpcore.ReadError
+
+.venv/lib/python3.11/site-packages/httpcore/_exceptions.py:14: ReadError
+
+The above exception was the direct cause of the following exception:
+
+hang_server = ('http://127.0.0.1:56455', <threading.Event at 0x10cc808d0: set>, <threading.Event at 0x10cc80850: set>, ['/chat/completions'])
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-3toki9ih/pytest-of-claudia/pytest-0/test_returned_stream_lifetime_2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10cc83f10>
+mode = 'async-read'
+
+    @pytest.mark.parametrize('mode', ['sync-idle', 'async-idle', 'async-read'])
+    def test_returned_stream_lifetime_hold(hang_server, tmp_path, monkeypatch, mode):
+        import asyncio
+        import sqlite3
+        from agent import auxiliary_control as control
+        url, entered, peer_closed, paths = hang_server
+        db = tmp_path/'control.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+        policy = provider_control.Policy(db, ('openai-codex',))
+        monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
+        def hold():
+            with sqlite3.connect(db) as conn:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
+        request = dict(model='fixture', messages=[], stream=True)
+        if mode == 'sync-idle':
+            client = OpenAI(api_key='synthetic', base_url=url, max_retries=0,
+                            http_client=build_keepalive_http_client(url), timeout=5)
+            try:
+                stream = aux._relay_sync_completion(client, request, provider='openai-codex')
+                assert entered.wait(2)
+                hold()
+                assert peer_closed.wait(2), 'idle stream socket remains open'
+                with pytest.raises(aux.AuxiliaryExplicitCancellation):
+                    next(iter(stream))
+                stream.close()
+                stream.close()
+                assert not control._ATTEMPTS
+                assert not client.is_closed()
+            finally:
+                client.close()
+        else:
+            from openai import AsyncOpenAI
+            async def run():
+                client = AsyncOpenAI(api_key='synthetic', base_url=url, max_retries=0,
+                                     http_client=build_keepalive_http_client(url, async_mode=True), timeout=5)
+                try:
+                    stream = await aux._relay_async_completion(client, request, provider='openai-codex')
+                    reader = asyncio.create_task(anext(stream)) if mode == 'async-read' else None
+                    await asyncio.sleep(.04)
+                    hold()
+                    assert await asyncio.to_thread(peer_closed.wait, 2), 'async stream socket remains open'
+                    with pytest.raises(aux.AuxiliaryExplicitCancellation):
+                        if reader is not None:
+                            await reader
+                        else:
+                            await anext(stream)
+                    await stream.close()
+                    await stream.close()
+                    assert not control._ATTEMPTS
+                    assert not client.is_closed()
+                finally:
+                    await client.close()
+>           asyncio.run(run())
+
+tests/agent/test_auxiliary_owned_cancel.py:204: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/agent/test_auxiliary_owned_cancel.py:195: in run
+    await reader
+.venv/lib/python3.11/site-packages/openai/_streaming.py:155: in __anext__
+    return await self._iterator.__anext__()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/openai/_streaming.py:172: in __stream__
+    async for sse in iterator:
+.venv/lib/python3.11/site-packages/openai/_streaming.py:162: in _iter_events
+    async for sse in self._decoder.aiter_bytes(self.response.aiter_bytes()):
+.venv/lib/python3.11/site-packages/openai/_streaming.py:319: in aiter_bytes
+    async for chunk in self._aiter_chunks(iterator):
+.venv/lib/python3.11/site-packages/openai/_streaming.py:330: in _aiter_chunks
+    async for chunk in iterator:
+.venv/lib/python3.11/site-packages/httpx/_models.py:997: in aiter_bytes
+    async for raw_bytes in self.aiter_raw():
+.venv/lib/python3.11/site-packages/httpx/_models.py:1055: in aiter_raw
+    async for raw_stream_bytes in self.stream:
+.venv/lib/python3.11/site-packages/httpx/_client.py:176: in __aiter__
+    async for chunk in self._stream:
+.venv/lib/python3.11/site-packages/httpx/_transports/default.py:270: in __aiter__
+    with map_httpcore_exceptions():
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    @contextlib.contextmanager
+    def map_httpcore_exceptions() -> typing.Iterator[None]:
+        global HTTPCORE_EXC_MAP
+        if len(HTTPCORE_EXC_MAP) == 0:
+            HTTPCORE_EXC_MAP = _load_httpcore_exceptions()
+        try:
+            yield
+        except Exception as exc:
+            mapped_exc = None
+    
+            for from_exc, to_exc in HTTPCORE_EXC_MAP.items():
+                if not isinstance(exc, from_exc):
+                    continue
+                # We want to map to the most specific exception we can find.
+                # Eg if `exc` is an `httpcore.ReadTimeout`, we want to map to
+                # `httpx.ReadTimeout`, not just `httpx.TimeoutException`.
+                if mapped_exc is None or issubclass(to_exc, mapped_exc):
+                    mapped_exc = to_exc
+    
+            if mapped_exc is None:  # pragma: no cover
+                raise
+    
+            message = str(exc)
+>           raise mapped_exc(message) from exc
+E           httpx.ReadError
+
+.venv/lib/python3.11/site-packages/httpx/_transports/default.py:118: ReadError
+=========================== short test summary info ============================
+FAILED tests/agent/test_auxiliary_owned_cancel.py::test_returned_stream_lifetime_hold[sync-idle]
+FAILED tests/agent/test_auxiliary_owned_cancel.py::test_returned_stream_lifetime_hold[async-idle]
+FAILED tests/agent/test_auxiliary_owned_cancel.py::test_returned_stream_lifetime_hold[async-read]
+======================= 3 failed, 19 deselected in 4.04s =======================
+
+=== 1 file with test failures (3 tests failed) ===
+  tests/agent/test_auxiliary_owned_cancel.py  (3 tests failed)

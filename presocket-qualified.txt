@@ -1,0 +1,17 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~1 tests) under ['tests/agent/test_provider_presocket.py']; running with -j 1
+[100.0% |     1/~1 | ✓1 | ✗0] ✓ tests/agent/test_provider_presocket.py (1✓, 2.9s)
+
+=== Summary: 1 files, 1 tests passed, 0 failed (100% complete) in 2.9s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 2.9s  (runner wall: 2.9s, parallelism: 1x)
+  P50: 2.85s  P90: 2.85s  P95: 2.85s  P99: 2.85s  Max: 2.85s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+      2.85s  tests/agent/test_provider_presocket.py
