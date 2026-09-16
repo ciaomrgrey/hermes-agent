@@ -1,0 +1,179 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~1 tests) under ['tests/agent/test_provider_cli_ingress.py']; running with -j 1
+[100.0% |     1/~1 | ✓0 | ✗2] ✗ tests/agent/test_provider_cli_ingress.py (2✗, 7.7s)
+
+  ╔╍ Failed: tests/agent/test_provider_cli_ingress.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║             memory=dict(memory_enabled=False,user_profile_enabled=False),
+  ║             compression=dict(enabled=False),curator=dict(enabled=False),
+  ║             agent=dict(max_iterations=1),display=dict(interface='cli'),
+  ║             auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+  ║                        for name in ('compression','vision','title','session_title')})
+  ║         (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+  ║         env=dict(os.environ,HERMES_HOME=str(home),HERMES_PROFILE='default',
+  ║             ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+  ║             OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+  ║         for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+  ║             env.pop(key,None)
+  ║         query='Preserve this synthetic pending message without inference.'
+  ║         args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+  ║         if bot_chat:
+  ║             from tools.bot_relay import BOT_CHAT_TURN_ARGS
+  ║             args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+  ║         try:
+  ║             result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+  ║             (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+  ║             assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+  ║             assert 'Traceback' not in result.stderr
+  ║ >           assert not requests, f'held ingress sent inference: {requests}'
+  ║ E           AssertionError: held ingress sent inference: ['/api/show', '/api/show']
+  ║ E           assert not ['/api/show', '/api/show']
+  ║ 
+  ║ tests/agent/test_provider_cli_ingress.py:56: AssertionError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[direct-cli]
+  ║ FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[canonical-bot-chat]
+  ║ ============================== 2 failed in 2.95s ===============================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_provider_cli_ingress.py --basetemp=/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/cli-ingress-temp
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 2 failed (100% complete) in 7.7s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 7.7s  (runner wall: 7.7s, parallelism: 1x)
+  P50: 7.68s  P90: 7.68s  P95: 7.68s  P99: 7.68s  Max: 7.68s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+      7.68s  tests/agent/test_provider_cli_ingress.py
+
+=== Failure output ===
+
+--- tests/agent/test_provider_cli_ingress.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 2 items
+
+tests/agent/test_provider_cli_ingress.py FF                              [100%]
+
+=================================== FAILURES ===================================
+___ test_native_cli_ingress_hold_is_resumable_without_inference[direct-cli] ____
+
+tmp_path = PosixPath('/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/cli-ingress-temp/test_native_cli_ingress_hold_i0')
+bot_chat = False
+
+    @pytest.mark.parametrize('bot_chat',[False,True],ids=['direct-cli','canonical-bot-chat'])
+    def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat):
+        root=Path(__file__).resolve().parents[2]
+        home=tmp_path/'estate'
+        home.mkdir()
+        db=home/'holds.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
+            conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        requests=[]
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                requests.append(self.path)
+                self.send_response(500); self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server.daemon_threads=True
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        url=f'http://127.0.0.1:{server.server_port}'
+        cfg=dict(model=dict(provider='anthropic',default='claude-sonnet-4-5',base_url=url),
+            provider_control=dict(database=str(db),providers=['anthropic','openai-codex']),
+            memory=dict(memory_enabled=False,user_profile_enabled=False),
+            compression=dict(enabled=False),curator=dict(enabled=False),
+            agent=dict(max_iterations=1),display=dict(interface='cli'),
+            auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+                       for name in ('compression','vision','title','session_title')})
+        (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+        env=dict(os.environ,HERMES_HOME=str(home),HERMES_PROFILE='default',
+            ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+            OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+        for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+            env.pop(key,None)
+        query='Preserve this synthetic pending message without inference.'
+        args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+        if bot_chat:
+            from tools.bot_relay import BOT_CHAT_TURN_ARGS
+            args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+        try:
+            result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+            (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+            assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+            assert 'Traceback' not in result.stderr
+>           assert not requests, f'held ingress sent inference: {requests}'
+E           AssertionError: held ingress sent inference: ['/api/show', '/api/show']
+E           assert not ['/api/show', '/api/show']
+
+tests/agent/test_provider_cli_ingress.py:56: AssertionError
+_ test_native_cli_ingress_hold_is_resumable_without_inference[canonical-bot-chat] _
+
+tmp_path = PosixPath('/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/cli-ingress-temp/test_native_cli_ingress_hold_i1')
+bot_chat = True
+
+    @pytest.mark.parametrize('bot_chat',[False,True],ids=['direct-cli','canonical-bot-chat'])
+    def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat):
+        root=Path(__file__).resolve().parents[2]
+        home=tmp_path/'estate'
+        home.mkdir()
+        db=home/'holds.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
+            conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        requests=[]
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                requests.append(self.path)
+                self.send_response(500); self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server.daemon_threads=True
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        url=f'http://127.0.0.1:{server.server_port}'
+        cfg=dict(model=dict(provider='anthropic',default='claude-sonnet-4-5',base_url=url),
+            provider_control=dict(database=str(db),providers=['anthropic','openai-codex']),
+            memory=dict(memory_enabled=False,user_profile_enabled=False),
+            compression=dict(enabled=False),curator=dict(enabled=False),
+            agent=dict(max_iterations=1),display=dict(interface='cli'),
+            auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+                       for name in ('compression','vision','title','session_title')})
+        (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+        env=dict(os.environ,HERMES_HOME=str(home),HERMES_PROFILE='default',
+            ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+            OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+        for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+            env.pop(key,None)
+        query='Preserve this synthetic pending message without inference.'
+        args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+        if bot_chat:
+            from tools.bot_relay import BOT_CHAT_TURN_ARGS
+            args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+        try:
+            result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+            (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+            assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+            assert 'Traceback' not in result.stderr
+>           assert not requests, f'held ingress sent inference: {requests}'
+E           AssertionError: held ingress sent inference: ['/api/show', '/api/show']
+E           assert not ['/api/show', '/api/show']
+
+tests/agent/test_provider_cli_ingress.py:56: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[direct-cli]
+FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[canonical-bot-chat]
+============================== 2 failed in 2.95s ===============================
+
+=== 1 file with test failures (2 tests failed) ===
+  tests/agent/test_provider_cli_ingress.py  (2 tests failed)

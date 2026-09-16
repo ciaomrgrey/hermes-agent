@@ -110,8 +110,9 @@ def test_real_turn_facade_refuses_held_provider_before_preflight(tmp_path, monke
     class Bare(TurnFacadeMixin):
         provider = 'anthropic'
     # Deliberately no other agent attrs: gate must precede auxiliary/preflight work.
-    with pytest.raises(HeldProvider):
-        Bare().run_conversation('must not reach inference')
+    result = Bare().run_conversation('must not reach inference')
+    assert result['interrupted'] and result['completed'] is False
+    assert result['failure_reason'] == 'provider_held'
 
 
 def test_native_resume_provider_does_not_touch_estop(tmp_path, monkeypatch):

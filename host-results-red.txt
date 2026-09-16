@@ -1,0 +1,202 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~3 tests) under ['tests/agent/test_provider_host_results.py']; running with -j 1
+[100.0% |     3/~3 | ✓0 | ✗3] ✗ tests/agent/test_provider_host_results.py (3✗, 1.3s)
+
+  ╔╍ Failed: tests/agent/test_provider_host_results.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║         if targets.intersection(held):
+  ║ >           raise HeldProvider('Provider held; explicit operator resume required')
+  ║ E           agent.provider_control.HeldProvider: Provider held; explicit operator resume required
+  ║ 
+  ║ agent/provider_control.py:39: HeldProvider
+  ║ ___________ test_active_hold_discards_result_after_callable_returns ____________
+  ║ 
+  ║ tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-nl54uilp/pytest-of-claudia/pytest-0/test_active_hold_discards_resu0')
+  ║ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a655650>
+  ║ 
+  ║     def test_active_hold_discards_result_after_callable_returns(tmp_path,monkeypatch):
+  ║         policy=_policy(tmp_path,monkeypatch)
+  ║         policy.resume('anthropic')
+  ║         agent=HeldAgent()
+  ║         @pc.controlled_turn
+  ║         def body(agent,user_message,conversation_history=None):
+  ║             with sqlite3.connect(policy.database) as conn:
+  ║                 conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+  ║             return {'final_response':'late-result','messages':[{'role':'assistant','content':'late-result'}]}
+  ║         result=body(agent,'pending')
+  ║ >       assert result['interrupted'] and result['completed'] is False
+  ║                ^^^^^^^^^^^^^^^^^^^^^
+  ║ E       KeyError: 'interrupted'
+  ║ 
+  ║ tests/agent/test_provider_host_results.py:68: KeyError
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_provider_host_results.py::test_cli_worker_preserves_pending_turn_and_returns_interrupted
+  ║ FAILED tests/agent/test_provider_host_results.py::test_gateway_turn_owner_keeps_input_and_does_not_seal_stream
+  ║ FAILED tests/agent/test_provider_host_results.py::test_active_hold_discards_result_after_callable_returns
+  ║ ============================== 3 failed in 0.35s ===============================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_provider_host_results.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 3 failed (100% complete) in 1.3s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 1.3s  (runner wall: 1.3s, parallelism: 1x)
+  P50: 1.31s  P90: 1.31s  P95: 1.31s  P99: 1.31s  Max: 1.31s
+  <1s: 0 files (0%)  <2s: 1 files (100%)
+  Top 10 slowest:
+      1.31s  tests/agent/test_provider_host_results.py
+
+=== Failure output ===
+
+--- tests/agent/test_provider_host_results.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 3 items
+
+tests/agent/test_provider_host_results.py FFF                            [100%]
+
+=================================== FAILURES ===================================
+________ test_cli_worker_preserves_pending_turn_and_returns_interrupted ________
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-nl54uilp/pytest-of-claudia/pytest-0/test_cli_worker_preserves_pend0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10adf31d0>
+
+    def test_cli_worker_preserves_pending_turn_and_returns_interrupted(tmp_path,monkeypatch):
+        from hermes_cli.cli_chat_turn_mixin import CLIChatTurnMixin
+        _policy(tmp_path,monkeypatch)
+        history=[{'role':'user','content':'resume this exact pending input'}]
+        cli=SimpleNamespace(agent=HeldAgent(),conversation_history=history,session_id='fixture-session',
+            _sudo_password_callback=None,_approval_callback=None,_secret_capture_callback=None,
+            _vault_unlock_callback=None,_vault_save_login_callback=None,_vault_code_callback=None,
+            _flush_credit_notices=lambda:None)
+        turn=SimpleNamespace(voice_prefix='',stream_callback=None,result=None)
+>       CLIChatTurnMixin._chat_run_agent(cli,turn,history[-1]['content'])
+
+tests/agent/test_provider_host_results.py:33: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+hermes_cli/cli_chat_turn_mixin.py:317: in _chat_run_agent
+    turn.result = self.agent.run_conversation(
+agent/provider_control.py:87: in run
+    with policy.track(agent):
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+agent/provider_control.py:50: in track
+    scope.check()
+agent/provider_control.py:64: in check
+    self.policy.check(self.original_provider, getattr(self.agent, 'provider', ''))
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <agent.provider_control.Policy object at 0x10b5bc290>, account = None
+providers = ('anthropic', 'anthropic'), targets = {'anthropic'}
+conn = <sqlite3.Connection object at 0x10c7afa60>
+
+    def check(self, *providers, account=None):
+        targets = set(providers).intersection(self.providers)
+        if not targets or self.database is None:
+            return
+        try:
+            with sqlite3.connect(self.database.as_uri()+'?mode=ro', uri=True, timeout=1) as conn:
+                has_account = 'account' in {r[1] for r in conn.execute('PRAGMA table_info(holds)')}
+                rows = conn.execute('SELECT provider,account FROM holds' if has_account else
+                                    "SELECT provider,NULL FROM holds")
+                held = {p for p,a in rows if account is None or a in (None, '*', account)}
+        except (sqlite3.Error, OSError):
+            raise HeldProvider('Provider control state unavailable; admission refused') from None
+        if targets.intersection(held):
+>           raise HeldProvider('Provider held; explicit operator resume required')
+E           agent.provider_control.HeldProvider: Provider held; explicit operator resume required
+
+agent/provider_control.py:39: HeldProvider
+_________ test_gateway_turn_owner_keeps_input_and_does_not_seal_stream _________
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-nl54uilp/pytest-of-claudia/pytest-0/test_gateway_turn_owner_keeps_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b228ad0>
+
+    def test_gateway_turn_owner_keeps_input_and_does_not_seal_stream(tmp_path,monkeypatch):
+        from gateway.run_turn_runner import TurnRunner
+        from gateway.turn_context import TurnContext
+        from gateway.session import SessionSource
+        from gateway.config import Platform
+        _policy(tmp_path,monkeypatch)
+        source=SessionSource(platform=Platform.LOCAL,chat_id='fixture',user_id='fixture')
+        ctx=TurnContext(source=source,message='pending gateway input',session_id='fixture-session',session_key='fixture-key')
+        runner=TurnRunner(SimpleNamespace(_consume_pending_native_image_paths=lambda key:[]),ctx)
+>       result=runner._run_conversation_with_approval(HeldAgent(),[],None,None,None)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/agent/test_provider_host_results.py:49: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+gateway/run_turn_runner.py:1540: in _run_conversation_with_approval
+    return agent.run_conversation(api_message, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent/provider_control.py:87: in run
+    with policy.track(agent):
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+agent/provider_control.py:50: in track
+    scope.check()
+agent/provider_control.py:64: in check
+    self.policy.check(self.original_provider, getattr(self.agent, 'provider', ''))
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <agent.provider_control.Policy object at 0x10ca56f90>, account = None
+providers = ('anthropic', 'anthropic'), targets = {'anthropic'}
+conn = <sqlite3.Connection object at 0x10cb48310>
+
+    def check(self, *providers, account=None):
+        targets = set(providers).intersection(self.providers)
+        if not targets or self.database is None:
+            return
+        try:
+            with sqlite3.connect(self.database.as_uri()+'?mode=ro', uri=True, timeout=1) as conn:
+                has_account = 'account' in {r[1] for r in conn.execute('PRAGMA table_info(holds)')}
+                rows = conn.execute('SELECT provider,account FROM holds' if has_account else
+                                    "SELECT provider,NULL FROM holds")
+                held = {p for p,a in rows if account is None or a in (None, '*', account)}
+        except (sqlite3.Error, OSError):
+            raise HeldProvider('Provider control state unavailable; admission refused') from None
+        if targets.intersection(held):
+>           raise HeldProvider('Provider held; explicit operator resume required')
+E           agent.provider_control.HeldProvider: Provider held; explicit operator resume required
+
+agent/provider_control.py:39: HeldProvider
+___________ test_active_hold_discards_result_after_callable_returns ____________
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-nl54uilp/pytest-of-claudia/pytest-0/test_active_hold_discards_resu0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a655650>
+
+    def test_active_hold_discards_result_after_callable_returns(tmp_path,monkeypatch):
+        policy=_policy(tmp_path,monkeypatch)
+        policy.resume('anthropic')
+        agent=HeldAgent()
+        @pc.controlled_turn
+        def body(agent,user_message,conversation_history=None):
+            with sqlite3.connect(policy.database) as conn:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+            return {'final_response':'late-result','messages':[{'role':'assistant','content':'late-result'}]}
+        result=body(agent,'pending')
+>       assert result['interrupted'] and result['completed'] is False
+               ^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'interrupted'
+
+tests/agent/test_provider_host_results.py:68: KeyError
+=========================== short test summary info ============================
+FAILED tests/agent/test_provider_host_results.py::test_cli_worker_preserves_pending_turn_and_returns_interrupted
+FAILED tests/agent/test_provider_host_results.py::test_gateway_turn_owner_keeps_input_and_does_not_seal_stream
+FAILED tests/agent/test_provider_host_results.py::test_active_hold_discards_result_after_callable_returns
+============================== 3 failed in 0.35s ===============================
+
+=== 1 file with test failures (3 tests failed) ===
+  tests/agent/test_provider_host_results.py  (3 tests failed)

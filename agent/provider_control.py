@@ -80,12 +80,53 @@ def current_policy():
 def controlled_turn(fn):
     from functools import wraps
     @wraps(fn)
-    def run(agent, *args, **kwargs):
+    def run(agent, user_message, *args, **kwargs):
         policy = current_policy()
         if policy.database is None:
-            return fn(agent, *args, **kwargs)
-        with policy.track(agent):
-            return fn(agent, *args, **kwargs)
+            return fn(agent, user_message, *args, **kwargs)
+        from agent.auxiliary_client import AuxiliaryExplicitCancellation
+        original = getattr(agent, 'provider', '')
+        started = False
+        try:
+            with policy.track(agent) as scope:
+                started = True
+                result = fn(agent, user_message, *args, **kwargs)
+                scope.check()  # owner must not publish a result after the hold edge
+                return result
+        except AuxiliaryExplicitCancellation:
+            # Ordinary user cancellation keeps its existing native semantics.
+            try:
+                policy.check(original, getattr(agent, 'provider', ''))
+            except HeldProvider:
+                pass
+            else:
+                raise
+        except HeldProvider:
+            pass
+        # Host workers catch Exception, not BaseException. Return the existing
+        # interrupted-result protocol at the TURN boundary only; request-level
+        # cancellation stays non-retryable and never becomes a fallback result.
+        history = kwargs.get('conversation_history', args[1] if len(args)>1 else None) or []
+        messages = list(getattr(agent, '_session_messages', None) or []) if started else []
+        persisted = bool(messages)
+        if not messages:
+            messages = list(history)
+            messages.append(dict(role='user', content=kwargs.get('persist_user_message') or user_message))
+        if not started and getattr(agent, '_session_db', None) is not None:
+            # Admission precedes the normal turn-start crash persist. Use its
+            # native deduplicating flush so a held CLI/Bot Chat input survives
+            # process exit; do not manufacture an assistant completion.
+            agent._persist_user_message_idx = len(messages)-1
+            agent._persist_user_message_override = None
+            agent._persist_user_message_timestamp = kwargs.get('persist_user_timestamp')
+            agent._persist_user_message_platform_id = kwargs.get('persist_user_platform_id')
+            agent._persist_session(messages, history)
+            from agent.context_compressor import _DB_PERSISTED_MARKER
+            persisted = bool(messages[-1].get(_DB_PERSISTED_MARKER))
+        return dict(final_response='Provider held; explicit operator resume required.',
+                    interrupted=True, completed=False, failed=True, failure_reason='provider_held',
+                    interrupt_message=None,
+                    messages=messages, api_calls=0, agent_persisted=persisted)
     return run
 
 

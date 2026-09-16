@@ -1,0 +1,21 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 3 test files (~12 tests) under ['tests/agent/test_provider_host_results.py', 'tests/agent/test_provider_cli_ingress.py', 'tests/agent/test_provider_control.py']; running with -j 1
+[  8.3% |     1/~12 | ✓2 | ✗0] ✓ tests/agent/test_provider_cli_ingress.py (2✓, 3.0s)
+[ 75.0% |     9/~12 | ✓10 | ✗ 0] ✓ tests/agent/test_provider_control.py (8✓, 0.5s)
+[100.0% |    12/~12 | ✓13 | ✗ 0] ✓ tests/agent/test_provider_host_results.py (3✓, 0.5s)
+
+=== Summary: 3 files, 13 tests passed, 0 failed (100% complete) in 4.0s (1 workers) ===
+  Durations cached to test_durations.json (3 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   3
+  Total subprocess CPU-wall: 4.0s  (runner wall: 4.0s, parallelism: 1x)
+  P50: 0.54s  P90: 3.02s  P95: 3.02s  P99: 3.02s  Max: 3.02s
+  <1s: 2 files (67%)  <2s: 2 files (67%)
+  Top 10 slowest:
+      3.02s  tests/agent/test_provider_cli_ingress.py
+      0.54s  tests/agent/test_provider_control.py
+      0.45s  tests/agent/test_provider_host_results.py

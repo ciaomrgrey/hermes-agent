@@ -1,0 +1,36 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 11 test files (~36 tests) under ['tests/agent/test_provider_control.py', 'tests/agent/test_provider_host_results.py', 'tests/agent/test_provider_cli_ingress.py', 'tests/agent/test_provider_admission.py', 'tests/agent/test_usage_guard.py', 'tests/agent/test_usage_guard_cli.py', 'tests/agent/test_usage_guard_sources.py', 'tests/agent/test_usage_guard_identity.py', 'tests/agent/test_usage_guard_retention.py', 'tests/agent/test_usage_guard_delivery.py', 'tests/agent/test_usage_guard_deploy.py']; running with -j 1
+[  5.6% |     2/~36 | ✓2 | ✗0] ✓ tests/agent/test_provider_admission.py (2✓, 0.2s)
+[  8.3% |     3/~36 | ✓4 | ✗0] ✓ tests/agent/test_provider_cli_ingress.py (2✓, 3.0s)
+[ 30.6% |    11/~36 | ✓12 | ✗ 0] ✓ tests/agent/test_provider_control.py (8✓, 0.5s)
+[ 38.9% |    14/~36 | ✓15 | ✗ 0] ✓ tests/agent/test_provider_host_results.py (3✓, 0.5s)
+[ 61.1% |    22/~36 | ✓23 | ✗ 0] ✓ tests/agent/test_usage_guard.py (8✓, 0.7s)
+[ 72.2% |    26/~36 | ✓27 | ✗ 0] ✓ tests/agent/test_usage_guard_cli.py (4✓, 0.4s)
+[ 75.0% |    27/~36 | ✓28 | ✗ 0] ✓ tests/agent/test_usage_guard_delivery.py (1✓, 0.2s)
+[ 80.6% |    29/~36 | ✓30 | ✗ 0] ✓ tests/agent/test_usage_guard_deploy.py (2✓, 0.3s)
+[ 88.9% |    32/~36 | ✓33 | ✗ 0] ✓ tests/agent/test_usage_guard_identity.py (3✓, 0.3s)
+[ 94.4% |    34/~36 | ✓35 | ✗ 0] ✓ tests/agent/test_usage_guard_retention.py (2✓, 0.2s)
+[100.0% |    36/~36 | ✓37 | ✗ 0] ✓ tests/agent/test_usage_guard_sources.py (2✓, 0.3s)
+
+=== Summary: 11 files, 37 tests passed, 0 failed (100% complete) in 6.6s (1 workers) ===
+  Durations cached to test_durations.json (11 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   11
+  Total subprocess CPU-wall: 6.6s  (runner wall: 6.6s, parallelism: 1x)
+  P50: 0.31s  P90: 0.66s  P95: 3.04s  P99: 3.04s  Max: 3.04s
+  <1s: 10 files (91%)  <2s: 10 files (91%)
+  Top 10 slowest:
+      3.04s  tests/agent/test_provider_cli_ingress.py
+      0.66s  tests/agent/test_usage_guard.py
+      0.47s  tests/agent/test_provider_control.py
+      0.45s  tests/agent/test_provider_host_results.py
+      0.40s  tests/agent/test_usage_guard_cli.py
+      0.31s  tests/agent/test_usage_guard_identity.py
+      0.30s  tests/agent/test_usage_guard_sources.py
+      0.25s  tests/agent/test_usage_guard_deploy.py
+      0.25s  tests/agent/test_usage_guard_retention.py
+      0.25s  tests/agent/test_usage_guard_delivery.py
