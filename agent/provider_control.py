@@ -1,4 +1,4 @@
-"""Opt-in provider-scoped admission and cooperative hard-cancel control.
+"""Opt-in provider-scoped admission and durable hold checks.
 
 Not ESTOP: deterministic no-agent jobs are unaffected. Holds are persistent and
 never expire. SQLite is shared with the controller; no second control daemon.
@@ -6,7 +6,6 @@ never expire. SQLite is shared with the controller; no second control daemon.
 from __future__ import annotations
 
 import sqlite3
-import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -46,15 +45,13 @@ class Policy:
             conn.execute('DELETE FROM holds WHERE provider=?', (provider,))
 
     @contextmanager
-    def track(self, agent, *, schedule=True):
+    def track(self, agent):
         scope = ActiveScope(self, agent)
         scope.check()
         token = _SCOPE.set(scope)
         try:
             yield scope
         finally:
-            with scope.lock:
-                scope.active = False
             _SCOPE.reset(token)
 
 
@@ -62,26 +59,9 @@ class ActiveScope:
     def __init__(self, policy, agent):
         self.policy, self.agent = policy, agent
         self.original_provider = getattr(agent, 'provider', '')
-        self.lock = threading.RLock()
-        self.active = True
-        self.interrupted = False
 
     def check(self):
         self.policy.check(self.original_provider, getattr(self.agent, 'provider', ''))
-
-    def poll(self):
-        with self.lock:
-            if not self.active:
-                return False
-            try:
-                self.check()
-            except HeldProvider:
-                if not self.interrupted:
-                    self.agent.interrupt('Provider held; explicit operator resume required',
-                                         hard_cancel=True, propagate_children=False)
-                    self.interrupted = True
-                return False
-        return None
 
 
 def current_policy():

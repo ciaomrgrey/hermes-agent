@@ -1,0 +1,13 @@
+{
+  "prompt": "",
+  "schedule": "every 1m",
+  "name": "provider-weekly-usage-guard",
+  "repeat": null,
+  "deliver": "local",
+  "failure_deliver": "telegram:471605389",
+  "script": "usage-guard-tick.py",
+  "no_agent": true,
+  "paused": true,
+  "paused_reason": "Unqualified candidate; independent review and Hermes activation required",
+  "attach_to_session": false
+}

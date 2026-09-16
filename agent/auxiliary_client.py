@@ -2495,7 +2495,8 @@ def _relay_sync_completion(
     create_owned=None,
 ) -> Any:
     from agent.auxiliary_wire import prepare_chat_messages
-    from agent.provider_control import current_policy, HeldProvider
+    from agent.provider_control import current_policy, check_request, HeldProvider
+    check_request(provider)
     policy = current_policy()
     attempt = None
     if policy.database is not None and provider in policy.providers:

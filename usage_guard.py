@@ -28,6 +28,8 @@ def load_config(path):
     ZoneInfo(cfg['timezone'])
     for key in ('night_start', 'night_end', 'report_time'):
         datetime.strptime(cfg[key], '%H:%M')
+    if not isinstance(cfg.get('delivery_enabled', False), bool):
+        raise ValueError('invalid delivery_enabled')
     if cfg.get('armed'):
         raise ValueError(RELEASE_BLOCKER)
     return cfg
@@ -68,6 +70,9 @@ def main():
                 result = dict(armed=False, release_ready=False, release_blocker=RELEASE_BLOCKER,
                               held=guard.holds(), pending_alerts=len(guard.outbox()),
                               sampling_seconds=cfg['sample_seconds'], no_live_controls_installed=True)
+            if args.command != 'status' and cfg.get('delivery_enabled', False):
+                from agent.usage_guard_delivery import send_notice
+                guard.deliver(lambda body: send_notice(body, cfg))
             print(json.dumps(result, indent=2))
         finally:
             guard.close()

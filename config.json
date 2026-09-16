@@ -8,5 +8,6 @@
   "report_time": "06:05",
   "telegram_target": "telegram:471605389",
   "retention_days": 7,
-  "armed": false
+  "armed": false,
+  "delivery_enabled": false
 }

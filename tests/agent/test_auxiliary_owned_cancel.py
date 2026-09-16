@@ -54,7 +54,7 @@ def hang_server(monkeypatch):
     server.server_close()
 
 
-@pytest.mark.parametrize('wire', ['openai-block', 'openai-sse', 'codex', 'anthropic', 'main-block', 'main-sse', 'main-inline', 'main-inline-sse', 'async-openai', 'async-codex', 'async-anthropic', 'main-anthropic', 'main-sse-anthropic', 'main-inline-anthropic'])
+@pytest.mark.parametrize('wire', ['openai-block', 'openai-sse', 'codex', 'anthropic', 'main-block', 'main-sse', 'main-inline', 'main-inline-sse', 'async-openai', 'async-codex', 'async-anthropic', 'main-anthropic', 'main-sse-anthropic', 'main-inline-anthropic', 'main-inline-sse-anthropic', 'raw-openai-sse'])
 def test_hold_tears_down_nonstream_socket_and_preserves_sibling(hang_server, tmp_path, monkeypatch, caplog, wire):
     import sqlite3
     url, entered, peer_closed, paths = hang_server
@@ -116,8 +116,13 @@ def test_hold_tears_down_nonstream_socket_and_preserves_sibling(hang_server, tmp
                 outcomes.append('late-result')
                 return
             with aux.aux_progress_hook((lambda: None) if wire == 'openai-sse' else None):
-                aux._relay_sync_completion(client, dict(model='fixture', max_tokens=16, messages=[dict(role='user',content='local only')]),
-                                           provider=provider)
+                request = dict(model='fixture', max_tokens=16, messages=[dict(role='user',content='local only')])
+                if wire == 'raw-openai-sse':
+                    request['stream'] = True
+                response = aux._relay_sync_completion(client, request, provider=provider)
+                if wire == 'raw-openai-sse':
+                    for _ in response:
+                        pass
             outcomes.append('late-result')
         except BaseException as exc:
             outcomes.append(type(exc).__name__)
@@ -143,7 +148,55 @@ def test_hold_tears_down_nonstream_socket_and_preserves_sibling(hang_server, tmp
         client.close()
 
 
-def test_hold_during_tls_handshake_closes_peer(tmp_path, monkeypatch):
+def _cross_process_request(url, database, result_pipe):
+    """Spawned process owns its client; parent only writes durable control."""
+    from pathlib import Path
+    policy = provider_control.Policy(Path(database), ('openai-codex',))
+    provider_control.current_policy = lambda: policy
+    client = OpenAI(api_key='synthetic-not-a-secret', base_url=url, max_retries=0,
+                    http_client=build_keepalive_http_client(url), timeout=5)
+    try:
+        aux._relay_sync_completion(client, dict(model='fixture', messages=[]), provider='openai-codex')
+        result_pipe.send('late-result')
+    except BaseException as exc:
+        result_pipe.send(type(exc).__name__)
+    finally:
+        client.close()
+        result_pipe.close()
+
+
+def test_other_process_observes_hold_and_closes_own_socket(hang_server, tmp_path):
+    import multiprocessing
+    import sqlite3
+    url, entered, closed, paths = hang_server
+    db = tmp_path/'multiprocess.sqlite3'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+    context = multiprocessing.get_context('spawn')
+    receive, send = context.Pipe(duplex=False)
+    process = context.Process(target=_cross_process_request, args=(url, str(db), send))
+    process.start()
+    send.close()
+    try:
+        assert entered.wait(15)
+        with sqlite3.connect(db) as conn:
+            conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'synthetic'))
+        assert closed.wait(2), 'other-process provider socket survived durable hold'
+        assert receive.poll(2)
+        assert receive.recv() == 'AuxiliaryExplicitCancellation'
+        process.join(2)
+        assert process.exitcode == 0
+        assert len(paths) == 1
+    finally:
+        process.join(7)
+        if process.is_alive():
+            process.terminate()  # local synthetic fixture only
+            process.join(2)
+        receive.close()
+
+
+@pytest.mark.parametrize('wire', ['aux-openai', 'main-inline-anthropic'])
+def test_hold_during_tls_handshake_closes_peer(tmp_path, monkeypatch, wire):
     """Adversarial prerequisite: HTTP pool has not adopted its network stream yet."""
     import sqlite3
     import socketserver
@@ -168,13 +221,25 @@ def test_hold_during_tls_handshake_closes_peer(tmp_path, monkeypatch):
     db = tmp_path/'tls.sqlite3'
     with sqlite3.connect(db) as conn:
         conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
-    monkeypatch.setattr(provider_control, 'current_policy', lambda: provider_control.Policy(db, ('openai-codex',)))
+    provider = 'anthropic' if wire.endswith('anthropic') else 'openai-codex'
+    policy = provider_control.Policy(db, (provider,))
+    monkeypatch.setattr(provider_control, 'current_policy', lambda: policy)
     client = OpenAI(api_key='synthetic-not-a-secret', base_url=url, max_retries=0, timeout=5,
                     http_client=build_keepalive_http_client(url, verify=False))
     outcomes = []
     def owner():
         try:
-            aux._relay_sync_completion(client, dict(model='fixture', messages=[]), provider='openai-codex')
+            if wire == 'main-inline-anthropic':
+                from tests.run_agent.test_openai_client_lifecycle import _build_agent
+                agent = _build_agent(client)
+                agent.provider, agent.api_mode, agent.platform = provider, 'anthropic_messages', 'cron'
+                agent._anthropic_api_key, agent._anthropic_base_url = 'synthetic-not-a-secret', url
+                agent._try_refresh_anthropic_client_credentials = lambda: False
+                with policy.track(agent):
+                    agent._interruptible_streaming_api_call(dict(model='fixture', max_tokens=16,
+                        messages=[dict(role='user', content='local only')]))
+            else:
+                aux._relay_sync_completion(client, dict(model='fixture', messages=[]), provider=provider)
         except BaseException as exc:
             outcomes.append(type(exc).__name__)
     worker = threading.Thread(target=owner,daemon=True)
@@ -182,10 +247,10 @@ def test_hold_during_tls_handshake_closes_peer(tmp_path, monkeypatch):
     try:
         assert entered.wait(5)
         with sqlite3.connect(db) as conn:
-            conn.execute('INSERT INTO holds VALUES(?,?,?)', ('openai-codex',1,'fixture'))
+            conn.execute('INSERT INTO holds VALUES(?,?,?)', (provider,1,'fixture'))
         assert closed.wait(2), 'TLS socket not adopted into pool; native abort missed it'
         worker.join(2)
-        assert outcomes == ['AuxiliaryExplicitCancellation']
+        assert outcomes == ['HeldProvider' if wire.startswith('main-') else 'AuxiliaryExplicitCancellation']
     finally:
         worker.join(7)
         client.close()

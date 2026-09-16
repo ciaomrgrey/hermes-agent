@@ -16,15 +16,16 @@ def test_provider_hold_admission_and_active_isolation(tmp_path):
     calls = []
     a = SimpleNamespace(provider='anthropic', interrupt=lambda *args, **kw: calls.append(('a',kw)))
     b = SimpleNamespace(provider='openai-codex', interrupt=lambda *args, **kw: calls.append(('b',kw)))
-    with policy.track(a, schedule=False) as a_guard, policy.track(b, schedule=False) as b_guard:
+    with policy.track(a) as a_guard, policy.track(b) as b_guard:
         with sqlite3.connect(db) as conn:
             conn.execute('INSERT INTO holds VALUES(?,?,?)', ('anthropic', 1, 'synthetic'))
         with pytest.raises(HeldProvider):
             policy.check('anthropic')
         policy.check('openai-codex')
-        a_guard.poll()
-        b_guard.poll()
-        assert calls == [('a', {'hard_cancel': True, 'propagate_children': False})]
+        with pytest.raises(HeldProvider):
+            a_guard.check()
+        b_guard.check()
+        assert calls == []  # scope is admission identity, not an I/O cancellation oracle
         # Changing runtime to a fallback cannot bypass original provider ownership.
         a.provider = 'openai-codex'
         with pytest.raises(HeldProvider):
@@ -39,6 +40,23 @@ def test_corrupt_control_is_fail_closed_only_for_configured_providers(tmp_path):
     with pytest.raises(HeldProvider):
         policy.check('anthropic')
     policy.check('xai-oauth')
+
+
+def test_sync_aux_fallback_cannot_escape_original_held_scope(tmp_path, monkeypatch):
+    from agent import provider_control as pc, auxiliary_client as aux
+    db = tmp_path/'fallback.sqlite3'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE holds(provider TEXT, since REAL, incident TEXT)')
+    policy = pc.Policy(db, ('anthropic', 'openai-codex'))
+    monkeypatch.setattr(pc, 'current_policy', lambda: policy)
+    called = []
+    with policy.track(SimpleNamespace(provider='anthropic')):
+        with sqlite3.connect(db) as conn:
+            conn.execute('INSERT INTO holds VALUES(?,?,?)', ('anthropic',1,'synthetic'))
+        with pytest.raises(pc.HeldProvider):
+            aux._relay_sync_completion(SimpleNamespace(), {}, provider='xai-oauth',
+                create=lambda request: called.append('escaped'))
+    assert called == []
 
 
 def test_hold_is_terminal_not_retryable():

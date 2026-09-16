@@ -1,6 +1,8 @@
 # Usage guard — INCOMPLETE CANDIDATE, DO NOT ACTIVATE
 
-Task t_8dbb6c79, CHAT-USAGE-GUARD-001. This replaces the earlier partial handoff;
+Task t_8dbb6c79, CHAT-USAGE-GUARD-001. Current run309 changes and remaining
+acceptance are in CONTINUATION-HANDOFF.md, which supersedes this historical
+checkpoint where they differ. This replaces the earlier partial handoff;
 OWNER-CONTROL-DISPOSITION.md and GURNEY-CONTROL-DESIGN.md remain binding.
 Original 2026-09-16 11:20→14:20 CEST deployment commitment is AT RISK; no reset.
 Gurney's changed-design verdict is REQUIRED CORRECTIONS, not PASS or deployment.
