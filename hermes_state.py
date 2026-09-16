@@ -798,6 +798,23 @@ class SessionDB(
                 f"this worker finished — #94736) and the automatic reopen failed: {exc}"
             ) from exc
 
+    @contextmanager
+    def _nonblocking_guarded_attempt(self, transaction_guard):
+        """Never spend SQLite busy-wait time owning an external reservation.
+
+        Called under the native connection lock. Existing retry/backoff handles
+        BUSY after the guard exits; restore the connection setting on all paths.
+        """
+        conn = self._conn
+        assert conn is not None  # caller reopened under the native connection lock
+        busy_ms = int(conn.execute('PRAGMA busy_timeout').fetchone()[0])
+        try:
+            conn.execute('PRAGMA busy_timeout=0')
+            with transaction_guard():
+                yield
+        finally:
+            conn.execute(f'PRAGMA busy_timeout={busy_ms}')
+
     def _execute_write(
         self, fn: Callable[[sqlite3.Connection], T], patience_s: Optional[float] = None,
         transaction_guard=None,
@@ -839,7 +856,7 @@ class SessionDB(
                     # Local lock first (never held by the controller); then
                     # control SQLite reservation, then session SQLite write.
                     # Release the reservation before retry sleeps/maintenance.
-                    with transaction_guard() if transaction_guard else nullcontext():
+                    with self._nonblocking_guarded_attempt(transaction_guard) if transaction_guard else nullcontext():
                         self._conn.execute("BEGIN IMMEDIATE")
                         try:
                             fn_started = True

@@ -1,0 +1,23 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 4 test files (~6 tests) under ['tests/agent/test_provider_commit_contention.py', 'tests/agent/test_provider_commit_order.py', 'tests/agent/test_provider_commit_recovery.py', 'tests/agent/test_provider_late_persist.py']; running with -j 2
+[ 33.3% |     2/~6 | ✓2 | ✗0] ✓ tests/agent/test_provider_commit_contention.py (2✓, 0.9s)
+[ 50.0% |     3/~6 | ✓4 | ✗0] ✓ tests/agent/test_provider_commit_order.py (2✓, 1.5s)
+[ 66.7% |     4/~6 | ✓11 | ✗ 0] ✓ tests/agent/test_provider_late_persist.py (7✓, 1.0s)
+[100.0% |     6/~6 | ✓16 | ✗ 0] ✓ tests/agent/test_provider_commit_recovery.py (5✓, 4.3s)
+
+=== Summary: 4 files, 16 tests passed, 0 failed (100% complete) in 5.2s (2 workers) ===
+  Durations cached to test_durations.json (4 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   4
+  Total subprocess CPU-wall: 7.7s  (runner wall: 5.2s, parallelism: 2x)
+  P50: 1.49s  P90: 4.28s  P95: 4.28s  P99: 4.28s  Max: 4.28s
+  <1s: 1 files (25%)  <2s: 3 files (75%)
+  Top 10 slowest:
+      4.28s  tests/agent/test_provider_commit_recovery.py
+      1.49s  tests/agent/test_provider_commit_order.py
+      1.01s  tests/agent/test_provider_late_persist.py
+      0.88s  tests/agent/test_provider_commit_contention.py

@@ -59,7 +59,24 @@ def test_native_busy_retry_releases_reservation_and_rechecks_hold(tmp_path, monk
     locker = sqlite3.connect(tmp_path/'state.db')
     locker.execute('BEGIN IMMEDIATE')
     retries = []
+    import time
+    native_conn = db._conn
+    attempts = []
+    class ObserveBegin:
+        def __getattr__(self, name):
+            return getattr(native_conn, name)
+        def execute(self, sql, *args):
+            started = time.monotonic()
+            try:
+                return native_conn.execute(sql, *args)
+            finally:
+                if sql == 'BEGIN IMMEDIATE':
+                    attempts.append(time.monotonic() - started)
+    db._conn = ObserveBegin()
     def retry_after_real_busy(*args):
+        # Measure SQLite waiting itself, excluding imports/setup.
+        assert attempts[-1] < 0.25
+        assert native_conn.execute('PRAGMA busy_timeout').fetchone()[0] == 1000
         # Real native BEGIN has failed on the live SQLite writer reservation.
         # The control reservation must have ended before native retry machinery.
         with sqlite3.connect(control, timeout=0) as conn:

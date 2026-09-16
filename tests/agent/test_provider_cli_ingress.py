@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 
-@pytest.mark.parametrize('bot_chat',[False,True,'cron','gateway'],ids=['direct-cli','canonical-bot-chat','native-cron','gateway-turn-runner'])
+@pytest.mark.parametrize('bot_chat',[False,True,'cron','gateway','delegation','kanban','compression'],ids=['direct-cli','canonical-bot-chat','native-cron','gateway-turn-runner','native-delegate-child','native-kanban-worker','native-compression'])
 @pytest.mark.parametrize('active',[False,True],ids=['admission','active-wire'])
 def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat,active):
     root=Path(__file__).resolve().parents[2]
@@ -66,6 +66,7 @@ def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_cha
         env.pop(key,None)
     query='Preserve this synthetic pending message without inference.'
     env['FIXTURE_QUERY'] = query
+    env['FIXTURE_HOST'] = str(bot_chat)
     args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
     if bot_chat is True:
         from tools.bot_relay import BOT_CHAT_TURN_ARGS
@@ -75,8 +76,12 @@ def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_cha
               'import json; from cron.scheduler import run_job; '
               'r=run_job(dict(id="synthetic-hold",name="synthetic",prompt='+repr(query)+',deliver="local")); '
               'print(json.dumps(r)); assert r[0] is False and r[2] == ""']
-    elif bot_chat == 'gateway':
+    elif bot_chat in ('gateway','delegation'):
         args=[sys.executable,'-m','tests.agent.provider_gateway_fixture']
+    elif bot_chat == 'kanban':
+        args=[sys.executable,'-m','tests.agent.provider_kanban_fixture']
+    elif bot_chat == 'compression':
+        args=[sys.executable,'-m','tests.agent.provider_compression_fixture']
     try:
         result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
         (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
@@ -84,7 +89,7 @@ def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_cha
         if bot_chat != 'cron' and 'Traceback' in result.stderr:
             print(result.stderr)
         assert bot_chat == 'cron' or 'Traceback' not in result.stderr
-        assert result.returncode == (0 if bot_chat in ('cron','gateway') else 1), result.stdout+result.stderr
+        assert result.returncode == (1 if isinstance(bot_chat, bool) else 0), result.stdout+result.stderr
         # Local endpoints trigger native Ollama model metadata probing during
         # construction; /api/show is not inference. Reject every other POST.
         if active:
@@ -93,12 +98,19 @@ def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_cha
             assert closed.is_set(), 'active provider socket did not close within two seconds'
         else:
             assert all(path=='/api/show' and 'messages' not in json.loads(body) for path,body in requests), requests
+        if bot_chat == 'compression':
+            assert '"input_unchanged": true' in result.stdout
+            return  # compressor operates on the caller's native snapshot, not a DB
         with sqlite3.connect(home/'state.db') as conn:
             rows=conn.execute('SELECT role,content FROM messages ORDER BY timestamp').fetchall()
             if bot_chat == 'cron':
                 # Native cron deliberately prefixes delivery instructions.
                 assert len(rows) == 1 and rows[0][0] == 'user', rows
                 assert rows[0][1].endswith('\n\n'+query), rows
+            elif bot_chat == 'kanban':
+                # The spawned worker's native prompt refers to the durable task.
+                assert any(role=='user' and content.startswith('work kanban task t_') for role,content in rows), rows
+                assert 'state_preserved' in result.stdout
             else:
                 assert any(role=='user' and content==query for role,content in rows), rows
             assert not any(role=='assistant' for role,content in rows), rows

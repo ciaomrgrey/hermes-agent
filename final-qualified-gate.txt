@@ -1,0 +1,68 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 43 test files (~196 tests) under ['tests/run_agent/test_81641_text_turn_incremental_persistence.py', 'tests/run_agent/test_compression_persistence.py', 'tests/run_agent/test_empty_response_recovery_persistence.py', 'tests/run_agent/test_in_place_persist_marker_98450.py', 'tests/run_agent/test_session_activity_persist.py', 'tests/run_agent/test_thinking_sig_recovery_persistence.py', 'tests/run_agent/test_token_persistence_non_cli.py', 'tests/run_agent/test_tool_call_incremental_persistence.py', 'tests/run_agent/test_tool_name_db_persistence.py', 'tests/agent/test_rotation_flush_persisted_boundary_68196.py', 'tests/agent/test_session_rotation_flush_cold_resume_68454.py', 'tests/agent/test_turn_finalizer_cleanup_guard.py', 'tests/agent/test_turn_finalizer_final_response_persistence.py', 'tests/agent/test_turn_finalizer_interrupt_alternation.py', 'tests/agent/test_turn_finalizer_iteration_limit_exit.py', 'tests/test_state_db_write_durability.py', 'tests/agent/test_session_persistence*.py', 'tests/agent/test_provider_admission.py', 'tests/agent/test_provider_cli_ingress.py', 'tests/agent/test_provider_client_seam.py', 'tests/agent/test_provider_commit_contention.py', 'tests/agent/test_provider_commit_order.py', 'tests/agent/test_provider_commit_recovery.py', 'tests/agent/test_provider_control.py', 'tests/agent/test_provider_control_concurrency.py', 'tests/agent/test_provider_control_races.py', 'tests/agent/test_provider_host_results.py', 'tests/agent/test_provider_late_persist.py', 'tests/agent/test_provider_presocket.py', 'tests/agent/test_provider_projection.py', 'tests/agent/test_provider_tcp_timeout.py', 'tests/agent/test_usage_guard.py', 'tests/agent/test_usage_guard_cli.py', 'tests/agent/test_usage_guard_delivery.py', 'tests/agent/test_usage_guard_deploy.py', 'tests/agent/test_usage_guard_identity.py', 'tests/agent/test_usage_guard_native_install.py', 'tests/agent/test_usage_guard_retention.py', 'tests/agent/test_usage_guard_sources.py', 'tests/agent/test_auxiliary_owned_cancel.py', 'tests/agent/test_auxiliary_stream_lifetime.py', 'tests/agent/test_title_generator.py', 'tests/cli/test_single_query_session_finalize.py', 'tests/cli/test_single_query_clarify.py']; running with -j 3
+[  1.0% |     2/~196 | ✓2 | ✗0] ✓ tests/agent/test_provider_admission.py (2✓, 0.3s)
+[  1.5% |     3/~196 | ✓10 | ✗ 0] ✓ tests/agent/test_auxiliary_stream_lifetime.py (8✓, 5.1s)
+[  3.6% |     7/~196 | ✓14 | ✗ 0] ✓ tests/agent/test_provider_client_seam.py (4✓, 0.9s)
+[  4.6% |     9/~196 | ✓16 | ✗ 0] ✓ tests/agent/test_provider_commit_contention.py (2✓, 0.8s)
+[  5.1% |    10/~196 | ✓18 | ✗ 0] ✓ tests/agent/test_provider_commit_order.py (2✓, 1.5s)
+[  6.1% |    12/~196 | ✓23 | ✗ 0] ✓ tests/agent/test_provider_commit_recovery.py (5✓, 3.4s)
+[ 10.2% |    20/~196 | ✓31 | ✗ 0] ✓ tests/agent/test_provider_control.py (8✓, 0.6s)
+[ 10.7% |    21/~196 | ✓32 | ✗ 0] ✓ tests/agent/test_provider_control_concurrency.py (1✓, 1.2s)
+[ 11.2% |    22/~196 | ✓35 | ✗ 0] ✓ tests/agent/test_provider_control_races.py (3✓, 0.6s)
+[ 12.8% |    25/~196 | ✓38 | ✗ 0] ✓ tests/agent/test_provider_host_results.py (3✓, 0.5s)
+[ 13.3% |    26/~196 | ✓45 | ✗ 0] ✓ tests/agent/test_provider_late_persist.py (7✓, 1.0s)
+[ 13.8% |    27/~196 | ✓46 | ✗ 0] ✓ tests/agent/test_provider_presocket.py (1✓, 2.9s)
+[ 16.8% |    33/~196 | ✓72 | ✗ 0] ✓ tests/agent/test_auxiliary_owned_cancel.py (26✓, 18.5s)
+[ 20.9% |    41/~196 | ✓80 | ✗ 0] ✓ tests/agent/test_provider_projection.py (8✓, 1.6s)
+[ 21.4% |    42/~196 | ✓81 | ✗ 0] ✓ tests/agent/test_rotation_flush_persisted_boundary_68196.py (1✓, 1.9s)
+[ 23.0% |    45/~196 | ✓84 | ✗ 0] ✓ tests/agent/test_session_rotation_flush_cold_resume_68454.py (3✓, 0.8s)
+[ 39.8% |    78/~196 | ✓120 | ✗  0] ✓ tests/agent/test_title_generator.py (36✓, 1.4s)
+[ 41.3% |    81/~196 | ✓126 | ✗  0] ✓ tests/agent/test_turn_finalizer_cleanup_guard.py (6✓, 0.7s)
+[ 45.4% |    89/~196 | ✓134 | ✗  0] ✓ tests/agent/test_turn_finalizer_final_response_persistence.py (8✓, 0.7s)
+[ 45.9% |    90/~196 | ✓148 | ✗  0] ✓ tests/agent/test_provider_cli_ingress.py (14✓, 25.4s)
+[ 46.9% |    92/~196 | ✓150 | ✗  0] ✓ tests/agent/test_turn_finalizer_interrupt_alternation.py (2✓, 0.6s)
+[ 50.5% |    99/~196 | ✓159 | ✗  0] ✓ tests/agent/test_turn_finalizer_iteration_limit_exit.py (9✓, 0.4s)
+[ 52.6% |   103/~196 | ✓163 | ✗  0] ✓ tests/agent/test_usage_guard_cli.py (4✓, 0.4s)
+[ 56.6% |   111/~196 | ✓171 | ✗  0] ✓ tests/agent/test_usage_guard.py (8✓, 0.7s)
+[ 57.1% |   112/~196 | ✓172 | ✗  0] ✓ tests/agent/test_usage_guard_delivery.py (1✓, 0.3s)
+[ 58.2% |   114/~196 | ✓174 | ✗  0] ✓ tests/agent/test_usage_guard_deploy.py (2✓, 0.3s)
+[ 59.7% |   117/~196 | ✓177 | ✗  0] ✓ tests/agent/test_usage_guard_identity.py (3✓, 0.3s)
+[ 60.7% |   119/~196 | ✓179 | ✗  0] ✓ tests/agent/test_usage_guard_retention.py (2✓, 0.3s)
+[ 61.7% |   121/~196 | ✓181 | ✗  0] ✓ tests/agent/test_usage_guard_sources.py (2✓, 0.3s)
+[ 64.3% |   126/~196 | ✓186 | ✗  0] ✓ tests/cli/test_single_query_clarify.py (5✓, 0.3s)
+[ 66.8% |   131/~196 | ✓191 | ✗  0] ✓ tests/cli/test_single_query_session_finalize.py (5✓, 0.4s)
+[ 67.9% |   133/~196 | ✓193 | ✗  0] ✓ tests/run_agent/test_81641_text_turn_incremental_persistence.py (2✓, 1.0s)
+[ 68.4% |   134/~196 | ✓194 | ✗  0] ✓ tests/agent/test_usage_guard_native_install.py (1✓, 3.7s)
+[ 70.4% |   138/~196 | ✓198 | ✗  0] ✓ tests/run_agent/test_empty_response_recovery_persistence.py (4✓, 0.7s)
+[ 76.5% |   150/~196 | ✓210 | ✗  0] ✓ tests/run_agent/test_compression_persistence.py (12✓, 3.1s)
+[ 77.6% |   152/~196 | ✓212 | ✗  0] ✓ tests/run_agent/test_in_place_persist_marker_98450.py (2✓, 1.8s)
+[ 84.7% |   166/~196 | ✓226 | ✗  0] ✓ tests/run_agent/test_session_activity_persist.py (14✓, 0.8s)
+[ 86.7% |   170/~196 | ✓230 | ✗  0] ✓ tests/run_agent/test_thinking_sig_recovery_persistence.py (4✓, 0.3s)
+[ 88.3% |   173/~196 | ✓233 | ✗  0] ✓ tests/run_agent/test_token_persistence_non_cli.py (3✓, 1.5s)
+[ 88.8% |   174/~196 | ✓234 | ✗  0] ✓ tests/run_agent/test_tool_name_db_persistence.py (1✓, 0.8s)
+[ 90.8% |   178/~196 | ✓238 | ✗  0] ✓ tests/test_state_db_write_durability.py (4✓, 0.4s)
+[ 99.5% |   195/~196 | ✓257 | ✗  0] ✓ tests/run_agent/test_tool_call_incremental_persistence.py (19✓, 3.7s)
+[100.0% |   196/~196 | ✓258 | ✗  0] ✓ tests/agent/test_provider_tcp_timeout.py (1✓, 30.8s)
+
+=== Summary: 43 files, 258 tests passed, 0 failed (100% complete) in 49.4s (3 workers) ===
+  Durations cached to test_durations.json (43 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   43
+  Total subprocess CPU-wall: 122.5s  (runner wall: 49.4s, parallelism: 3x)
+  P50: 0.80s  P90: 3.71s  P95: 18.51s  P99: 30.83s  Max: 30.83s
+  <1s: 26 files (60%)  <2s: 34 files (79%)
+  Top 10 slowest:
+     30.83s  tests/agent/test_provider_tcp_timeout.py
+     25.40s  tests/agent/test_provider_cli_ingress.py
+     18.51s  tests/agent/test_auxiliary_owned_cancel.py
+      5.07s  tests/agent/test_auxiliary_stream_lifetime.py
+      3.71s  tests/run_agent/test_tool_call_incremental_persistence.py
+      3.67s  tests/agent/test_usage_guard_native_install.py
+      3.45s  tests/agent/test_provider_commit_recovery.py
+      3.07s  tests/run_agent/test_compression_persistence.py
+      2.86s  tests/agent/test_provider_presocket.py
+      1.91s  tests/agent/test_rotation_flush_persisted_boundary_68196.py

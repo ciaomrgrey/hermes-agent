@@ -21,6 +21,14 @@ def main():
                     max_iterations=1, enabled_toolsets=[], skip_memory=True,
                     skip_context_files=True, skip_background_review=True,
                     quiet_mode=True)
+    if os.environ.get('FIXTURE_HOST') == 'delegation':
+        from tools.delegate_tool import _run_single_child
+        result = _run_single_child(0, query, child=agent, parent_agent=SimpleNamespace())
+        print(json.dumps(result, default=str))
+        assert result['status'] == 'interrupted', result
+        assert result['exit_reason'] == 'interrupted', result
+        db.close()
+        return
     source = SessionSource(platform=Platform.LOCAL, chat_id='fixture', user_id='fixture')
     ctx = TurnContext(source=source, message=query, session_id=agent.session_id,
                       session_key='synthetic-key')

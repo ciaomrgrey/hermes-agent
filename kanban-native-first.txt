@@ -1,0 +1,287 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~1 tests) under ['tests/agent/test_provider_cli_ingress.py']; running with -j 1
+[100.0% |     1/~1 | ✓10 | ✗ 2] ✗ tests/agent/test_provider_cli_ingress.py (10✓ 2✗, 45.3s)
+
+  ╔╍ Failed: tests/agent/test_provider_cli_ingress.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║ E           assert ('kanban' == 'cron'
+  ║ E             
+  ║ E             - cron
+  ║ E             + kanban or 'Traceback' not in 'Traceback (...rtionError\n'
+  ║ E             
+  ║ E             'Traceback' is contained here:
+  ║ E               Traceback (most recent call last):
+  ║ E             ? +++++++++
+  ║ E                 File "<frozen runpy>", line 198, in _run_module_as_main
+  ║ E                 File "<frozen runpy>", line 88, in _run_code
+  ║ E                 File "/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/tests/agent/provider_kanban_fixture.py", line 41, in <module>...
+  ║ E             
+  ║ E             ...Full output truncated (5 lines hidden), use '-vv' to show)
+  ║ 
+  ║ tests/agent/test_provider_cli_ingress.py:89: AssertionError
+  ║ ----------------------------- Captured stdout call -----------------------------
+  ║ Traceback (most recent call last):
+  ║   File "<frozen runpy>", line 198, in _run_module_as_main
+  ║   File "<frozen runpy>", line 88, in _run_code
+  ║   File "/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/tests/agent/provider_kanban_fixture.py", line 41, in <module>
+  ║     main()
+  ║   File "/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/tests/agent/provider_kanban_fixture.py", line 32, in main
+  ║     assert os.waitstatus_to_exitcode(status) == 1
+  ║            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ║ AssertionError
+  ║ 
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[admission-native-kanban-worker]
+  ║ FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-native-kanban-worker]
+  ║ ======================== 2 failed, 10 passed in 21.77s =========================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_provider_cli_ingress.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 10 tests passed, 2 failed (100% complete) in 45.3s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 45.3s  (runner wall: 45.3s, parallelism: 1x)
+  P50: 45.27s  P90: 45.27s  P95: 45.27s  P99: 45.27s  Max: 45.27s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+     45.27s  tests/agent/test_provider_cli_ingress.py
+
+=== Failure output ===
+
+--- tests/agent/test_provider_cli_ingress.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 12 items
+
+tests/agent/test_provider_cli_ingress.py .....F.....F                    [100%]
+
+=================================== FAILURES ===================================
+_ test_native_cli_ingress_hold_is_resumable_without_inference[admission-native-kanban-worker] _
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-he9_5h8q/pytest-of-claudia/pytest-0/test_native_cli_ingress_hold_i5')
+bot_chat = 'kanban', active = False
+
+    @pytest.mark.parametrize('bot_chat',[False,True,'cron','gateway','delegation','kanban'],ids=['direct-cli','canonical-bot-chat','native-cron','gateway-turn-runner','native-delegate-child','native-kanban-worker'])
+    @pytest.mark.parametrize('active',[False,True],ids=['admission','active-wire'])
+    def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat,active):
+        root=Path(__file__).resolve().parents[2]
+        home=tmp_path/'estate'
+        home.mkdir()
+        db=home/'holds.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
+            if not active:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        requests=[]
+        closed = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+                requests.append((self.path,body))
+                if active and self.path != '/api/show':
+                    with sqlite3.connect(db) as conn:
+                        conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.end_headers()
+                    self.wfile.flush()
+                    self.connection.settimeout(2)
+                    try:
+                        if self.connection.recv(1) == b'':
+                            closed.set()
+                    except ConnectionResetError:
+                        closed.set()
+                    except TimeoutError:
+                        pass
+                    return
+                self.send_response(500); self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server.daemon_threads=True
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        url=f'http://127.0.0.1:{server.server_port}'
+        cfg=dict(model=dict(provider='anthropic',default='claude-sonnet-4-5',base_url=url),
+            provider_control=dict(database=str(db),providers=['anthropic','openai-codex']),
+            memory=dict(memory_enabled=False,user_profile_enabled=False),
+            compression=dict(enabled=False),curator=dict(enabled=False),
+            agent=dict(max_iterations=1),display=dict(interface='cli'),
+            auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+                       for name in ('compression','vision','title','session_title')})
+        (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+        env=dict(os.environ,HOME=str(tmp_path),HERMES_HOME=str(home),HERMES_PROFILE='default',
+            ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+            OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+        for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+            env.pop(key,None)
+        query='Preserve this synthetic pending message without inference.'
+        env['FIXTURE_QUERY'] = query
+        env['FIXTURE_HOST'] = str(bot_chat)
+        args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+        if bot_chat is True:
+            from tools.bot_relay import BOT_CHAT_TURN_ARGS
+            args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+        elif bot_chat == 'cron':
+            args=[sys.executable,'-c',
+                  'import json; from cron.scheduler import run_job; '
+                  'r=run_job(dict(id="synthetic-hold",name="synthetic",prompt='+repr(query)+',deliver="local")); '
+                  'print(json.dumps(r)); assert r[0] is False and r[2] == ""']
+        elif bot_chat in ('gateway','delegation'):
+            args=[sys.executable,'-m','tests.agent.provider_gateway_fixture']
+        elif bot_chat == 'kanban':
+            args=[sys.executable,'-m','tests.agent.provider_kanban_fixture']
+        try:
+            result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+            (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+            assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+            if bot_chat != 'cron' and 'Traceback' in result.stderr:
+                print(result.stderr)
+>           assert bot_chat == 'cron' or 'Traceback' not in result.stderr
+E           assert ('kanban' == 'cron'
+E             
+E             - cron
+E             + kanban or 'Traceback' not in 'Traceback (...rtionError\n'
+E             
+E             'Traceback' is contained here:
+E               Traceback (most recent call last):
+E             ? +++++++++
+E                 File "<frozen runpy>", line 198, in _run_module_as_main
+E                 File "<frozen runpy>", line 88, in _run_code
+E                 File "/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/tests/agent/provider_kanban_fixture.py", line 41, in <module>...
+E             
+E             ...Full output truncated (5 lines hidden), use '-vv' to show)
+
+tests/agent/test_provider_cli_ingress.py:89: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/tests/agent/provider_kanban_fixture.py", line 41, in <module>
+    main()
+  File "/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/tests/agent/provider_kanban_fixture.py", line 32, in main
+    assert os.waitstatus_to_exitcode(status) == 1
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+_ test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-native-kanban-worker] _
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-he9_5h8q/pytest-of-claudia/pytest-0/test_native_cli_ingress_hold_i11')
+bot_chat = 'kanban', active = True
+
+    @pytest.mark.parametrize('bot_chat',[False,True,'cron','gateway','delegation','kanban'],ids=['direct-cli','canonical-bot-chat','native-cron','gateway-turn-runner','native-delegate-child','native-kanban-worker'])
+    @pytest.mark.parametrize('active',[False,True],ids=['admission','active-wire'])
+    def test_native_cli_ingress_hold_is_resumable_without_inference(tmp_path,bot_chat,active):
+        root=Path(__file__).resolve().parents[2]
+        home=tmp_path/'estate'
+        home.mkdir()
+        db=home/'holds.sqlite3'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT,since REAL,incident TEXT)')
+            if not active:
+                conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+        requests=[]
+        closed = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+                requests.append((self.path,body))
+                if active and self.path != '/api/show':
+                    with sqlite3.connect(db) as conn:
+                        conn.execute('INSERT INTO holds VALUES(?,?,?)',('anthropic',1,'fixture'))
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.end_headers()
+                    self.wfile.flush()
+                    self.connection.settimeout(2)
+                    try:
+                        if self.connection.recv(1) == b'':
+                            closed.set()
+                    except ConnectionResetError:
+                        closed.set()
+                    except TimeoutError:
+                        pass
+                    return
+                self.send_response(500); self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server.daemon_threads=True
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        url=f'http://127.0.0.1:{server.server_port}'
+        cfg=dict(model=dict(provider='anthropic',default='claude-sonnet-4-5',base_url=url),
+            provider_control=dict(database=str(db),providers=['anthropic','openai-codex']),
+            memory=dict(memory_enabled=False,user_profile_enabled=False),
+            compression=dict(enabled=False),curator=dict(enabled=False),
+            agent=dict(max_iterations=1),display=dict(interface='cli'),
+            auxiliary={name:dict(provider='anthropic',model='claude-sonnet-4-5',base_url=url)
+                       for name in ('compression','vision','title','session_title')})
+        (home/'config.yaml').write_text(yaml.safe_dump(cfg))
+        env=dict(os.environ,HOME=str(tmp_path),HERMES_HOME=str(home),HERMES_PROFILE='default',
+            ANTHROPIC_API_KEY='sk-ant-api03-synthetic-fixture',ANTHROPIC_BASE_URL=url,
+            OPENAI_BASE_URL=url,NO_PROXY='127.0.0.1,localhost')
+        for key in ('ANTHROPIC_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','HTTPS_PROXY','HTTP_PROXY','ALL_PROXY'):
+            env.pop(key,None)
+        query='Preserve this synthetic pending message without inference.'
+        env['FIXTURE_QUERY'] = query
+        env['FIXTURE_HOST'] = str(bot_chat)
+        args=[sys.executable,'-m','hermes_cli.main','chat','-Q','--query',query]
+        if bot_chat is True:
+            from tools.bot_relay import BOT_CHAT_TURN_ARGS
+            args=[sys.executable,'-m','hermes_cli.main',*BOT_CHAT_TURN_ARGS,'--query',query]
+        elif bot_chat == 'cron':
+            args=[sys.executable,'-c',
+                  'import json; from cron.scheduler import run_job; '
+                  'r=run_job(dict(id="synthetic-hold",name="synthetic",prompt='+repr(query)+',deliver="local")); '
+                  'print(json.dumps(r)); assert r[0] is False and r[2] == ""']
+        elif bot_chat in ('gateway','delegation'):
+            args=[sys.executable,'-m','tests.agent.provider_gateway_fixture']
+        elif bot_chat == 'kanban':
+            args=[sys.executable,'-m','tests.agent.provider_kanban_fixture']
+        try:
+            result=subprocess.run(args,cwd=root,env=env,text=True,capture_output=True,timeout=40)
+            (tmp_path/'cli-receipt.txt').write_text(f'exit={result.returncode}\n'+result.stdout+result.stderr)
+            assert 'Provider held; explicit operator resume required' in result.stdout+result.stderr, (result.returncode,result.stdout,result.stderr)
+            if bot_chat != 'cron' and 'Traceback' in result.stderr:
+                print(result.stderr)
+>           assert bot_chat == 'cron' or 'Traceback' not in result.stderr
+E           assert ('kanban' == 'cron'
+E             
+E             - cron
+E             + kanban or 'Traceback' not in 'Traceback (...rtionError\n'
+E             
+E             'Traceback' is contained here:
+E               Traceback (most recent call last):
+E             ? +++++++++
+E                 File "<frozen runpy>", line 198, in _run_module_as_main
+E                 File "<frozen runpy>", line 88, in _run_code
+E                 File "/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/tests/agent/provider_kanban_fixture.py", line 41, in <module>...
+E             
+E             ...Full output truncated (5 lines hidden), use '-vv' to show)
+
+tests/agent/test_provider_cli_ingress.py:89: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/tests/agent/provider_kanban_fixture.py", line 41, in <module>
+    main()
+  File "/Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate/tests/agent/provider_kanban_fixture.py", line 32, in main
+    assert os.waitstatus_to_exitcode(status) == 1
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+=========================== short test summary info ============================
+FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[admission-native-kanban-worker]
+FAILED tests/agent/test_provider_cli_ingress.py::test_native_cli_ingress_hold_is_resumable_without_inference[active-wire-native-kanban-worker]
+======================== 2 failed, 10 passed in 21.77s =========================
+
+=== 1 file with test failures (2 tests failed) ===
+  tests/agent/test_provider_cli_ingress.py  (2 tests failed)

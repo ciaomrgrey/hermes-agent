@@ -1,0 +1,127 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~2 tests) under ['tests/agent/test_provider_commit_contention.py']; running with -j 1
+[100.0% |     2/~2 | ✓1 | ✗1] ✗ tests/agent/test_provider_commit_contention.py (1✓ 1✗, 7.1s)
+
+  ╔╍ Failed: tests/agent/test_provider_commit_contention.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║                 try:
+  ║                     return native_conn.execute(sql, *args)
+  ║                 finally:
+  ║                     if sql == 'BEGIN IMMEDIATE':
+  ║                         attempts.append(time.monotonic() - started)
+  ║         db._conn = ObserveBegin()
+  ║         def retry_after_real_busy(*args):
+  ║             # Measure SQLite waiting itself, excluding imports/setup.
+  ║             assert attempts[-1] < 0.25
+  ║             assert native_conn.execute('PRAGMA busy_timeout').fetchone()[0] == 1000
+  ║             # Real native BEGIN has failed on the live SQLite writer reservation.
+  ║             # The control reservation must have ended before native retry machinery.
+  ║             with sqlite3.connect(control, timeout=0) as conn:
+  ║                 conn.execute('INSERT INTO holds VALUES(?)', ('anthropic',))
+  ║             retries.append('hold_committed')
+  ║             locker.rollback()
+  ║             return True
+  ║         monkeypatch.setattr(db, '_sleep_before_write_retry', retry_after_real_busy)
+  ║         messages = [dict(role='user', content='pending'), dict(role='assistant', content='forbidden')]
+  ║         try:
+  ║             import pytest
+  ║ >           with pytest.raises(pc.HeldProvider):
+  ║ E           Failed: DID NOT RAISE <class 'agent.provider_control.HeldProvider'>
+  ║ 
+  ║ tests/agent/test_provider_commit_contention.py:91: Failed
+  ║ ------------------------------ Captured log call -------------------------------
+  ║ WARNING  run_agent:session_persistence.py:270 Session DB append_message failed: assert 2.68973945900143 < 0.25
+  ║ =========================== short test summary info ============================
+  ║ FAILED tests/agent/test_provider_commit_contention.py::test_native_busy_retry_releases_reservation_and_rechecks_hold
+  ║ ========================= 1 failed, 1 passed in 3.32s ==========================
+  ║
+  ║  Repro: python -m pytest tests/agent/test_provider_commit_contention.py
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 1 tests passed, 1 failed (100% complete) in 7.1s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 7.1s  (runner wall: 7.1s, parallelism: 1x)
+  P50: 7.12s  P90: 7.12s  P95: 7.12s  P99: 7.12s  Max: 7.12s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+      7.12s  tests/agent/test_provider_commit_contention.py
+
+=== Failure output ===
+
+--- tests/agent/test_provider_commit_contention.py ---
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/claudia/hermes/home/profiles/generalist/workspace/usage-guard-20260916/candidate
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 2 items
+
+tests/agent/test_provider_commit_contention.py .F                        [100%]
+
+=================================== FAILURES ===================================
+________ test_native_busy_retry_releases_reservation_and_rechecks_hold _________
+
+tmp_path = PosixPath('/private/tmp/hermes-pytest-tmproot-hniqokk3/pytest-of-claudia/pytest-0/test_native_busy_retry_release0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b77a350>
+
+    def test_native_busy_retry_releases_reservation_and_rechecks_hold(tmp_path, monkeypatch):
+        control = tmp_path/'control.db'
+        with sqlite3.connect(control) as conn:
+            conn.execute('CREATE TABLE holds(provider TEXT)')
+        policy = pc.Policy(control, ['anthropic'])
+        monkeypatch.setattr(pc, 'current_policy', lambda: policy)
+        db = SessionDB(db_path=tmp_path/'state.db')
+        db.create_session('s', source='cli')
+        agent = _make_flush_agent(db, 's')
+        agent.provider = 'anthropic'
+        locker = sqlite3.connect(tmp_path/'state.db')
+        locker.execute('BEGIN IMMEDIATE')
+        retries = []
+        import time
+        native_conn = db._conn
+        attempts = []
+        class ObserveBegin:
+            def __getattr__(self, name):
+                return getattr(native_conn, name)
+            def execute(self, sql, *args):
+                started = time.monotonic()
+                try:
+                    return native_conn.execute(sql, *args)
+                finally:
+                    if sql == 'BEGIN IMMEDIATE':
+                        attempts.append(time.monotonic() - started)
+        db._conn = ObserveBegin()
+        def retry_after_real_busy(*args):
+            # Measure SQLite waiting itself, excluding imports/setup.
+            assert attempts[-1] < 0.25
+            assert native_conn.execute('PRAGMA busy_timeout').fetchone()[0] == 1000
+            # Real native BEGIN has failed on the live SQLite writer reservation.
+            # The control reservation must have ended before native retry machinery.
+            with sqlite3.connect(control, timeout=0) as conn:
+                conn.execute('INSERT INTO holds VALUES(?)', ('anthropic',))
+            retries.append('hold_committed')
+            locker.rollback()
+            return True
+        monkeypatch.setattr(db, '_sleep_before_write_retry', retry_after_real_busy)
+        messages = [dict(role='user', content='pending'), dict(role='assistant', content='forbidden')]
+        try:
+            import pytest
+>           with pytest.raises(pc.HeldProvider):
+E           Failed: DID NOT RAISE <class 'agent.provider_control.HeldProvider'>
+
+tests/agent/test_provider_commit_contention.py:91: Failed
+------------------------------ Captured log call -------------------------------
+WARNING  run_agent:session_persistence.py:270 Session DB append_message failed: assert 2.68973945900143 < 0.25
+=========================== short test summary info ============================
+FAILED tests/agent/test_provider_commit_contention.py::test_native_busy_retry_releases_reservation_and_rechecks_hold
+========================= 1 failed, 1 passed in 3.32s ==========================
+
+=== 1 file with test failures (1 test failed) ===
+  tests/agent/test_provider_commit_contention.py  (1 test failed)

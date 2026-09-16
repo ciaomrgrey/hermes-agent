@@ -1,0 +1,52 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 27 test files (~109 tests) under ['tests/agent/test_provider_admission.py', 'tests/agent/test_provider_cli_ingress.py', 'tests/agent/test_provider_client_seam.py', 'tests/agent/test_provider_commit_contention.py', 'tests/agent/test_provider_commit_order.py', 'tests/agent/test_provider_commit_recovery.py', 'tests/agent/test_provider_control.py', 'tests/agent/test_provider_control_concurrency.py', 'tests/agent/test_provider_control_races.py', 'tests/agent/test_provider_host_results.py', 'tests/agent/test_provider_late_persist.py', 'tests/agent/test_provider_presocket.py', 'tests/agent/test_provider_projection.py', 'tests/agent/test_provider_tcp_timeout.py', 'tests/agent/test_usage_guard.py', 'tests/agent/test_usage_guard_cli.py', 'tests/agent/test_usage_guard_delivery.py', 'tests/agent/test_usage_guard_deploy.py', 'tests/agent/test_usage_guard_identity.py', 'tests/agent/test_usage_guard_native_install.py', 'tests/agent/test_usage_guard_retention.py', 'tests/agent/test_usage_guard_sources.py', 'tests/agent/test_auxiliary_owned_cancel.py', 'tests/agent/test_auxiliary_stream_lifetime.py', 'tests/agent/test_title_generator.py', 'tests/cli/test_single_query_session_finalize.py', 'tests/cli/test_single_query_clarify.py']; running with -j 2
+[  0.9% |     1/~109 | ✓8 | ✗0] ✓ tests/agent/test_auxiliary_stream_lifetime.py (8✓, 13.5s)
+[  2.8% |     3/~109 | ✓10 | ✗ 0] ✓ tests/agent/test_provider_admission.py (2✓, 4.4s)
+[  8.3% |     9/~109 | ✓36 | ✗ 0] ✓ tests/agent/test_auxiliary_owned_cancel.py (26✓, 34.0s)
+[ 11.9% |    13/~109 | ✓40 | ✗ 0] ✓ tests/agent/test_provider_client_seam.py (4✓, 0.9s)
+[ 13.8% |    15/~109 | ✓42 | ✗ 0] ✓ tests/agent/test_provider_commit_contention.py (2✓, 3.3s)
+[ 14.7% |    16/~109 | ✓44 | ✗ 0] ✓ tests/agent/test_provider_commit_order.py (2✓, 1.8s)
+[ 16.5% |    18/~109 | ✓49 | ✗ 0] ✓ tests/agent/test_provider_commit_recovery.py (5✓, 4.2s)
+[ 23.9% |    26/~109 | ✓57 | ✗ 0] ✓ tests/agent/test_provider_control.py (8✓, 0.5s)
+[ 24.8% |    27/~109 | ✓71 | ✗ 0] ✓ tests/agent/test_provider_cli_ingress.py (14✓, 27.6s)
+[ 25.7% |    28/~109 | ✓72 | ✗ 0] ✓ tests/agent/test_provider_control_concurrency.py (1✓, 1.2s)
+[ 26.6% |    29/~109 | ✓75 | ✗ 0] ✓ tests/agent/test_provider_control_races.py (3✓, 0.6s)
+[ 29.4% |    32/~109 | ✓78 | ✗ 0] ✓ tests/agent/test_provider_host_results.py (3✓, 0.5s)
+[ 30.3% |    33/~109 | ✓85 | ✗ 0] ✓ tests/agent/test_provider_late_persist.py (7✓, 1.0s)
+[ 37.6% |    41/~109 | ✓93 | ✗ 0] ✓ tests/agent/test_provider_projection.py (8✓, 1.5s)
+[ 38.5% |    42/~109 | ✓94 | ✗ 0] ✓ tests/agent/test_provider_presocket.py (1✓, 2.8s)
+[ 68.8% |    75/~109 | ✓130 | ✗  0] ✓ tests/agent/test_title_generator.py (36✓, 1.3s)
+[ 76.1% |    83/~109 | ✓138 | ✗  0] ✓ tests/agent/test_usage_guard.py (8✓, 0.7s)
+[ 79.8% |    87/~109 | ✓142 | ✗  0] ✓ tests/agent/test_usage_guard_cli.py (4✓, 0.4s)
+[ 80.7% |    88/~109 | ✓143 | ✗  0] ✓ tests/agent/test_usage_guard_delivery.py (1✓, 0.2s)
+[ 82.6% |    90/~109 | ✓145 | ✗  0] ✓ tests/agent/test_usage_guard_deploy.py (2✓, 0.3s)
+[ 85.3% |    93/~109 | ✓148 | ✗  0] ✓ tests/agent/test_usage_guard_identity.py (3✓, 0.3s)
+[ 86.2% |    94/~109 | ✓149 | ✗  0] ✓ tests/agent/test_usage_guard_native_install.py (1✓, 9.9s)
+[ 88.1% |    96/~109 | ✓151 | ✗  0] ✓ tests/agent/test_usage_guard_retention.py (2✓, 3.2s)
+[ 89.9% |    98/~109 | ✓153 | ✗  0] ✓ tests/agent/test_usage_guard_sources.py (2✓, 1.0s)
+[ 94.5% |   103/~109 | ✓158 | ✗  0] ✓ tests/cli/test_single_query_clarify.py (5✓, 0.3s)
+[ 99.1% |   108/~109 | ✓163 | ✗  0] ✓ tests/cli/test_single_query_session_finalize.py (5✓, 0.4s)
+[100.0% |   109/~109 | ✓164 | ✗  0] ✓ tests/agent/test_provider_tcp_timeout.py (1✓, 31.4s)
+
+=== Summary: 27 files, 164 tests passed, 0 failed (100% complete) in 80.1s (2 workers) ===
+  Durations cached to test_durations.json (27 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   27
+  Total subprocess CPU-wall: 147.4s  (runner wall: 80.1s, parallelism: 2x)
+  P50: 1.21s  P90: 27.62s  P95: 31.36s  P99: 34.01s  Max: 34.01s
+  <1s: 11 files (41%)  <2s: 17 files (63%)
+  Top 10 slowest:
+     34.01s  tests/agent/test_auxiliary_owned_cancel.py
+     31.36s  tests/agent/test_provider_tcp_timeout.py
+     27.62s  tests/agent/test_provider_cli_ingress.py
+     13.55s  tests/agent/test_auxiliary_stream_lifetime.py
+      9.86s  tests/agent/test_usage_guard_native_install.py
+      4.45s  tests/agent/test_provider_admission.py
+      4.16s  tests/agent/test_provider_commit_recovery.py
+      3.34s  tests/agent/test_provider_commit_contention.py
+      3.20s  tests/agent/test_usage_guard_retention.py
+      2.79s  tests/agent/test_provider_presocket.py
