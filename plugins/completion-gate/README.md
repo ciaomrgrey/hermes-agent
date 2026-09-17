@@ -13,6 +13,45 @@ via `agent.auxiliary_client.call_llm`. A bounded child process prevents provider
 fallback/retry from exceeding the extraction deadline. Strict JSON is mandatory;
 malformed output, duplicate keys, unknown evidence, and exceptions fail open.
 
+### Bounded failure diagnostics and recovery
+
+Extraction retries at most once for classified transport/server/timeouts, only
+inside the original monotonic `total_timeout` deadline. Each subprocess is capped
+by `extract_timeout` and remaining total time. `auxiliary.transient_retries: 0`
+disables the outer retry too; positive values are capped at one outer retry.
+Native auxiliary retries/fallbacks still run inside each child, not beside the
+budget. There is no new configuration key and no guarantee of only two HTTP
+requests (the native router owns its internal recovery).
+
+The child watchdog includes native routing, queueing, retries and response parsing.
+Its SDK timeout is shorter than its watchdog, which in turn leaves up to two
+seconds inside the parent subprocess timeout for startup/reporting. A watchdog
+expiration exits the dedicated child after reporting `aux_timeout`; only a child
+that cannot report is classified `child_timeout`. Route `unknown` means routing
+had not been observed, not evidence of provider latency. OS process startup/reap
+and SQLite lock latency are not hard-real-time; no new attempt gets a fresh total
+budget. The child uses the native served-profile environment factory rather than
+inheriting another profile's credentials.
+
+Every failed attempt logs a sanitized diagnostic dictionary, including recovered
+first attempts. Terminal `gate_error` rows add a `diagnostics` JSON column;
+existing rows retain `{}`, and old plugin versions can still read the database.
+Fields are closed exception/cause/provider labels, bounded elapsed seconds,
+attempt (1/2), child exit code, and `aux_model_sha256`. The model is a fingerprint
+of the native router's **actually selected** `route_info.model`, not a guessed
+configured route. Match it to trusted configured/catalogue model names using
+SHA-256; raw child model strings are deliberately never copied into logs/SQLite.
+Unknown exception/provider names become `unknown`; arbitrary stderr, stdout,
+exception messages, answers and reference values never become diagnostics.
+Child-native logging is disabled because SDK/router error logs can contain these
+values. No credentials, URLs or headers are included in diagnostics.
+
+A provider `content_filter`/`refusal` finish with null content is classified
+`content_filtered`, not an opaque JSON `TypeError`. It is **not transient**: no retry or filter-bypassing
+fallback is added. Such responses still produce the existing unverified/error
+fail-open verdict. Reliability recovery is not a promise of zero fail-open
+outcomes, and it does not change blocking or escalation policy.
+
 Read-only checker children reproduce file existence/nonempty, HTTP HEAD status
 (no redirects/credentials/query), TCP connection, process existence, JSON/YAML
 config equality, exact SQLite/kanban row presence, native terminal-result exit

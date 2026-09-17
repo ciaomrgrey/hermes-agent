@@ -7,6 +7,7 @@ from .gate import Gate
 from .checks import bounded_check
 from .extraction import bounded_extract
 from .escalation import send, message
+from .diagnostics import failure
 
 logger = logging.getLogger(__name__)
 DEFAULTS = {"enabled": False, "max_blocks": 2, "check_timeout": 10,
@@ -35,7 +36,7 @@ def register(ctx):
                 if len(answer) > int(settings["max_answer_chars"]):
                     raise ValueError("answer_limit")
                 return bounded_extract(answer, timeout=min(float(settings["extract_timeout"]), remaining()),
-                                       max_claims=int(settings["max_claims"]))
+                                       max_claims=int(settings["max_claims"]), deadline=deadline)
             def remaining():
                 return max(0.001, deadline - time.monotonic())
             def check(claim):
@@ -52,6 +53,6 @@ def register(ctx):
             return gate.evaluate(final_response, profile=profile, task_id=chain, turn_id=turn_id,
                                  already_blocked=already_blocked, can_continue=can_continue)
         except Exception as exc:
-            logger.warning("Completion gate adapter failed open (%s)", type(exc).__name__)
+            logger.warning("Completion gate adapter failed open %s", failure(exc))
             return None
     ctx.register_hook("before_turn_end", before_turn_end)
