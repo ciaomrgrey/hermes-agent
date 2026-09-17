@@ -98,16 +98,11 @@ class ActiveScope:
 
 
 def current_policy():
-    # Like fleet ESTOP, this is explicitly installation-wide control, not profile
-    # config inheritance. Resolve the canonical native root; never inspect process argv.
-    from hermes_constants import get_default_hermes_root, set_hermes_home_override, reset_hermes_home_override
+    # Read the same profile config that `hermes -p <profile> config set` writes.
+    # Controlled profiles explicitly point to one shared database; no inheritance.
     from hermes_cli.config import load_config_readonly
-    token = set_hermes_home_override(get_default_hermes_root())
-    try:
-        cfg = load_config_readonly().get('provider_control') or {}
-        return Policy(cfg.get('database'), cfg.get('providers', ()))
-    finally:
-        reset_hermes_home_override(token)
+    cfg = load_config_readonly().get('provider_control') or {}
+    return Policy(cfg.get('database'), cfg.get('providers', ()))
 
 
 def controlled_turn(fn):

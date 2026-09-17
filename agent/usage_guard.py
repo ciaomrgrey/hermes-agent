@@ -50,6 +50,12 @@ def parse_weekly(provider, payload):
         return {'status': 'unavailable', 'reason': 'missing or invalid weekly fields'}
 
 
+def same_week(left, right):
+    """Bind reset jitter to a fixed observed identity, never a moving time bucket."""
+    return (all(left.get(key) == right.get(key) for key in ('grant', 'duration', 'field'))
+            and abs(left['reset'] - right['reset']) <= 60)
+
+
 def rolling(rows, end, window=21600, max_gap=90, resolution=60):
     """No interpolation: delta within the final contiguous monotone grant/reset segment.
 
@@ -67,7 +73,7 @@ def rolling(rows, end, window=21600, max_gap=90, resolution=60):
             continue
         if segment:
             prev = segment[-1]
-            if (row['grant'] != prev['grant'] or row['reset'] != prev['reset']
+            if (not same_week(row, segment[0])
                     or row['pp'] < prev['pp'] or row['t']-prev['t'] > max_gap):
                 segment = []
         segment.append(row)
@@ -136,6 +142,16 @@ class Guard:
             last = self.db.execute('SELECT MAX(t) FROM samples WHERE provider=?', (provider,)).fetchone()[0]
             if last is not None and at <= last:
                 return None
+            if value.get('status') == 'ok':
+                previous = self.db.execute(
+                    "SELECT value FROM samples WHERE provider=? AND json_extract(value,'$.status')='ok' "
+                    'ORDER BY t DESC LIMIT 1', (provider,)).fetchone()
+                if previous is not None:
+                    anchor = json.loads(previous['value'])
+                    if same_week(value, anchor):
+                        # Preserve raw_reset evidence; persist the bound identity for
+                        # incident dedupe and restart without cumulative jitter drift.
+                        value = dict(value, reset=anchor['reset'])
             self.db.execute('INSERT INTO samples VALUES(?,?,?)', (provider, at, json.dumps(value)))
             epoch = json.dumps([value.get('grant'), value.get('reset')])
             if value.get('status') == 'ok':
