@@ -22,7 +22,7 @@ from agent.message_sanitization import _sanitize_surrogates
 # Verification-continuation nudges (verify-on-stop / pre_verify) must be stripped from
 # returned/live history to avoid role-alternation breaks; the assistant response is
 # real content and is not flagged. (#65919)
-_VERIFICATION_CONTINUATION_FLAGS = ("_verification_stop_synthetic", "_pre_verify_synthetic")
+_VERIFICATION_CONTINUATION_FLAGS = ("_verification_stop_synthetic", "_pre_verify_synthetic", "_turn_end_synthetic")
 
 _SENTENCE_END = {".", "!", "?", "。", "！", "？", "`", ")"}
 
@@ -408,12 +408,8 @@ def _last_turn_reasoning(messages) -> Optional[Any]:
     return None
 
 
-def _apply_output_hooks(
-    agent, final_response, logger, *, platform, effective_task_id, turn_id, original_user_message,
-    messages,
-) -> Tuple[Any, bool, Optional[Any]]:
-    """Fire ``transform_llm_output`` then ``post_llm_call`` once per turn after the tool loop.
-    Returns ``(final_response, transformed, pre_transform_response)``."""
+def _transform_output(agent, final_response, logger, *, platform, turn_id) -> Tuple[Any, bool, Optional[Any]]:
+    """Transform one candidate; separated so pre-delivery gates see the actual output."""
     transformed, pre_transform = False, None
     # First hook to return a string wins; None/empty leaves the text unchanged.
     for _hook_result in _invoke_hook_safely(
@@ -427,6 +423,18 @@ def _apply_output_hooks(
         if isinstance(_hook_result, str) and _hook_result:
             pre_transform, final_response, transformed = final_response, _hook_result, True
             break
+    return final_response, transformed, pre_transform
+
+
+def _apply_output_hooks(
+    agent, final_response, logger, *, platform, effective_task_id, turn_id, original_user_message,
+    messages,
+) -> Tuple[Any, bool, Optional[Any]]:
+    """Transform unless prepared by a pre-delivery gate, then observe the delivered turn."""
+    from agent.turn_end_hooks import prepared_response
+    prepared = prepared_response(agent, final_response)
+    final_response, transformed, pre_transform = prepared or _transform_output(
+        agent, final_response, logger, platform=platform, turn_id=turn_id)
     # Detached forks are internal work and must not publish turns under the parent's session ID.
     if not getattr(agent, "_persist_disabled", False):
         _invoke_hook_safely(
@@ -518,7 +526,8 @@ def finalize_turn(
     _log_turn_exit(agent, messages, final_response, api_call_count, _turn_exit_reason, interrupted, logger)
 
     # Response transforms apply only to real, uninterrupted responses.
-    if final_response and not interrupted:
+    from agent.turn_end_hooks import prepared_response
+    if final_response and not interrupted and not prepared_response(agent, final_response):
         final_response = _append_file_mutation_footer(agent, final_response, logger)
     if not interrupted:
         final_response = _explain_abnormal_exit(
@@ -557,6 +566,14 @@ def finalize_turn(
     # the conversation loop, so every delivery surface receives valid Unicode.
     if isinstance(final_response, str):
         final_response = _sanitize_surrogates(final_response)
+
+    # Budget/error summaries have no continuation budget. Audit them with the same generic
+    # hook, but never re-open a finalized loop or intercept interrupts/controlled tool halts.
+    if (final_response and not interrupted and not getattr(agent, "_tool_guardrail_halt_decision", None)
+            and getattr(agent, "_turn_end_checked", None) != (turn_id, final_response)):
+        from agent.turn_end_hooks import before_turn_end
+        before_turn_end(agent, final_response, {}, messages,
+                        user_message=original_user_message, can_continue=False)
 
     result = {
         "final_response": final_response,
