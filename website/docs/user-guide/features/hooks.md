@@ -831,14 +831,9 @@ than once per turn; `post_llm_call` remains the final-turn observer. Do not use 
 output transform for irreversible side effects.
 
 Generic hook limits do not replace a plugin's persistent chain-level retry limits,
-reason deduplication, evidence deadlines, or escalation policy. A concrete consumer
-is the separately distributed opt-in completion-gate: it extracts completion
-claims, reproduces read-only artefact evidence, and requests bounded rework before
-an unsupported final answer escapes. None of its evidence or routing policy lives
-in core. `tests/agent/test_turn_end_hook_loop.py` loads a minimal file-evidence
-consumer from the real user-plugin directory and exercises the actual loop,
-output transformation, streaming suppression and SQLite persistence.
-
+reason deduplication, evidence deadlines, or escalation policy. See the opt-in
+`external/completion-gate/README.md` distribution for one concrete consumer;
+install it in the native user-plugin directory, never as a bundled core plugin.
 
 ### `pre_verify`
 

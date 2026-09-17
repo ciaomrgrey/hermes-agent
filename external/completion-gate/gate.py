@@ -9,6 +9,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
+from .diagnostics import failure, sanitize
 
 logger = logging.getLogger(__name__)
 _evaluating = ContextVar("completion_gate_evaluating", default=False)
@@ -49,6 +50,11 @@ class Gate:
         )""")
         db.execute("CREATE INDEX IF NOT EXISTS events_chain ON events(profile,task_id)")
         try:
+            # Serialize additive migration so concurrent first-use workers cannot race.
+            db.execute("BEGIN IMMEDIATE")
+            if 'diagnostics' not in {r[1] for r in db.execute('PRAGMA table_info(events)')}:
+                db.execute("ALTER TABLE events ADD COLUMN diagnostics TEXT NOT NULL DEFAULT '{}'")
+            db.commit()
             with db:
                 yield db
         finally:
@@ -70,7 +76,7 @@ class Gate:
         with self.connect() as db:
             rows = [dict(r) for r in db.execute("SELECT * FROM events ORDER BY id")]
         for row in rows:
-            for key in ("claims", "reason_hashes", "escalation"):
+            for key in ("claims", "reason_hashes", "escalation", "diagnostics"):
                 row[key] = json.loads(row[key])
         return rows
 
@@ -92,11 +98,12 @@ class Gate:
                 "blocks": sum(r["action"] == "block" for r in rows),
                 "escalations": sum(bool(r["escalation"]) for r in rows)}
 
-    def _append(self, db, profile, task, turn, action, claims, count, hashes=(), escalation=None):
+    def _append(self, db, profile, task, turn, action, claims, count, hashes=(), escalation=None, diagnostics=None):
         cursor = db.execute("""INSERT INTO events
-            (created,profile,task_id,turn_id,action,claims,block_count,reason_hashes,escalation)
-            VALUES(?,?,?,?,?,?,?,?,?)""", (time.time(), profile, task, turn, action,
-            json.dumps(claims), count, json.dumps(list(hashes)), json.dumps(escalation)))
+            (created,profile,task_id,turn_id,action,claims,block_count,reason_hashes,escalation,diagnostics)
+            VALUES(?,?,?,?,?,?,?,?,?,?)""", (time.time(), profile, task, turn, action,
+            json.dumps(claims), count, json.dumps(list(hashes)), json.dumps(escalation),
+            json.dumps(sanitize(diagnostics) if diagnostics else {})))
         return cursor.lastrowid
 
     def _history(self, db, profile, task):
@@ -109,16 +116,19 @@ class Gate:
             logger.info("Completion gate recursive invocation passed through")
             return None
         token = _evaluating.set(True)
+        started = time.monotonic()
         try:
             return self._evaluate(answer, profile, task_id, turn_id, already_blocked, can_continue)
         except Exception as exc:
             # Never record exceptions' messages, the answer or arbitrary reference values.
-            logger.warning("Completion gate failed open (%s)", type(exc).__name__)
+            diagnostics = failure(exc, elapsed=time.monotonic() - started)
+            logger.warning("Completion gate failed open %s", json.dumps(diagnostics, sort_keys=True))
             try:
                 with self.connect() as db:
                     count = sum(r["action"] == "block" for r in self._history(db, profile, task_id))
                     self._append(db, profile, task_id, turn_id, "gate_error",
-                                 [{"verdict": "unverified", "mismatch": "gate_error"}], count)
+                                 [{"verdict": "unverified", "mismatch": "gate_error"}], count,
+                                 diagnostics=diagnostics)
             except Exception:
                 logger.warning("Completion gate audit unavailable; delivery still allowed")
             return None

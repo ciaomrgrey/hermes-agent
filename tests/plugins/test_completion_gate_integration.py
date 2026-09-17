@@ -1,21 +1,14 @@
 """Real plugin discovery and native live-owner inbound receipts, no estate sends."""
-from pathlib import Path
-import importlib.util
 import json
-import sys
 
 from hermes_cli import plugins
 
-ROOT = Path(__file__).resolve().parents[2]
+
 
 
 def load_escalation():
-    path = ROOT / "plugins" / "completion-gate" / "escalation.py"
-    assert path.exists(), "escalation implementation missing"
-    spec = importlib.util.spec_from_file_location("cg_escalation", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    from tests.completion_gate_support import module
+    return module('escalation')
 
 
 def test_shared_discovery_and_hot_kill_switch(tmp_path, monkeypatch):
@@ -25,6 +18,8 @@ def test_shared_discovery_and_hot_kill_switch(tmp_path, monkeypatch):
     def save():
         cfg.write_text(json.dumps({"plugins": {"enabled": ["completion-gate"], "entries": {"completion-gate": {"settings": settings}}}}))
     save()
+    from tests.completion_gate_support import install
+    install(tmp_path)
     manager = plugins.PluginManager()
     manager.discover_and_load()
     assert manager.has_hook("before_turn_end"), "shared plugin not discoverable"
@@ -93,10 +88,8 @@ def test_aux_extraction_uses_real_native_router_in_bounded_child(tmp_path, monke
     (tmp_path / "config.yaml").write_text(json.dumps({"auxiliary": {"completion_gate": {
         "provider": "custom", "model": "local-test", "base_url": f"http://127.0.0.1:{server.server_port}/v1"}}}))
     try:
-        path = ROOT / "plugins/completion-gate/extraction.py"
-        spec = importlib.util.spec_from_file_location("cg_extract_integration", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        from tests.completion_gate_support import module
+        mod = module('extraction')
         claims = mod.bounded_extract("Only the already-written answer.", timeout=10)
         assert claims[0]["artefact_kind"] == "file"
         assert requests[0]["messages"][-1]["content"] == "Only the already-written answer."
