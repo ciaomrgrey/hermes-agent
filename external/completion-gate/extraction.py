@@ -77,6 +77,10 @@ def bounded_extract(answer, timeout=10, max_claims=20, *, deadline=None):
     retries = 1 if retries is None else min(1, max(0, int(retries)))
     from tools.environments.local import served_profile_child_env
     env = served_profile_child_env(target_home=get_hermes_home(), inherit_credentials=True)
+    # Bind to the invoking installation, not the external package's ancestors or cwd.
+    import hermes_constants
+    native_root = str(Path(hermes_constants.__file__).resolve().parent)
+    env['PYTHONPATH'] = os.pathsep.join(filter(None, [native_root, env.get('PYTHONPATH', '')]))
     last = None
     for attempt in range(1, retries + 2):
         budget = min(float(timeout), deadline - time.monotonic())
@@ -119,8 +123,7 @@ def child_main():
     logging.disable(sys.maxsize)
     output = sys.stdout
     sys.stdout = sys.stderr = open(os.devnull, 'w')
-    # Resolve the native router from this installation, including candidate worktrees.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    # The parent binds native imports through its installation's PYTHONPATH.
     route = {}
     started = time.monotonic()
     try:

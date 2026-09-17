@@ -1,22 +1,16 @@
 """Private, bounded extraction failures: exercise parent, child and persisted audit."""
-import importlib.util
 import json
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 
-ROOT = Path(__file__).resolve().parents[2]
+
 
 
 def load_plugin():
-    path = ROOT / 'plugins/completion-gate'
-    spec = importlib.util.spec_from_file_location('cg_reliability', path / '__init__.py', submodule_search_locations=[str(path)])
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod, sys.modules[spec.name + '.extraction']
+    from tests.completion_gate_support import load
+    mod = load()
+    return mod, sys.modules[mod.__name__ + '.extraction']
 
 
 def test_error_audit_migrates_and_never_copies_child_text(tmp_path, caplog):

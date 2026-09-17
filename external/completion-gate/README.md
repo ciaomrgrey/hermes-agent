@@ -1,7 +1,10 @@
 # Completion gate (opt-in)
 
-A general plugin discovered from the shared install's `plugins/completion-gate/`
-by CLI and gateway profiles. No estate configuration is changed by installation.
+A general plugin distributed OUTSIDE the Hermes source tree. Install the package
+at `/Users/claudia/hermes/home/plugins/completion-gate/`; native discovery scans
+each effective `$HERMES_HOME/plugins/`, so named profiles need a link from their
+own `plugins/completion-gate` to that canonical package. No shared-root fallback
+or plugin-specific core exception is added. No profile configuration is changed.
 Requires the additive Python `before_turn_end` hook documented in
 `website/docs/user-guide/features/hooks.md`; copying only this plugin into an older
 runtime is not sufficient.
@@ -126,9 +129,9 @@ The separate nightly recommendation cron is Hermes's deployment responsibility.
 
 ## Deployment (Hermes only, after Gurney acceptance)
 
-1. Integrate the reviewed candidate commit into the shared source install using
-   the estate's native update/release process. Preserve the prior release SHA.
-   Do not copy core files individually or point live profiles at this worktree.
+1. Follow `UPDATE-PROCEDURE.md` for the separate external package and generic
+   core contribution. Preserve the prior release SHA. Do not cherry-pick the
+   distribution branch into upstream or point live profiles at a scratch worktree.
 2. For each owner-approved profile, run the following with that profile's
    HERMES_HOME (preserves existing plugin enablement):
 
@@ -137,8 +140,9 @@ The separate nightly recommendation cron is Hermes's deployment responsibility.
        HERMES_HOME=/absolute/profile/home hermes config set plugins.entries.completion-gate.settings.max_blocks 2
        HERMES_HOME=/absolute/profile/home hermes config set plugins.entries.completion-gate.settings.enabled true
 
-   Shared discovery covers present and future profiles; future profiles remain
-   opt-in until configured. Do not replace `plugins.enabled` with a singleton.
+   Existing configured profiles retain their entire entries unchanged. For a new
+   profile, link the shared external package before opting in. Future profiles do
+   not inherit root discovery. Do not replace `plugins.enabled` with a singleton.
 3. Verify effective auxiliary routing (`auxiliary.completion_gate`, or native
    auto route), shared DB permissions and live owner availability for generalist
    and gurney. No provider credentials are added by this plugin.
@@ -159,6 +163,8 @@ The separate nightly recommendation cron is Hermes's deployment responsibility.
 
     HERMES_HOME=/absolute/profile/home hermes config set plugins.entries.completion-gate.settings.enabled false
 
+Record the owner's bounded disable authorization with the independent checker
+as described in `UPDATE-PROCEDURE.md`; otherwise disabling raises an alarm.
 This hot switch stops checking, blocking and routing on the next callback without
 restart. A callback already in flight retains its original settings and bounded
 deadline. Registration still defers assistant streaming; to restore incremental
@@ -170,7 +176,7 @@ SHA. Preserve gate.db: deleting it would erase persistent safety counters.
 
 Run from the candidate/shared repository with a qualified Python environment:
 
-    HERMES_PYTHON=/path/to/python scripts/run_tests.sh tests/plugins/test_completion_gate.py tests/plugins/test_completion_gate_checks.py tests/plugins/test_completion_gate_integration.py tests/agent/test_turn_end_hook.py tests/run_agent/test_completion_gate_loop.py
+    HERMES_PYTHON=/path/to/python scripts/run_tests.sh tests/plugins/test_completion_gate.py tests/plugins/test_completion_gate_checks.py tests/plugins/test_completion_gate_integration.py tests/plugins/test_completion_gate_reliability.py tests/plugins/test_completion_gate_health.py tests/plugins/test_completion_gate_portability.py tests/agent/test_turn_end_hook.py tests/agent/test_completion_gate_loop.py
 
 Tests use real temporary files, SQLite, local HTTP/socket servers, native plugin
 discovery, native router against a local provider, native live-owner queue receipt,

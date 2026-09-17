@@ -16,6 +16,8 @@ def test_real_loop_reworks_and_only_persists_fixed_answer(loop_agent, tmp_path, 
     cfg = {"plugins": {"enabled": ["completion-gate"], "entries": {"completion-gate": {"settings": {
         "enabled": True, "db_path": str(tmp_path / "gate.db")}}}}}
     (tmp_path / "config.yaml").write_text(json.dumps(cfg))
+    from tests.completion_gate_support import install
+    install(tmp_path)
     manager = plugins.PluginManager()
     manager.discover_and_load()
     monkeypatch.setattr(plugins, "get_plugin_manager", lambda: manager)

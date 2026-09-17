@@ -832,7 +832,8 @@ output transform for irreversible side effects.
 
 Generic hook limits do not replace a plugin's persistent chain-level retry limits,
 reason deduplication, evidence deadlines, or escalation policy. See the opt-in
-`plugins/completion-gate/README.md` implementation for one concrete consumer.
+`external/completion-gate/README.md` distribution for one concrete consumer;
+install it in the native user-plugin directory, never as a bundled core plugin.
 
 ### `pre_verify`
 

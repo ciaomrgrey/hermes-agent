@@ -1,24 +1,16 @@
 """Read-only checkers and bounded auxiliary extraction."""
-import importlib.util
-from pathlib import Path
 import sqlite3
-import sys
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
-PLUGIN = Path(__file__).resolve().parents[2] / "plugins" / "completion-gate"
+
 
 
 def module(name):
-    path = PLUGIN / f"{name}.py"
-    assert path.exists(), f"missing {name} implementation"
-    spec = importlib.util.spec_from_file_location(f"cg_{name}", path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    from tests.completion_gate_support import module as discovered_module
+    return discovered_module(name)
 
 
 def test_checkers_read_real_artefacts_and_refuse_execution(tmp_path):

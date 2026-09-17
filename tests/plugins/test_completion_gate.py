@@ -1,22 +1,10 @@
 """Completion gate invariants, against real temporary artefacts and SQLite."""
-import importlib.util
-from pathlib import Path
-import sys
 
-ROOT = Path(__file__).resolve().parents[2]
-PLUGIN = ROOT / "plugins" / "completion-gate"
 
 
 def load_gate():
-    spec = importlib.util.spec_from_file_location(
-        "completion_gate_test", PLUGIN / "__init__.py",
-        submodule_search_locations=[str(PLUGIN)],
-    )
-    assert spec is not None and (PLUGIN / "__init__.py").exists(), "completion-gate plugin missing"
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return sys.modules[spec.name + ".gate"]
+    from tests.completion_gate_support import module
+    return module('gate')
 
 
 def test_false_file_blocks_then_truthful_rework_delivers(tmp_path):
