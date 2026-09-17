@@ -28,7 +28,8 @@ def prepare_response(agent, text):
         return text
     from agent.turn_finalizer import _append_file_mutation_footer, _transform_output
     text = _append_file_mutation_footer(agent, text, logger)
-    value = _transform_output(agent, text, logger, platform=getattr(agent, "platform", "") or "")
+    value = _transform_output(agent, text, logger, platform=getattr(agent, "platform", "") or "",
+                              turn_id=getattr(agent, "_current_turn_id", "") or "")
     agent._turn_end_prepared = (getattr(agent, "_current_turn_id", ""), value)
     return value[0]
 

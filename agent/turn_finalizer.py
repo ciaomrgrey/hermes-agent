@@ -408,7 +408,7 @@ def _last_turn_reasoning(messages) -> Optional[Any]:
     return None
 
 
-def _transform_output(agent, final_response, logger, *, platform) -> Tuple[Any, bool, Optional[Any]]:
+def _transform_output(agent, final_response, logger, *, platform, turn_id) -> Tuple[Any, bool, Optional[Any]]:
     """Transform one candidate; separated so pre-delivery gates see the actual output."""
     transformed, pre_transform = False, None
     # First hook to return a string wins; None/empty leaves the text unchanged.
@@ -434,7 +434,7 @@ def _apply_output_hooks(
     from agent.turn_end_hooks import prepared_response
     prepared = prepared_response(agent, final_response)
     final_response, transformed, pre_transform = prepared or _transform_output(
-        agent, final_response, logger, platform=platform)
+        agent, final_response, logger, platform=platform, turn_id=turn_id)
     # Detached forks are internal work and must not publish turns under the parent's session ID.
     if not getattr(agent, "_persist_disabled", False):
         _invoke_hook_safely(
