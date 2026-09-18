@@ -68,7 +68,7 @@ test('empty columns hide, watched columns remain and new tasks restore columns',
   assert.ok(boardNode);
   const board=x.mount(boardNode.type,boardNode.props);
   const columns=tree=>x.nodes(tree).filter(n=>n.type?.name==='Column');
-  assert.deepEqual(columns(board.render()).map(n=>n.props.column.name),['running','blocked']);
+  assert.deepEqual(columns(board.render()).map(n=>n.props.column.name),['ready','running','blocked','done']);
   for (const node of columns(board.render())) {
     const tree=x.mount(node.type,node.props).render();
     assert.equal(x.nodes(tree).find(n=>n.props?.className==='hermes-kanban-column-count').props.children[0],'—');
