@@ -128,8 +128,24 @@ def activity_gap(home, gate_path, state_path, *, now, tolerance):
         if finals and gate_path.exists():
             with closing(sqlite3.connect(gate_path.as_uri() + '?mode=ro', uri=True)) as gate:
                 profile = profile_name_for_home(home) or 'default'
-                gap = any(not gate.execute('SELECT 1 FROM events WHERE profile=? AND created BETWEEN ? AND ? LIMIT 1',
-                    (profile, ts - tolerance, ts + tolerance)).fetchone() for (ts,) in finals)
+                # Reserve events for their uniquely nearest final, including finals
+                # outside this cursor batch and not yet settled. Never reuse one
+                # event for two turns; equal-time/ambiguous attribution stays a gap.
+                with closing(sqlite3.connect(state.as_uri() + '?mode=ro', uri=True)) as activity:
+                    neighbors = activity.execute("SELECT timestamp FROM messages WHERE role='assistant' "
+                        "AND content IS NOT NULL AND content != '' AND (tool_calls IS NULL OR tool_calls='[]') "
+                        "AND coalesce(display_kind,'') != 'delivery_mirror' "
+                        "AND timestamp BETWEEN ? AND ? ORDER BY timestamp",
+                        (finals[0][0] - 2 * tolerance, finals[-1][0] + 2 * tolerance)).fetchall()
+                events = gate.execute('SELECT created FROM events WHERE profile=? AND created BETWEEN ? AND ?',
+                    (profile, finals[0][0] - tolerance, finals[-1][0] + tolerance)).fetchall()
+                covered = set()
+                for (created,) in events:
+                    distances = [(abs(ts - created), ts) for (ts,) in neighbors if abs(ts - created) <= tolerance]
+                    distances.sort()
+                    if distances and (len(distances) == 1 or distances[0][0] < distances[1][0]):
+                        covered.add(distances[0][1])
+                gap = any(ts not in covered for (ts,) in finals)
         if not gap:
             db.execute('INSERT OR REPLACE INTO cursors VALUES(?,?)', (key, end))
         return gap

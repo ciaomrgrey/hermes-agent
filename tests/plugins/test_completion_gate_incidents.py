@@ -46,6 +46,29 @@ def test_mirror_provenance_survives_native_sqlite_and_is_not_a_final(tmp_path, m
         release_or_close(db)
 
 
+def test_adjacent_turn_event_cannot_certify_two_finals(tmp_path):
+    home = tmp_path / 'profiles' / 'plutus'
+    home.mkdir(parents=True)
+    with sqlite3.connect(home / 'state.db') as db:
+        db.execute('CREATE TABLE messages(timestamp REAL, role TEXT, content TEXT, tool_calls TEXT, display_kind TEXT)')
+        db.executemany("INSERT INTO messages VALUES(?,'assistant','final',NULL,NULL)", [(1000,), (1070,)])
+    gate = tmp_path / 'gate.db'
+    with sqlite3.connect(gate) as db:
+        db.execute('CREATE TABLE events(created REAL, profile TEXT)')
+        db.execute("INSERT INTO events VALUES(1075,'plutus')")
+    health = checker()
+    state = tmp_path / 'health.db'
+    assert health.activity_gap(home, gate, state, now=1200, tolerance=100)
+    with sqlite3.connect(state) as db:
+        assert db.execute('SELECT * FROM cursors').fetchall() == []
+    # A later unsettled final must reserve its own event too.
+    assert health.activity_gap(home, gate, state, now=1120, tolerance=100)
+    # A separate event for A restores coverage; neither event is reused.
+    with sqlite3.connect(gate) as db:
+        db.execute("INSERT INTO events VALUES(1005,'plutus')")
+    assert not health.activity_gap(home, gate, state, now=1200, tolerance=100)
+
+
 def test_confirmed_alarm_deduplicates_but_failed_delivery_retries(tmp_path):
     health = checker()
     home = tmp_path / 'profile'

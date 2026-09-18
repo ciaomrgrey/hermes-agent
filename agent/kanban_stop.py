@@ -7,6 +7,8 @@ Policy-only: return a bounded synthetic nudge so the loop continues instead of e
 from __future__ import annotations
 
 import os
+import sqlite3
+from contextlib import closing
 from typing import Any, Iterable, Optional
 
 from agent.delegation_context import owned_kanban_task
@@ -48,6 +50,27 @@ def session_called_kanban_terminal(messages: Iterable[dict] | None) -> bool:
     return False
 
 
+def _originating_run_active(task_id: str) -> Optional[bool]:
+    """Read only: a closed/replaced run cannot be told to mutate its successor."""
+    from hermes_cli.kanban_db import kanban_db_path
+    raw = os.environ.get("HERMES_KANBAN_RUN_ID", "")
+    if not raw.isdecimal():
+        return None
+    try:
+        with closing(sqlite3.connect(kanban_db_path().resolve().as_uri() + "?mode=ro",
+                                     uri=True, timeout=0.2)) as db:
+            row = db.execute(
+                "SELECT t.current_run_id,r.ended_at,r.outcome FROM tasks t "
+                "JOIN task_runs r ON r.task_id=t.id WHERE t.id=? AND r.id=?",
+                (task_id, int(raw))).fetchone()
+        if row is None:
+            return None
+        current, ended, outcome = row
+        return current == int(raw) and ended is None and outcome is None
+    except (OSError, sqlite3.Error, ValueError):
+        return None
+
+
 def build_kanban_stop_nudge(
     *,
     messages: Iterable[dict] | None = None,
@@ -60,23 +83,28 @@ def build_kanban_stop_nudge(
     if (
         not kanban_stop_nudge_enabled()
         or attempts >= max_attempts
-        or session_called_kanban_terminal(messages)
     ):
         return None
 
     tid = (task_id or os.environ.get("HERMES_KANBAN_TASK") or "").strip() or "this task"
+    active = _originating_run_active(tid)
+    if active is False:
+        return None
+    if active is None:
+        return (f"[System: Cannot verify originating Kanban run ownership for `{tid}`. "
+                "Call `kanban_show` before any terminal mutation. A successful "
+                "`kanban_complete`, `kanban_block`, `kanban_request_review` or "
+                "`kanban_request_changes` closes that run. Do not mutate a successor's "
+                "task or treat an attempted/failed call as success. The dispatcher "
+                "retains protocol-violation accounting.]")
     return (
-        "[System: You are a Hermes kanban worker. A plain-text reply is NOT a "
-        "terminal state for the board.\n\n"
-        f"Task `{tid}` is still `running`. Ending now without a board tool "
-        "causes a protocol violation (clean exit with no "
-        "`kanban_complete` / `kanban_block`).\n\n"
-        "Do this immediately in your next response — do not narrate intent:\n"
-        "1. Finish any remaining deliverable (write the required file(s) now).\n"
-        "2. Call `kanban_complete(summary=..., artifacts=[...])` if the work "
-        "is done, OR `kanban_block(reason=...)` if you are blocked.\n\n"
-        "Never end a turn with only a promise of future action. Repeated "
-        "protocol violations will block this task and require manual intervention.]"
+        "[System: You are a Hermes kanban worker. Native readback shows your "
+        f"originating run for task `{tid}` is still active.\n"
+        "Finish the remaining deliverable, then follow the task's review model: "
+        "`kanban_complete` or `kanban_request_review` for an implementation handoff; "
+        "`kanban_request_changes` for reviewer rework; `kanban_block` only for a genuine blocker. "
+        "A plain-text reply or failed tool attempt does not close the run and can cause "
+        "a protocol violation. Never mutate the task after ownership moves to another run.]"
     )
 
 
