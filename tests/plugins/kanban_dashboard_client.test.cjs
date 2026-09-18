@@ -71,7 +71,7 @@ test('stock columns remain present when empty, populated or filtered', async () 
   assert.deepEqual(columns(board.render()).map(n=>n.props.column.name),['ready','running','blocked','done']);
   for (const node of columns(board.render())) {
     const tree=x.mount(node.type,node.props).render();
-    assert.equal(x.nodes(tree).find(n=>n.props?.className==='hermes-kanban-column-count').props.children[0],'—');
+    assert.equal(x.nodes(tree).find(n=>n.props?.className==='hermes-kanban-column-count').props.children[0],0);
   }
   const populated={...boardNode.props,board:{...boardNode.props.board,columns:boardNode.props.board.columns.map(c=>c.name==='ready'?{...c,tasks:[{id:'new'}]}:c)}};
   assert.deepEqual(columns(board.render(populated)).map(n=>n.props.column.name),['ready','running','blocked','done']);
