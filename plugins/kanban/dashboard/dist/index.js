@@ -2816,7 +2816,6 @@
       onMouseDown: handleMouseDown,
     },
       props.board.columns.map(function (col) {
-        if (!col.tasks.length && col.name !== "running" && col.name !== "blocked") return null;
         return h(Column, {
           key: col.name,
           column: col,
@@ -2931,7 +2930,7 @@
           colLabel || props.column.name),
         h("span", { className: "hermes-kanban-column-count",
                     title: `${props.column.tasks.length} task${props.column.tasks.length === 1 ? "" : "s"} in this column` },
-          props.column.tasks.length || "—"),
+          props.column.tasks.length),
         h("button", {
           type: "button",
           className: "hermes-kanban-column-add",
