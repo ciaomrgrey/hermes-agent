@@ -3,8 +3,8 @@ import json
 import pytest
 from unittest.mock import Mock
 
-from tests.run_agent.test_81641_text_turn_incremental_persistence import loop_agent  # noqa: F401
-from tests.run_agent.test_run_agent import _mock_response
+from tests.agent.test_text_turn_incremental_persistence import loop_agent  # noqa: F401
+from tests.agent.test_run_agent import _mock_response
 from hermes_cli import plugins
 
 

@@ -13,12 +13,40 @@ import time
 
 
 def send_alarm(event):
+    import subprocess
+    import sys
+    from hermes_cli.profiles import get_profile_dir
+    from tools.environments.local import served_profile_child_env
+    try:
+        receipt = send_bot_alarm(event)
+    except Exception:
+        receipt = {'status': 'unavailable'}
+    if receipt.get('status') not in {'unavailable', 'unverified'}:
+        return receipt
+    text = 'Completion-gate alarm: profile={} reasons={}'.format(
+        event.get('profile', event.get('profile_home_sha256', 'unknown')),
+        ','.join(event['reasons']))
+    text = ' '.join(text.splitlines())
+    try:
+        env = served_profile_child_env(target_home=get_profile_dir('generalist'), inherit_credentials=True)
+        proc = subprocess.run([sys.executable, '-m', 'hermes_cli.main', '-p', 'generalist',
+            'send', '-t', 'telegram:471605389', '--json', '-f', '-'],
+            input=text, text=True, capture_output=True, timeout=30, env=env)
+        result = json.loads(proc.stdout)
+        sent = proc.returncode == 0 and result.get('success') is True and not result.get('skipped')
+        return {'status': 'sent' if sent else 'unavailable', 'transport': 'telegram',
+                'bot_status': receipt['status'], 'receipt': result}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {'status': 'unavailable', 'transport': 'telegram', 'bot_status': receipt['status']}
+
+
+def send_bot_alarm(event):
     from hermes_cli.profiles import get_profile_dir
     from tools.bot_live_delivery import find_canonical_live_owner, deliver_to_live_owner, read_delivery_result
     home = get_profile_dir('gurney')
     text = ('Completion-gate health alarm (recommendation only; no deployment permission).\n'
             + json.dumps(event, sort_keys=True)
-            + '\nInspect the external gate check and native activity. Do not contact Lars automatically.')
+            + '\nInspect the external gate check and native activity. Unavailable delivery falls back to the authorized Telegram alarm.')
     key = hashlib.sha256((str(home.resolve()) + text).encode()).hexdigest()
     receipt = read_delivery_result(home, key)
     if receipt is None:
@@ -144,7 +172,8 @@ def check(home, state_path, *, now=None, send=send_alarm):
             previous = db.execute('SELECT reasons, opened FROM alarms WHERE home=?', (str(home),)).fetchone()
             opened = previous[1] if previous and previous[0] == key else now
             db.execute('INSERT OR REPLACE INTO alarms VALUES(?,?,?)', (str(home), key, opened))
-        event = {'target': 'gurney', 'profile_home_sha256': hashlib.sha256(str(home).encode()).hexdigest(),
+        event = {'target': 'gurney', 'profile': home.name if home.parent.name == 'profiles' else 'default',
+                 'profile_home_sha256': hashlib.sha256(str(home).encode()).hexdigest(),
                  'reasons': reasons, 'opened': opened}
         try:
             result['delivery'] = send(event)
@@ -154,6 +183,41 @@ def check(home, state_path, *, now=None, send=send_alarm):
         with state_db(state_path) as db:
             db.execute('DELETE FROM alarms WHERE home=?', (str(home),))
     return result
+
+
+def post_update_check(homes, gate_path, *, now=None, hooks=None):
+    """Read existing history only; idle/unknown coverage cannot certify activation."""
+    from hermes_cli.plugins import VALID_HOOKS
+    from hermes_constants import profile_name_for_home
+    now = time.time() if now is None else now
+    hooks = VALID_HOOKS if hooks is None else hooks
+    reasons = [] if 'before_turn_end' in hooks else ['core_hook_missing']
+    active = []
+    missing = []
+    for home in homes:
+        home = Path(home).resolve()
+        profile = profile_name_for_home(home) or 'default'
+        try:
+            with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as db:
+                replied = db.execute("SELECT 1 FROM messages WHERE role='assistant' AND content IS NOT NULL "
+                    "AND content != '' AND (tool_calls IS NULL OR tool_calls='[]') "
+                    "AND timestamp BETWEEN ? AND ? LIMIT 1", (now - 1800, now)).fetchone()
+            if not replied:
+                continue
+            active.append(profile)
+            with closing(sqlite3.connect(Path(gate_path).resolve().as_uri() + '?mode=ro', uri=True)) as gate:
+                event = gate.execute('SELECT 1 FROM events WHERE profile=? AND created BETWEEN ? AND ? LIMIT 1',
+                                     (profile, now - 1800, now)).fetchone()
+            if not event:
+                missing.append(profile)
+        except sqlite3.Error:
+            reasons.append('history_unavailable:' + profile)
+    if missing:
+        reasons.append('recent_gate_missing:' + ','.join(missing))
+    if not active:
+        reasons.append('no_recent_reply_evidence')
+    return {'ok': not reasons, 'status': 'PASSED' if not reasons else 'FAILED',
+            'reasons': reasons, 'active_profiles': active, 'window_seconds': 1800}
 
 
 def main():
@@ -175,6 +239,7 @@ def main():
         result = {'ok': False, 'reasons': ['health_check_failed']}
         try:
             result['delivery'] = send_alarm({'target': 'gurney', 'reasons': result['reasons'],
+                'profile': args.home.name if args.home.parent.name == 'profiles' else 'default',
                 'profile_home_sha256': hashlib.sha256(str(args.home.resolve()).encode()).hexdigest()})
         except Exception:
             result['delivery'] = {'status': 'unavailable'}
