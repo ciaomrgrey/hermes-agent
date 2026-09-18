@@ -43,8 +43,8 @@ def mirror_to_session(
     cron in_channel seed) to skip the origin scan, which refuses to guess on a
     populated chat (flat + N thread sessions per chat_id) and would drop the mirror.
     Text that is NOT the agent speaking (e.g. a cron brief) must pass
-    ``role="user"``: ``mirror`` metadata is dropped at the SQLite boundary, so an
-    assistant-role mirror replays as a real turn and yields assistant→assistant
+    ``role="user"``: provenance is stored as ``display_kind=delivery_mirror``;
+    an assistant-role mirror still replays as a turn and yields assistant→assistant
     pairs that break strict-alternation providers, while a user-role mirror
     collapses safely via the consecutive-user merge.
     Returns True if mirrored, False if no matching session or error. Never raises.
@@ -136,6 +136,7 @@ def _append_to_sqlite(session_id: str, message: dict) -> None:
 
     db = acquire()
     try:
-        db.append_message(session_id=session_id, role=message.get("role", "assistant"), content=message.get("content"))
+        db.append_message(session_id=session_id, role=message.get("role", "assistant"),
+                          content=message.get("content"), display_kind="delivery_mirror")
     finally:
         release_or_close(db)

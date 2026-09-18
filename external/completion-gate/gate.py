@@ -80,8 +80,19 @@ class Gate:
                 row[key] = json.loads(row[key])
         return rows
 
-    def metrics(self):
-        rows = self.events()
+    def metrics(self, *, since=None, until=None):
+        rows = [r for r in self.events()
+                if (since is None or r['created'] >= since)
+                and (until is None or r['created'] < until)]
+        def evaluations(scoped):
+            # Retry pass-through and advice/delivery receipts did not run extraction.
+            assessed = [r for r in scoped if r['action'] in {'deliver', 'block', 'fail_open', 'gate_error'}]
+            errors = sum(r['action'] == 'gate_error' for r in assessed)
+            unverified = sum(r['action'] == 'gate_error' or any(c['verdict'] == 'unverified' for c in r['claims']) for r in assessed)
+            return {'evaluations': len(assessed), 'gate_errors': errors,
+                    'gate_error_rate': errors / len(assessed) if assessed else None,
+                    'unverified_evaluation_rate': unverified / len(assessed) if assessed else None,
+                    'reentrant_passes': sum(r['action'] == 'reentrant_pass' for r in scoped)}
         claims = [c for r in rows for c in r["claims"]]
         unverified = sum(c["verdict"] == "unverified" for c in claims)
         per_profile = {}
@@ -89,11 +100,12 @@ class Gate:
             scoped = [r for r in rows if r["profile"] == profile]
             pc = [c for r in scoped for c in r["claims"]]
             uv = sum(c["verdict"] == "unverified" for c in pc)
-            per_profile[profile] = {"claims": len(pc), "unverified": uv,
+            per_profile[profile] = {**evaluations(scoped), "claims": len(pc), "unverified": uv,
                 "unverified_rate": uv / len(pc) if pc else 0.0,
                 "blocks": sum(r["action"] == "block" for r in scoped),
                 "escalations": sum(bool(r["escalation"]) for r in scoped)}
-        return {"claims": len(claims), "unverified": unverified, "per_profile": per_profile,
+        return {**evaluations(rows), "since": since, "until": until,
+                "claims": len(claims), "unverified": unverified, "per_profile": per_profile,
                 "unverified_rate": unverified / len(claims) if claims else 0.0,
                 "blocks": sum(r["action"] == "block" for r in rows),
                 "escalations": sum(bool(r["escalation"]) for r in rows)}
@@ -128,6 +140,7 @@ class Gate:
                     count = sum(r["action"] == "block" for r in self._history(db, profile, task_id))
                     self._append(db, profile, task_id, turn_id, "gate_error",
                                  [{"verdict": "unverified", "mismatch": "gate_error"}], count,
+                                 hashes=[digest(['gate_error', diagnostics['cause'], diagnostics['exception_class']])],
                                  diagnostics=diagnostics)
             except Exception:
                 logger.warning("Completion gate audit unavailable; delivery still allowed")

@@ -68,6 +68,7 @@ def state_db(path):
     with closing(sqlite3.connect(path)) as db, db:
         db.execute('CREATE TABLE IF NOT EXISTS authorizations (home TEXT PRIMARY KEY, digest TEXT, reference_sha256 TEXT, expires REAL)')
         db.execute('CREATE TABLE IF NOT EXISTS alarms (home TEXT PRIMARY KEY, reasons TEXT, opened REAL)')
+        db.execute('CREATE TABLE IF NOT EXISTS confirmed_alarms (home TEXT PRIMARY KEY, reasons TEXT, opened REAL)')
         yield db
 
 
@@ -118,6 +119,7 @@ def activity_gap(home, gate_path, state_path, *, now, tolerance):
         with closing(sqlite3.connect(state.as_uri() + '?mode=ro', uri=True)) as activity:
             finals = activity.execute("SELECT timestamp FROM messages WHERE role='assistant' "
                 "AND content IS NOT NULL AND content != '' AND (tool_calls IS NULL OR tool_calls='[]') "
+                "AND coalesce(display_kind,'') != 'delivery_mirror' "
                 "AND timestamp > ? AND timestamp <= ? ORDER BY timestamp LIMIT 1000", (start, end)).fetchall()
         if len(finals) == 1000:
             end = finals[-1][0]
@@ -127,7 +129,7 @@ def activity_gap(home, gate_path, state_path, *, now, tolerance):
             with closing(sqlite3.connect(gate_path.as_uri() + '?mode=ro', uri=True)) as gate:
                 profile = profile_name_for_home(home) or 'default'
                 gap = any(not gate.execute('SELECT 1 FROM events WHERE profile=? AND created BETWEEN ? AND ? LIMIT 1',
-                    (profile, ts - tolerance, ts + 2)).fetchone() for (ts,) in finals)
+                    (profile, ts - tolerance, ts + tolerance)).fetchone() for (ts,) in finals)
         if not gap:
             db.execute('INSERT OR REPLACE INTO cursors VALUES(?,?)', (key, end))
         return gap
@@ -176,12 +178,22 @@ def check(home, state_path, *, now=None, send=send_alarm):
                  'profile_home_sha256': hashlib.sha256(str(home).encode()).hexdigest(),
                  'reasons': reasons, 'opened': opened}
         try:
-            result['delivery'] = send(event)
+            with state_db(state_path) as db:
+                confirmed = db.execute('SELECT reasons, opened FROM confirmed_alarms WHERE home=?', (str(home),)).fetchone()
+            if confirmed == (key, opened):
+                result['delivery'] = {'status': 'already_sent'}
+            else:
+                result['delivery'] = send(event)
+                # A queued/unverified receipt is not confirmed transport delivery.
+                if result['delivery'].get('status') in {'sent', 'delivered'}:
+                    with state_db(state_path) as db:
+                        db.execute('INSERT OR REPLACE INTO confirmed_alarms VALUES(?,?,?)', (str(home), key, opened))
         except Exception:
             result['delivery'] = {'status': 'unavailable'}
     else:
         with state_db(state_path) as db:
             db.execute('DELETE FROM alarms WHERE home=?', (str(home),))
+            db.execute('DELETE FROM confirmed_alarms WHERE home=?', (str(home),))
     return result
 
 
@@ -201,6 +213,7 @@ def post_update_check(homes, gate_path, *, now=None, hooks=None):
             with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as db:
                 replied = db.execute("SELECT 1 FROM messages WHERE role='assistant' AND content IS NOT NULL "
                     "AND content != '' AND (tool_calls IS NULL OR tool_calls='[]') "
+                    "AND coalesce(display_kind,'') != 'delivery_mirror' "
                     "AND timestamp BETWEEN ? AND ? LIMIT 1", (now - 1800, now)).fetchone()
             if not replied:
                 continue

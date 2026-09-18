@@ -1,0 +1,9 @@
+evaluations  errors  error_percent
+-----------  ------  -------------
+479          113     23.591       
+cause             count(*)
+----------------  --------
+aux_timeout       20      
+content_filtered  7       
+invalid_response  2       
+unknown           84      
