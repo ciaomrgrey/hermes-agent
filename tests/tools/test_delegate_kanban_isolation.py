@@ -192,7 +192,8 @@ def test_delegated_child_marker_does_not_persist_in_parent_terminal_snapshot(
             child = env.execute(command, timeout=15)
         parent = env.execute(command, timeout=15)
 
-        assert child["output"] == "1"
+        from agent.delegation_context import _fenced_kanban_root
+        assert child["output"] == _fenced_kanban_root()
         assert parent["output"] == "unset"
         assert "HERMES_DELEGATED_CHILD_CONTEXT" not in Path(
             env._snapshot_path
@@ -234,7 +235,8 @@ def test_parallel_delegated_children_do_not_poison_parent_terminal_snapshot(
         parent_after = env.execute(command, timeout=15)["output"]
 
         assert parent_before == "unset|kept"
-        assert children == ["1|kept", "1|kept"]
+        from agent.delegation_context import _fenced_kanban_root
+        assert children == [f"{_fenced_kanban_root()}|kept"] * 2
         assert parent_after == "unset|kept"
     finally:
         env.cleanup()
@@ -283,9 +285,11 @@ def test_delegate_child_kanban_cli_cannot_delete_parent_board(
         "delegate_task child contexts cannot mutate Kanban tasks"
         in child_result["output"]
     )
-    assert parent_result["returncode"] == 0, parent_result["output"]
-    assert not kb.board_exists("victim")
-    assert not kb.board_dir("victim").exists()
+    # Worker terminal descendants are intentionally fenced too. Parent native
+    # tools (tested below), not a worker's subprocess, own board mutation.
+    assert parent_result["returncode"] == 1, parent_result["output"]
+    assert "delegate_task child" in parent_result["output"]
+    assert kb.board_exists("victim")
 
 
 def test_delegate_child_attach_url_guard_leaves_no_row_or_file(monkeypatch, tmp_path):
@@ -352,6 +356,15 @@ def test_child_attempting_default_complete_does_not_finish_parent_or_delete_work
             return {"api_call_count": 0, "max_iterations": 1, "current_tool": None}
 
         def run_conversation(self, user_message, task_id, **_kwargs):
+            from tools.environments.local import LocalEnvironment
+            env = LocalEnvironment(cwd=str(workspace), timeout=15)
+            try:
+                shell = env.execute('export CHILD_EXPORT=kept; printf "%s" "$HERMES_DELEGATED_CHILD_CONTEXT"')
+                assert shell["returncode"] == 0 and shell["output"]
+                assert "HERMES_DELEGATED_CHILD_CONTEXT" not in Path(env._snapshot_path).read_text()
+                assert env.execute('printf "%s" "$CHILD_EXPORT"')["output"] == "kept"
+            finally:
+                env.cleanup()
             attempted = kanban_tools._handle_complete({"summary": "wrong child completion"})
             return {
                 "final_response": attempted,
@@ -363,17 +376,23 @@ def test_child_attempting_default_complete_does_not_finish_parent_or_delete_work
         def close(self):
             return None
 
+    before = json.loads(kanban_tools._handle_comment({"task_id": tid, "body": "parent before"}))
+    assert not before.get("error"), before
     result = delegate_tool._run_single_child(0, "try to complete parent", Child(), Parent())
+    after = json.loads(kanban_tools._handle_comment({"task_id": tid, "body": "parent after"}))
+    assert not after.get("error"), after
 
     conn = kbc.connect()
     try:
         task = kb.get_task(conn, tid)
         run = kb.latest_run(conn, tid)
+        bodies = [comment.body for comment in kb.list_comments(conn, tid)]
     finally:
         conn.close()
 
     assert result["status"] == "completed"
     assert "delegate_task child" in result["summary"]
     assert task.status == "running"
+    assert "parent before" in bodies and "parent after" in bodies
     assert run.status == "running"
     assert workspace.is_dir()

@@ -1089,6 +1089,26 @@ class GatewayAdapterLifecycleMixin:
             logger.info("✓ %s connected (profile: %s)", platform.value, profile_name)
         return connected
 
+    def _wire_co_resident_adapters_provider(self, adapter) -> None:
+        """Supply a live same-platform view without retaining the runner."""
+        setter = getattr(adapter, "set_co_resident_adapters_provider", None)
+        if not callable(setter):
+            return
+        runner_ref = _weakref.ref(self)
+        platform = adapter.platform
+
+        def co_resident_adapters():
+            runner = runner_ref()
+            if runner is None:
+                return ()
+            peers = list(runner.adapters.values())
+            for profile_map in getattr(runner, "_profile_adapters", {}).values():
+                peers.extend(profile_map.values())
+            return tuple({id(peer): peer for peer in peers
+                          if getattr(peer, "platform", None) == platform}.values())
+
+        setter(co_resident_adapters)
+
     def _wire_adapter_handlers(
         self, adapter: BasePlatformAdapter, *, message_handler=None, fatal_error_handler=None,
         busy_session_handler=None, authorization_check=None, platform_event_handler=None,
@@ -1107,6 +1127,7 @@ class GatewayAdapterLifecycleMixin:
         adapter.set_authorization_check(
             authorization_check or self._make_adapter_auth_check(adapter.platform)
         )
+        self._wire_co_resident_adapters_provider(adapter)
         adapter.set_platform_event_handler(platform_event_handler or self._primary_platform_event_handler())
         adapter._busy_text_mode = (self._busy_text_mode if busy_text_mode is None else busy_text_mode)
 

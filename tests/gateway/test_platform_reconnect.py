@@ -49,6 +49,9 @@ class StubAdapter(BasePlatformAdapter):
     async def get_chat_info(self, chat_id):
         return {"id": chat_id}
 
+    def set_co_resident_adapters_provider(self, provider):
+        self.co_resident_adapters_provider = provider
+
 
 def _make_runner():
     """Create a minimal GatewayRunner via object.__new__ to skip __init__."""
@@ -198,6 +201,7 @@ class TestPlatformReconnectWatcher:
             f"watcher must pass is_reconnect=True; got {succeed_adapter.connect_calls!r}"
         )
         assert Platform.TELEGRAM in runner.adapters
+        assert tuple(succeed_adapter.co_resident_adapters_provider()) == (succeed_adapter,)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("degraded", [False, True])
@@ -895,6 +899,7 @@ class TestVoiceInputCallbackWiring:
     def _make_discord_voice_adapter():
         """A minimal Discord adapter stub with voice attributes."""
         adapter = MagicMock()
+        adapter.platform = Platform.DISCORD
         adapter._voice_input_callback = None
         adapter._voice_text_channels = {}
         adapter._voice_sources = {}
@@ -951,6 +956,9 @@ class TestVoiceInputCallbackWiring:
         assert adapter._voice_input_callback is not None, (
             "startup must wire _voice_input_callback"
         )
+        adapter.set_co_resident_adapters_provider.assert_called_once()
+        provider = adapter.set_co_resident_adapters_provider.call_args.args[0]
+        assert tuple(provider()) == (adapter,)
 
 
 

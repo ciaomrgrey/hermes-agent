@@ -26,7 +26,7 @@ import time
 import traceback
 from collections import defaultdict
 from contextlib import suppress
-from typing import Callable, Dict, List, Optional, Any, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Any, Tuple
 from urllib.parse import quote, urljoin
 
 from agent.async_utils import (consume_detached_task_result as _consume_background_task_result)
@@ -1470,13 +1470,14 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 return False, False
             role_authorized = bool(getattr(self, "_allowed_role_ids", set()))
         raw_self_mention = self._self_is_explicitly_mentioned(message)
+        raw_other_bot_mention = self._raw_mentions_other_bot(message)
         if not isinstance(message.channel, discord.DMChannel) and (
-            message.mentions or raw_self_mention
+            message.mentions or raw_self_mention or raw_other_bot_mention
         ):
             other_bots_mentioned = any(
                 mentioned.bot and mentioned != self._client.user
                 for mentioned in message.mentions
-            )
+            ) or raw_other_bot_mention
             if other_bots_mentioned and not raw_self_mention:
                 return False, False
             ignore_no_mention = _scoped_gate_env("DISCORD_IGNORE_NO_MENTION", "true").lower() in {"true", "1", "yes"}
@@ -4866,6 +4867,35 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         since ``message.mentions`` isn't always populated (mobile/edited/relayed)."""
         content = getattr(message, "content", "") or ""
         return {match.group(1) for match in re.finditer(r"<@!?(\d+)>", content)}
+
+    def set_co_resident_adapters_provider(
+        self, provider: Callable[[], Iterable[Any]]
+    ) -> None:
+        """Supply the gateway's live adapter view for cache-free bot identity checks."""
+        self._co_resident_adapters_provider = provider
+
+    def _raw_mentions_other_bot(self, message: Any) -> bool:
+        """True when a raw mention identifies another co-resident or cached bot user."""
+        if not self._client or not self._client.user:
+            return False
+        self_id = str(self._client.user.id)
+        other_ids = self._raw_mentioned_user_ids(message) - {self_id}
+        provider = getattr(self, "_co_resident_adapters_provider", None)
+        if callable(provider):
+            for adapter in provider():
+                user = getattr(getattr(adapter, "_client", None), "user", None)
+                if user is not None and str(user.id) in other_ids:
+                    return True
+        guild = getattr(message, "guild", None)
+        get_member = getattr(guild, "get_member", None)
+        get_user = getattr(self._client, "get_user", None)
+        for user_id in other_ids:
+            mentioned = get_member(int(user_id)) if callable(get_member) else None
+            if mentioned is None and callable(get_user):
+                mentioned = get_user(int(user_id))
+            if getattr(mentioned, "bot", False):
+                return True
+        return False
 
     def _self_is_explicitly_mentioned(self, message: Any) -> bool:
         """True when the bot is in ``message.mentions`` or raw-mentioned in the content."""
