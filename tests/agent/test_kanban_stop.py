@@ -7,7 +7,6 @@ import pytest
 from agent.kanban_stop import (
     build_kanban_stop_nudge,
     kanban_stop_nudge_enabled,
-    session_called_kanban_terminal,
 )
 
 
@@ -78,7 +77,7 @@ def test_nudge_when_no_terminal_tool(clear_kanban_env):
     assert "protocol violation" in nudge.lower() or "protocol" in nudge.lower()
 
 
-def test_no_nudge_after_kanban_complete(clear_kanban_env):
+def test_tool_name_alone_cannot_verify_completion(clear_kanban_env):
     clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
     messages = [
         {
@@ -94,8 +93,7 @@ def test_no_nudge_after_kanban_complete(clear_kanban_env):
         },
         {"role": "tool", "name": "kanban_complete", "tool_call_id": "1", "content": "done"},
     ]
-    assert session_called_kanban_terminal(messages) is True
-    assert build_kanban_stop_nudge(messages=messages) is None
+    assert build_kanban_stop_nudge(messages=messages) is not None
 
 
 
