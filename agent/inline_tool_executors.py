@@ -94,11 +94,16 @@ def _callback_tool(module: str, func: str, callback_attr: str, *arg_specs: _ArgS
 
 
 def _session_search(agent, args: dict, ctx: InlineToolContext) -> Any:
-    session_db = agent._get_session_db_for_recall()
-    if not session_db:
-        from hermes_state import format_session_db_unavailable
+    from tools.session_search_tool import _parse_session_scope
 
-        return json.dumps({"success": False, "error": format_session_db_unavailable()})
+    _, profile = _parse_session_scope(args.get("session_id"), args.get("profile"))
+    session_db = None
+    if profile is None or not str(profile).strip():
+        session_db = agent._get_session_db_for_recall()
+        if not session_db:
+            from hermes_state import format_session_db_unavailable
+
+            return json.dumps({"success": False, "error": format_session_db_unavailable()})
     return _call_tool(
         "tools.session_search_tool", "session_search", args,
         (

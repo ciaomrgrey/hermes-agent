@@ -517,7 +517,7 @@ def _anchor_in_live_context(db, anchor_state, anchor_sid: str, current_session_i
 
 
 def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
-            current_session_id: str = None) -> str:
+            current_session_id: str = None, link_profile: str = None) -> str:
     """Scroll shape: a window centered on an anchor (no FTS5, no bookends)."""
     try:
         around_message_id = int(around_message_id)
@@ -552,7 +552,8 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
     if not messages:
         return tool_error(f"around_message_id {around_message_id} not in session_id {session_id}", success=False)
     return _ok(
-        mode="scroll", session_id=session_id, around_message_id=around_message_id,
+        mode="scroll", session_id=session_id, link=_session_link(session_id, link_profile),
+        around_message_id=around_message_id,
         session_meta=_session_meta_block(session_meta), window=window,
         messages=[_shape_message(m, anchor_id=around_message_id) for m in messages],
         messages_before=view.get("messages_before", 0), messages_after=view.get("messages_after", 0),
@@ -562,11 +563,8 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
               "means you've hit that end of the session."), **extra)
 
 
-def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
-              around_message_id, window, sort, profile, detail, owned_dbs,
-              after=None, before=None, exclude_session_ids=None) -> str:
-    """Mode dispatch (see module docstring); scroll wins when an anchor is set.
-    Profile DBs opened here are appended to *owned_dbs* for the caller to close."""
+def _parse_session_scope(session_id, profile):
+    """Resolve explicit scope before either entry point acquires caller storage."""
     # A raw `@session:<profile>/<id>` link as session_id: ids never contain "/", so
     # split on it and adopt the embedded profile only when none was passed.
     if isinstance(session_id, str) and "/" in session_id:
@@ -575,6 +573,15 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
             session_id = emb_id
             if emb_profile and (profile is None or not str(profile).strip()):
                 profile = emb_profile
+    return session_id, profile
+
+
+def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
+              around_message_id, window, sort, profile, detail, owned_dbs,
+              after=None, before=None, exclude_session_ids=None) -> str:
+    """Mode dispatch (see module docstring); scroll wins when an anchor is set.
+    DBs opened here are appended to *owned_dbs* for the caller to close."""
+    session_id, profile = _parse_session_scope(session_id, profile)
     # Cross-profile: swap in the named profile's DB (read-only) for every shape;
     # current-lineage guards key off ids that won't collide, so they stay inert.
     try:
@@ -584,9 +591,18 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
     if profile_db is not None:
         db, current_session_id = profile_db, None
         owned_dbs.append(profile_db)
+    elif db is None:
+        from hermes_state import format_session_db_unavailable
+        from hermes_state_registry import acquire
+
+        db = _quiet(acquire, None, "SessionDB unavailable for session_search")
+        if db is None:
+            return tool_error(format_session_db_unavailable(), success=False)
+        owned_dbs.append(db)
     if isinstance(session_id, str) and session_id.strip():
         if around_message_id is not None:
-            return _scroll(db, session_id.strip(), around_message_id, window, current_session_id)
+            return _scroll(db, session_id.strip(), around_message_id, window, current_session_id,
+                           link_profile=profile)
         return _read_scoped(db, session_id.strip(), profile)
     limit = _clamp_int(limit, 3, 1, 10)
     if not query or not isinstance(query, str) or not query.strip():
@@ -610,14 +626,8 @@ def session_search(query: str = "", role_filter: str = None, limit: int = 3, db=
                    after: str = None, before: str = None, exclude_session_ids: Optional[List[str]] = None) -> str:
     """Run session search, closing DBs opened here. Positional order is frozen for old callers;
     new parameters are appended after ``detail``."""
-    from hermes_state import format_session_db_unavailable
-    from hermes_state_registry import acquire, release_or_close
+    from hermes_state_registry import release_or_close
     owned_dbs: List[Any] = []
-    if db is None:
-        db = _quiet(acquire, None, "SessionDB unavailable for session_search")
-        if db is None:
-            return tool_error(format_session_db_unavailable(), success=False)
-        owned_dbs.append(db)
     try:
         return _dispatch(query, role_filter, limit, db, current_session_id, session_id,
                          around_message_id, window, sort, profile, detail, owned_dbs,
