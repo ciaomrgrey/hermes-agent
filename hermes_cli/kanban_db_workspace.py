@@ -11,7 +11,9 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 from typing import TYPE_CHECKING
@@ -111,10 +113,105 @@ def _is_managed_scratch_path(p: Path) -> bool:
     return _managed_scratch_path_info(p)[0]
 
 
+def _checked_git(repo: Path, *args: str) -> str:
+    result = _git(repo, *args, timeout=120)
+    if result.returncode:
+        raise RuntimeError(f"git {args[0]} failed: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def _preserve_scratch_git(conn: sqlite3.Connection, task_id: str, wp: Path) -> bool:
+    """Before rmtree, bundle object stores that live inside the doomed tree.
+
+    Outside common dirs already retain linked-worktree objects. Reflog-only
+    tips need temporary refs INSIDE the doomed repo: --all alone omits them.
+    No refs are created in the user's outside repository.
+    """
+    dirty = []
+    try:
+        from hermes_cli.worktree_ops import _worktree_is_dirty
+
+        root = wp.resolve()
+        # Bind storage to the connection, not the dispatcher's current board.
+        db_path = next(r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main")
+        destination = Path(db_path).parent / "attachments" / task_id
+
+        def scan_error(error):
+            raise error
+
+        for directory, dirs, files in os.walk(root, onerror=scan_error):
+            repo = Path(directory)
+            checkout = ".git" in dirs or ".git" in files
+            # Bare stores can also hold the only copy of committed work.
+            bare = "HEAD" in files and "objects" in dirs and "refs" in dirs
+            if not checkout and not bare:
+                continue
+            if ".git" in dirs:
+                dirs.remove(".git")
+            if bare:
+                dirs.clear()
+            common = Path(_checked_git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")).resolve()
+            if not common.is_relative_to(root):
+                continue
+            if not bare and _worktree_is_dirty(str(repo)):
+                dirty.append(str(repo.relative_to(root)))
+            commits = _checked_git(repo, "rev-list", "--no-walk", "--all", "--reflog").splitlines()
+            head = _git(repo, "rev-parse", "--verify", "HEAD", timeout=30)
+            if head.returncode == 0:
+                commits.append(head.stdout.strip())
+            if not commits:
+                continue
+            destination.mkdir(parents=True, exist_ok=True)
+            if destination.resolve().is_relative_to(root):
+                raise RuntimeError("bundle destination is inside workspace")
+            index = 1
+            while (destination / f"workspace-{index}.bundle").exists():
+                index += 1
+            bundle = destination / f"workspace-{index}.bundle"
+            refs = []
+            try:
+                # Name all enumerated commits so recovery also works for amended
+                # and detached work, not merely the currently checked-out branch.
+                namespace = f"refs/hermes-preservation/{uuid.uuid4().hex}"
+                for sha in sorted(set(commits)):
+                    ref = f"{namespace}/{sha}"
+                    _checked_git(repo, "update-ref", ref, sha)
+                    refs.append(ref)
+                _checked_git(repo, "bundle", "create", str(bundle), "--all")
+                # Verify against an empty store: source-side verification could
+                # accept prerequisites that rmtree is about to destroy.
+                with tempfile.TemporaryDirectory(dir=destination) as verification:
+                    verifier = Path(verification)
+                    _checked_git(verifier, "init", "--bare")
+                    _checked_git(verifier, "bundle", "verify", str(bundle))
+                _kb.add_attachment(
+                    conn, task_id, filename=bundle.name, stored_path=str(bundle),
+                    content_type="application/octet-stream", size=bundle.stat().st_size,
+                    uploaded_by="workspace-cleanup",
+                )
+            finally:
+                for ref in refs:
+                    _checked_git(repo, "update-ref", "-d", ref)
+            with _kb.write_txn(conn):
+                _kb._append_event(conn, task_id, "workspace_git_preserved", {
+                    "repository": str(repo.relative_to(root)), "bundle": str(bundle),
+                    "commits": len(set(commits)), "dirty_repositories": dirty,
+                })
+        return True
+    except Exception as exc:
+        _kb._log.warning("Refusing scratch cleanup for task %s at %s: %s", task_id, wp, exc)
+        with _kb.write_txn(conn):
+            _kb._append_event(conn, task_id, "workspace_cleanup_refused", {
+                "path": str(wp), "reason": str(exc), "dirty_repositories": dirty,
+            })
+        return False
+
+
 def _cleanup_workspace(conn: sqlite3.Connection, task_id: str) -> None:
     """Remove a task's scratch workspace dir and kill its stale tmux session.
     Called from :func:`complete_task` after the transaction commits; best-effort
-    so cleanup never blocks completion. ``scratch`` is removed; ``worktree``
+    so cleanup never blocks completion. ``scratch`` is removed only after its
+    self-contained git work is durably bundled; ``worktree``
     only when provably free of work (clean tree, every commit reachable from a
     remote-tracking ref); ``dir`` is intentionally preserved."""
     try:
@@ -152,8 +249,9 @@ def _cleanup_workspace(conn: sqlite3.Connection, task_id: str) -> None:
             # source tree; without this, completion would rmtree the user's data.
             # See #28818.
             if _is_managed_scratch_path(wp):
-                shutil.rmtree(wp, ignore_errors=True)
-                _kb._log.debug("Removed scratch workspace: %s", wp)
+                if _preserve_scratch_git(conn, task_id, wp):
+                    shutil.rmtree(wp, ignore_errors=True)
+                    _kb._log.debug("Removed scratch workspace: %s", wp)
             else:
                 _kb._log.warning(
                     "Refusing to remove out-of-scratch workspace for task %s: %s "
@@ -268,7 +366,7 @@ def _try_cleanup_parent_workspaces(conn: sqlite3.Connection, task_id: str) -> No
                 _cleanup_worktree_workspace(parent_id, row["workspace_path"], row["branch_name"])
                 continue
             wp = Path(row["workspace_path"])
-            if wp.is_dir() and _is_managed_scratch_path(wp):
+            if wp.is_dir() and _is_managed_scratch_path(wp) and _preserve_scratch_git(conn, parent_id, wp):
                 shutil.rmtree(wp, ignore_errors=True)
                 _kb._log.debug("Deferred cleanup: removed parent %s scratch workspace: %s", parent_id, wp)
     except Exception:
