@@ -220,8 +220,23 @@ def _handle_send(args):
     from gateway.platforms.base import BasePlatformAdapter
     # Capture [[as_document]] before extract_media strips it (images keep original bytes via send_document).
     force_document_attachments = "[[as_document]]" in message
-    media_files, cleaned_message = BasePlatformAdapter.extract_media(message)
-    media_files = BasePlatformAdapter.filter_media_delivery_paths(media_files)
+    requested_media, cleaned_message = BasePlatformAdapter.extract_media(message)
+    media_files, rejected_media = [], []
+    for item in requested_media:
+        accepted = BasePlatformAdapter.filter_media_delivery_paths([item])
+        if accepted:
+            media_files.extend(accepted)
+        else:
+            rejected_media.append({"path": item[0], "error": "missing_or_unsafe_path"})
+    if rejected_media:
+        # Preflight is atomic: never silently send a reduced attachment set. Keep the
+        # existing path policy (including remote resolution), but make its rejection visible.
+        return json.dumps({
+            "success": False, "error_code": "media_validation_failed",
+            "error": "media_validation_failed: missing or unsafe attachments; nothing was sent",
+            "delivered_attachments": [], "failed_attachments": rejected_media,
+            "unattempted_attachments": [path for path, _ in media_files],
+        })
     mirror_text = cleaned_message.strip() or _describe_media_for_mirror(media_files)
     used_home_channel = not chat_id
     if used_home_channel:
