@@ -11,13 +11,17 @@ from plugins.platforms.slack import adapter
 
 @pytest.fixture
 def client(monkeypatch):
-    from slack_sdk.web import async_client
+    import sys
+    from types import ModuleType
 
     client = SimpleNamespace(
         chat_postMessage=AsyncMock(return_value={"ok": True, "ts": "111.222"}),
         files_upload_v2=AsyncMock(return_value={"ok": False, "error": "missing_scope"}),
     )
-    monkeypatch.setattr(async_client, "AsyncWebClient", lambda **kw: client)
+    # The SDK is optional; stub its transport entry point, never the sender.
+    async_client = ModuleType("slack_sdk.web.async_client")
+    async_client.AsyncWebClient = lambda **kw: client
+    monkeypatch.setitem(sys.modules, "slack_sdk.web.async_client", async_client)
     return client
 
 
