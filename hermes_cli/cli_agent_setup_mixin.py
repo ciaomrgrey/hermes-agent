@@ -22,6 +22,12 @@ def _single_query_clarify_callback(question: str, choices=None, multi_select=Fal
     The oneshot path answers immediately via ``_oneshot_clarify_callback``; single-query turns need the same
     headless behavior (#94943).
     """
+    from agent.delegation_context import owned_kanban_task
+
+    if task_id := owned_kanban_task():
+        from hermes_cli.kanban_headless_clarify import kanban_clarify_unavailable
+        # The tool converts callback exceptions into an error, not a user answer.
+        raise RuntimeError(kanban_clarify_unavailable(task_id))
     prefix = f"[single-query mode: no user available to answer {question!r}. "
     if choices:
         what = "subset" if multi_select else "option"

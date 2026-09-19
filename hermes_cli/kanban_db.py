@@ -3080,9 +3080,15 @@ def block_task(
         if cur_row is None:
             return False
         source_status = _retry_status_for_run(conn, task_id) if cur_row["status"] == "running" else "ready"
+        from hermes_cli.kanban_block_provenance import previous_worker_recurrences
+
+        previous = int(_row_get(cur_row, "block_recurrences") or 0)
+        if kind != "dependency":
+            previous = previous_worker_recurrences(conn, task_id, previous)
         new_status, event_kind, set_sql, params, payload = _route_block(
             kind, reason, source_status, prev_kind=_row_get(cur_row, "block_kind"),
-            prev_recurrences=int(_row_get(cur_row, "block_recurrences") or 0),
+            prev_recurrences=previous,
+            worker_attempt=_current_run_id(conn, task_id) is not None,
         )
         sql = f"""
                 UPDATE tasks
@@ -3115,26 +3121,26 @@ def block_task(
 
 def _route_block(
     kind: Optional[str], reason: Optional[str], source_status: str, *,
-    prev_kind: Optional[str], prev_recurrences: int,
+    prev_kind: Optional[str], prev_recurrences: int, worker_attempt: bool = True,
 ) -> tuple[str, str, str, tuple, dict]:
     """``(new_status, event_kind, set_sql, params, payload)`` for :func:`block_task`.
 
     ``dependency`` never enters the human ``blocked`` bucket: it waits in
     ``todo`` for ``recompute_ready``, so a cron never sees a dependency-wait
-    as something to "unblock". Every other kind counts unblock-loop
-    recurrences: block_task only fires from running/ready (AFTER an unblock
-    returned the task to the pool), so a stored ``block_kind`` equal to the
-    incoming one means blocked -> unblocked -> re-block for the same cause
-    (un-typed None compares equal to a prior un-typed block). At
+    as something to "unblock". Every other kind counts claimed worker attempts,
+    not workerless administrative blocks. An administrative block preserves
+    the same-kind count but cannot increment it or trigger escalation.
+    (Un-typed None compares equal to a prior un-typed block.) At
     ``BLOCK_RECURRENCE_LIMIT`` the task routes to ``triage`` for a human.
     """
     payload = {"reason": reason, "kind": kind, "source_status": source_status}
     if kind == "dependency":
         return "todo", "dependency_wait", "block_kind    = ?", (kind,), payload
-    recurrences = prev_recurrences + 1 if prev_kind == kind else 1
+    recurrences = (prev_recurrences if prev_kind == kind else 0) + int(worker_attempt)
     set_sql = "block_kind    = ?,\n                       block_recurrences = ?"
-    payload = {"reason": reason, "kind": kind, "recurrences": recurrences, "source_status": source_status}
-    if recurrences >= BLOCK_RECURRENCE_LIMIT:
+    payload = {"reason": reason, "kind": kind, "recurrences": recurrences,
+               "source_status": source_status, "worker_attempt": worker_attempt}
+    if worker_attempt and recurrences >= BLOCK_RECURRENCE_LIMIT:
         payload["limit"] = BLOCK_RECURRENCE_LIMIT
         return "triage", "block_loop_detected", set_sql, (kind, recurrences), payload
     return "blocked", "blocked", set_sql, (kind, recurrences), payload
