@@ -6435,7 +6435,12 @@ async def _standalone_send_media(
     formatted_caption: Optional[str], unfurl_kwargs: Dict[str, Any]) -> Dict[str, Any]:
     """Media branch of ``_standalone_send``: ``files_upload_v2`` per file (+ optional text post).
     ``caption`` rides as ``initial_comment`` on the first successful upload unless
-    link-preview controls are explicit (the upload API cannot carry them)."""
+    link-preview controls are explicit (the upload API cannot carry them).
+
+    Full success requires every requested file. On failure, preserve the text ts
+    (when posted) and per-file receipts: callers must not replay the whole send.
+    An exception can be an ambiguous transport outcome; reconcile before retrying.
+    """
     warnings: List[str] = []
     # Local import: tests inject a fake slack_sdk; a missing install gets a clean error.
     try:
@@ -6459,13 +6464,17 @@ async def _standalone_send_media(
             last_message_id = post_payload.get("ts")
         except Exception as e:
             return send_error(f"Slack send failed: {e}")
+    text_message_id = last_message_id
+    text_delivered = bool(text_to_send.strip())
     caption_pending = caption_as_upload_comment
-    uploaded_any = False
+    delivered_attachments = []
+    failed_attachments = []
     for media_path, _is_voice in media_files:
         if not os.path.exists(media_path):
             warning = f"Media file not found, skipping: {media_path}"
             logger.warning("[Slack] %s", warning)
             warnings.append(warning)
+            failed_attachments.append({"path": media_path, "error": "file_not_found"})
             if caption_pending:
                 # Deliver the caption even though the file is missing.
                 try:
@@ -6473,10 +6482,12 @@ async def _standalone_send_media(
                         client, chat_id, formatted_caption, unfurl_kwargs, thread_id)
                     if fb.get("ok", True):
                         last_message_id = fb.get("ts") or last_message_id
+                        text_message_id = last_message_id
+                        text_delivered = True
                         caption_pending = False
-                except Exception:
-                    logger.warning(
-                        "[Slack] Caption-fallback send failed for missing media", exc_info=True)
+                except Exception as e:
+                    logger.warning("[Slack] Caption-fallback send failed: %s",
+                                   send_error(e)["error"])
             continue
         try:
             upload_result = await _standalone_upload_file(
@@ -6484,20 +6495,38 @@ async def _standalone_send_media(
                 initial_comment=(formatted_caption or "") if caption_pending else "",
                 thread_id=thread_id)
             if upload_result.get("error"):
-                warnings.append(f"Failed to send media {media_path}: {upload_result['error']}")
+                error = upload_result["error"]
+                warnings.append(f"Failed to send media {media_path}: {error}")
+                failed_attachments.append({"path": media_path, "error": error})
                 continue
-            uploaded_any = True
+            payload = _slack_response_payload(upload_result["raw"])
+            files = payload.get("files") or [payload.get("file") or {}]
+            delivered_attachments.append({
+                "path": media_path, "message_id": upload_result.get("message_id"),
+                "file_ids": [f["id"] for f in files if f.get("id")],
+            })
             caption_pending = False
             last_message_id = upload_result.get("message_id") or last_message_id
         except Exception as e:
-            warning = f"Failed to send media {media_path}: {e}"
-            logger.error("[Slack] %s", warning, exc_info=True)
+            error = send_error(e)["error"]
+            warning = f"Failed to send media {media_path}: {error}"
+            logger.error("[Slack] %s", warning)
             warnings.append(warning)
-    if last_message_id is None and not uploaded_any and not text_to_send.strip():
-        result: Dict[str, Any] = {"error": "No deliverable text or media remained after processing"}
-    else:
-        result = {
-            "success": True, "platform": "slack", "chat_id": chat_id, "message_id": last_message_id}
+            failed_attachments.append({"path": media_path, "error": error})
+    result: Dict[str, Any] = {
+        "success": not failed_attachments, "platform": "slack", "chat_id": chat_id,
+        "message_id": last_message_id,
+        "delivered_attachments": delivered_attachments,
+        "failed_attachments": failed_attachments,
+    }
+    if failed_attachments:
+        code = "partial_delivery" if text_delivered or delivered_attachments else "delivery_failed"
+        result.update(
+            error_code=code,
+            error=f"{code}: {len(failed_attachments)} of {len(media_files)} Slack attachments failed; "
+                  "inspect delivered_attachments and failed_attachments before retrying",
+            message_id=text_message_id or last_message_id,
+        )
     if warnings:
         result["warnings"] = warnings
     return result

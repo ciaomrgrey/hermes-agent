@@ -411,7 +411,8 @@ class TestStandaloneSendMediaPath:
                     caption="Here is the report",
                 )
             )
-        assert result["success"] is True
+        assert result["success"] is False
+        assert result["error_code"] == "partial_delivery"
         assert result["message_id"] == "555.666"
         client.chat_postMessage.assert_awaited_once()
         assert (
