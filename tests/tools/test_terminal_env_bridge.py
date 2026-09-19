@@ -11,7 +11,12 @@ import os
 import pytest
 
 import tools.terminal_tool as terminal_tool
-from hermes_constants import get_hermes_home
+from agent import secret_scope
+from hermes_constants import (
+    get_hermes_home,
+    reset_hermes_home_override,
+    set_hermes_home_override,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +30,9 @@ def _reset_bridge_state(monkeypatch):
         "TERMINAL_SSH_HOST",
     ):
         monkeypatch.delenv(name, raising=False)
+    secret_scope.set_multiplex_active(False)
     yield
+    secret_scope.set_multiplex_active(False)
 
 
 def _write_config(text: str) -> None:
@@ -152,3 +159,139 @@ def test_bridge_config_failure_does_not_crash(monkeypatch):
 
     assert config["env_type"] == "ssh"
     assert config["ssh_host"] == "example.test"
+
+
+def test_multiplex_scopes_resolve_each_profiles_terminal_config(monkeypatch, tmp_path):
+    """A routed profile must not inherit the gateway owner's terminal config."""
+    ripley = tmp_path / "profiles" / "ripley"
+    gurney = tmp_path / "profiles" / "gurney"
+    ripley.mkdir(parents=True)
+    gurney.mkdir(parents=True)
+    (ripley / "config.yaml").write_text(
+        f"terminal:\n  backend: local\n  cwd: {ripley}\n",
+        encoding="utf-8",
+    )
+    (gurney / "config.yaml").write_text(
+        "terminal:\n  backend: ssh\n  cwd: '~'\n  ssh_host: gurney.example\n",
+        encoding="utf-8",
+    )
+
+    # Reproduce the live gateway state: startup bridged Ripley's config into
+    # process-global env before the Gurney-routed turn entered its profile scope.
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.setenv("TERMINAL_CWD", str(ripley))
+    monkeypatch.setattr(terminal_tool, "_terminal_config_bridge_attempted", True)
+    secret_scope.set_multiplex_active(True)
+
+    token = set_hermes_home_override(str(ripley))
+    try:
+        ripley_config = terminal_tool._get_env_config()
+    finally:
+        reset_hermes_home_override(token)
+
+    token = set_hermes_home_override(str(gurney))
+    try:
+        gurney_config = terminal_tool._get_env_config()
+    finally:
+        reset_hermes_home_override(token)
+
+    assert ripley_config["cwd"] == str(ripley)
+    assert gurney_config["env_type"] == "ssh"
+    assert gurney_config["cwd"] == "~"
+    assert gurney_config["ssh_host"] == "gurney.example"
+    assert os.environ["TERMINAL_CWD"] == str(ripley)
+
+
+def test_multiplex_omitted_keys_do_not_inherit_gateway_owner(monkeypatch, tmp_path):
+    """A partial routed config gets profile defaults, never owner terminal state."""
+    routed = tmp_path / "profiles" / "routed"
+    routed.mkdir(parents=True)
+    (routed / "config.yaml").write_text(
+        "terminal:\n  timeout: 42\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("TERMINAL_ENV", "ssh")
+    monkeypatch.setenv("TERMINAL_CWD", "/owner/workspace")
+    monkeypatch.setenv("TERMINAL_SSH_HOST", "owner.example")
+    monkeypatch.setattr(terminal_tool, "_terminal_config_bridge_attempted", True)
+    secret_scope.set_multiplex_active(True)
+
+    token = set_hermes_home_override(str(routed))
+    try:
+        config = terminal_tool._get_env_config()
+    finally:
+        reset_hermes_home_override(token)
+
+    assert config["env_type"] == "local"
+    assert config["cwd"] != "/owner/workspace"
+    assert config["ssh_host"] == ""
+    assert config["timeout"] == 42
+
+
+def test_multiplex_bridge_failure_never_falls_back_to_owner_env(monkeypatch):
+    """Config-read failures fail isolated instead of exposing owner settings."""
+    import hermes_cli.config as config_mod
+
+    monkeypatch.setenv("TERMINAL_ENV", "ssh")
+    monkeypatch.setenv("TERMINAL_CWD", "/owner/workspace")
+    monkeypatch.setenv("TERMINAL_SSH_HOST", "owner.example")
+    monkeypatch.setattr(
+        config_mod,
+        "load_config_readonly",
+        lambda: (_ for _ in ()).throw(RuntimeError("scoped config failed")),
+    )
+    secret_scope.set_multiplex_active(True)
+
+    config = terminal_tool._get_env_config()
+
+    assert config["env_type"] == "local"
+    assert config["cwd"] != "/owner/workspace"
+    assert config["ssh_host"] == ""
+
+
+def test_multiplex_file_environments_keep_profile_cwds_isolated(monkeypatch, tmp_path):
+    """Distinct routed sessions create distinct local envs at their own cwd."""
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from tools import file_tools
+
+    ripley = tmp_path / "profiles" / "ripley"
+    gurney = tmp_path / "profiles" / "gurney"
+    ripley.mkdir(parents=True)
+    gurney.mkdir(parents=True)
+    for home in (ripley, gurney):
+        (home / "config.yaml").write_text(
+            f"terminal:\n  backend: local\n  cwd: {home}\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.setenv("TERMINAL_CWD", str(ripley))
+    monkeypatch.setattr(terminal_tool, "_terminal_config_bridge_attempted", True)
+    secret_scope.set_multiplex_active(True)
+
+    def create(profile, home, session_key):
+        session_tokens = set_session_vars(session_key=session_key, profile=profile)
+        home_token = set_hermes_home_override(str(home))
+        try:
+            return file_tools._get_file_ops(session_key).env
+        finally:
+            reset_hermes_home_override(home_token)
+            clear_session_vars(session_tokens)
+
+    try:
+        ripley_env = create("ripley", ripley, "agent:ripley:slack:channel:a")
+        gurney_env = create("gurney", gurney, "agent:gurney:slack:channel:b")
+
+        assert ripley_env is not gurney_env
+        assert ripley_env.cwd == str(ripley)
+        assert gurney_env.cwd == str(gurney)
+        assert set(terminal_tool._active_environments) == {
+            "session:agent:ripley:slack:channel:a",
+            "session:agent:gurney:slack:channel:b",
+        }
+    finally:
+        file_tools.clear_file_ops_cache()
+        with terminal_tool._env_lock:
+            terminal_tool._active_environments.clear()
+            terminal_tool._last_activity.clear()
