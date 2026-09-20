@@ -123,9 +123,10 @@ def _checked_git(repo: Path, *args: str) -> str:
 def _preserve_scratch_git(conn: sqlite3.Connection, task_id: str, wp: Path) -> bool:
     """Before rmtree, bundle object stores that live inside the doomed tree.
 
-    Outside common dirs already retain linked-worktree objects. Reflog-only
-    tips need temporary refs INSIDE the doomed repo: --all alone omits them.
-    No refs are created in the user's outside repository.
+    Ordinary outside stores retain linked-worktree objects; unproven storage
+    dependencies and submodule stores refuse reclamation. Reflog-only tips need
+    temporary refs INSIDE the doomed repo: --all alone omits them. No refs are
+    created in the user's outside repository.
     """
     dirty = []
     try:
@@ -151,7 +152,27 @@ def _preserve_scratch_git(conn: sqlite3.Connection, task_id: str, wp: Path) -> b
             if bare:
                 dirs.clear()
             common = Path(_checked_git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")).resolve()
+            # Gitlinks do not include submodule objects in a superproject
+            # bundle. Retain the entire workspace until these stores are moved
+            # or explicitly preserved; do not silently prune .git/modules.
+            if (common / "modules").exists():
+                raise RuntimeError("submodule stores require separate preservation")
             if not common.is_relative_to(root):
+                objects = Path(_checked_git(
+                    repo, "rev-parse", "--path-format=absolute", "--git-path", "objects",
+                )).resolve(strict=True)
+                if objects.is_relative_to(root):
+                    raise RuntimeError("outside repository depends on workspace objects")
+                # Alternates and symlinked packs/loose-object directories can
+                # hide dependencies in the doomed tree. Unsupported topologies
+                # fail closed without creating any refs in the outside store.
+                if any(line.startswith("alternate: ") for line in
+                       _checked_git(repo, "count-objects", "-v").splitlines()):
+                    raise RuntimeError("outside repository has unproven alternates")
+                for obj_dir, obj_dirs, obj_files in os.walk(objects, onerror=scan_error):
+                    if any((Path(obj_dir) / name).is_symlink()
+                           for name in obj_dirs + obj_files):
+                        raise RuntimeError("outside object store contains symlinks")
                 continue
             if not bare and _worktree_is_dirty(str(repo)):
                 dirty.append(str(repo.relative_to(root)))
@@ -184,6 +205,14 @@ def _preserve_scratch_git(conn: sqlite3.Connection, task_id: str, wp: Path) -> b
                     verifier = Path(verification)
                     _checked_git(verifier, "init", "--bare")
                     _checked_git(verifier, "bundle", "verify", str(bundle))
+                    # verify checks the header/prerequisites, NOT the pack.
+                    # Import into a fresh store and check every required graph
+                    # before deleting its only source (including reflog tips).
+                    _checked_git(verifier, "fetch", "--no-write-fetch-head",
+                                 str(bundle), "+refs/*:refs/*")
+                    for sha in sorted(set(commits)):
+                        _checked_git(verifier, "cat-file", "-e", sha + "^{commit}")
+                    _checked_git(verifier, "fsck", "--full", "--no-reflogs")
                 _kb.add_attachment(
                     conn, task_id, filename=bundle.name, stored_path=str(bundle),
                     content_type="application/octet-stream", size=bundle.stat().st_size,

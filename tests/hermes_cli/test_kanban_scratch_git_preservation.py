@@ -81,6 +81,81 @@ def recover(conn, tid, tmp_path, sha, text):
     assert git(recovered, "show", sha + ":work.txt").stdout == text
 
 
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize("shape", ["submodule", "objects", "alternates"])
+def test_unsupported_stores_refuse_without_external_ref_writes(board, tmp_path, deferred, shape):
+    import shutil
+
+    tid, wp = task(board)
+    origin, repo, sha = clone_with_work(tmp_path, wp)
+    external_refs = git(origin, "show-ref").stdout
+    if shape == "submodule":
+        git(repo, "-c", "protocol.file.allow=always", "submodule", "add", str(origin), "sub")
+        sha = commit(repo / "sub", "unique submodule work")
+        git(repo, "add", "sub", ".gitmodules")
+        git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+            "commit", "-m", "anchor gitlink")
+        git(repo, "submodule", "deinit", "-f", "sub")
+        store = repo / ".git/modules/sub"
+    else:
+        external = tmp_path / "external.git"
+        checkout = wp / "separate"
+        checkout.mkdir()
+        git(checkout, "init", "--separate-git-dir", str(external))
+        if shape == "objects":
+            objects = wp / "objects"
+            shutil.move(str(external / "objects"), str(objects))
+            (external / "objects").symlink_to(objects, target_is_directory=True)
+            sha = commit(checkout, "unique object store work")
+        else:
+            (external / "objects/info/alternates").write_text(str(repo / ".git/objects") + "\n")
+            git(checkout, "update-ref", "refs/heads/recovery", sha)
+        store = external
+        external_refs = git(checkout, "show-ref").stdout
+    child = kb.create_task(board, title="consumer", assignee="worker", parents=[tid]) if deferred else None
+    complete(board, tid)
+    if child:
+        assert wp.exists()
+        complete(board, child)
+        assert kb.get_task(board, child).status == "done"
+    assert wp.exists(), "unsupported object topology must retain the source"
+    git(tmp_path, "--git-dir=" + str(store), "cat-file", "-e", sha + "^{commit}")
+    assert kb.get_task(board, tid).status == "done"
+    assert any(e.kind == "workspace_cleanup_refused" for e in kb.list_events(board, tid))
+    target = origin if shape == "submodule" else checkout
+    assert git(target, "show-ref").stdout == external_refs
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+def test_truncated_pack_refuses_then_recovers(board, tmp_path, monkeypatch, deferred):
+    tid, wp = task(board)
+    _, repo, sha = clone_with_work(tmp_path, wp)
+    original = kbw._git
+
+    def truncate(path, *args, **kwargs):
+        assert not board.in_transaction
+        result = original(path, *args, **kwargs)
+        if args[:2] == ("bundle", "create") and result.returncode == 0:
+            bundle = Path(args[2])
+            data = bundle.read_bytes()
+            bundle.write_bytes(data[:data.index(b"PACK") + 12])
+        return result
+
+    monkeypatch.setattr(kbw, "_git", truncate)
+    child = kb.create_task(board, title="consumer", assignee="worker", parents=[tid]) if deferred else None
+    complete(board, tid)
+    if child:
+        complete(board, child)
+    assert wp.exists(), "header-only verification destroyed the source of a truncated pack"
+    assert not kb.list_attachments(board, tid)
+    git(repo, "cat-file", "-e", sha + "^{commit}")
+    assert any(e.kind == "workspace_cleanup_refused" for e in kb.list_events(board, tid))
+    monkeypatch.setattr(kbw, "_git", original)
+    kbw._cleanup_workspace(board, tid)
+    assert not wp.exists()
+    recover(board, tid, tmp_path, sha, "irreplaceable work")
+
+
 def test_isolated_clone_commit_recoverable_after_complete(board, tmp_path):
     tid, wp = task(board)
     origin, repo, sha = clone_with_work(tmp_path, wp)
