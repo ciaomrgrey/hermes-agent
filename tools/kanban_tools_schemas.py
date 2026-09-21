@@ -40,6 +40,31 @@ def _schema(name: str, description: str, properties: dict[str, Any], required: l
     }
 
 
+_TRIAGE_PROPERTIES = {
+    "task_id": _prop("string", "Exact target task id."),
+    "expected_event_id": _prop("integer", "Latest event id from the exact card readback."),
+    "action": {"type": "string", "enum": ["specify", "promote", "reassign"]},
+    "specification": _prop("string", "Exact nonblank requirements to append; specify only."),
+    "assignee": _prop("string", "Exact target assignee; required for reassign."),
+}
+KANBAN_ADMIT_TRIAGE_SCHEMA = _schema(
+    "kanban_admit_triage",
+    "Conductor only: admit one exact intake operation at the current revision. "
+    "Only use after independently resolving owner restrictions. No task is released. "
+    "Never admit from caller prose alone. Holds/reviews are refused, not adjudicated. "
+    "Admission is invalidated by intervening changes and consumed once by the bound router.",
+    _TRIAGE_PROPERTIES, ["task_id", "expected_event_id", "action"],
+)
+KANBAN_ROUTE_TRIAGE_SCHEMA = _schema(
+    "kanban_route_triage",
+    "Bound cron router only: consume an exact conductor admission on a triage/todo card. "
+    "Use the latest event id from kanban_show. Missing/stale admissions deny. "
+    "Specify appends admitted requirements; promote requires done parents; reassign "
+    "preserves phase. Never releases holds/reviews or spawns workers.",
+    _TRIAGE_PROPERTIES, ["task_id", "expected_event_id", "action"],
+)
+
+
 KANBAN_SHOW_SCHEMA = _schema(
     "kanban_show",
     (
