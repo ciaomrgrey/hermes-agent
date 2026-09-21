@@ -40,6 +40,24 @@ def _schema(name: str, description: str, properties: dict[str, Any], required: l
     }
 
 
+KANBAN_ROUTE_TRIAGE_SCHEMA = _schema(
+    "kanban_route_triage",
+    "Route one ordinary unheld triage/todo card from an authorized bound cron job. "
+    "Read kanban_show first; pass the largest event id as expected_event_id. "
+    "Specify appends requirements and parent-gates readiness; promote requires "
+    "completed parents; reassign preserves phase. Prior holds, reviews and "
+    "ambiguous history are refused, never released. No worker is spawned.",
+    {
+        "task_id": _prop("string", "Exact target task id."),
+        "expected_event_id": _prop("integer", "Largest event id from the exact card readback."),
+        "action": {"type": "string", "enum": ["specify", "promote", "reassign"]},
+        "specification": _prop("string", "Optional nonblank requirements to append; specify only."),
+        "assignee": _prop("string", "Optional exact assignee; required for reassign."),
+    },
+    ["task_id", "expected_event_id", "action"],
+)
+
+
 KANBAN_SHOW_SCHEMA = _schema(
     "kanban_show",
     (
