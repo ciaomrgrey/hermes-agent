@@ -620,3 +620,92 @@ def test_named_historical_record_shapes_are_immutable_fixtures(
     assert bool(result.get('ok')) is allowed, result
     if not allowed:
         assert list(conn.iterdump()) == before
+
+
+@pytest.mark.parametrize('variant', [
+    'boolean_recurrence', 'missing_specify', 'foreign_profile', 'inverted_run_time',
+])
+def test_historical_admission_denies_contradictory_native_history(estate, variant):
+    from hermes_cli import kanban_db as kb
+    conn, _ = estate
+    tid = _historical_triage(conn)
+    with kb.write_txn(conn):
+        if variant == 'boolean_recurrence':
+            event = next(event for event in kb.list_events(conn, tid) if event.kind == 'blocked')
+            payload = dict(event.payload, recurrences=True)
+            conn.execute('UPDATE task_events SET payload=? WHERE id=?', (json.dumps(payload), event.id))
+        elif variant == 'missing_specify':
+            conn.execute("DELETE FROM task_events WHERE task_id=? AND kind='specified'", (tid,))
+        elif variant == 'foreign_profile':
+            conn.execute("UPDATE task_runs SET profile='gurney' WHERE task_id=?", (tid,))
+        else:
+            conn.execute('UPDATE task_runs SET ended_at=started_at-1 WHERE task_id=?', (tid,))
+    before = list(conn.iterdump())
+    result = mint(
+        estate, tid, owner_disposition_ref='estate/t_owner#event-1',
+        expires_at=int(time.time()) + 60,
+    )
+    assert 'error' in result, (variant, result)
+    assert list(conn.iterdump()) == before
+
+
+def test_historical_admission_replacement_is_rejected_atomically(estate):
+    conn, _ = estate
+    tid = _historical_triage(conn)
+    args = dict(owner_disposition_ref='estate/t_owner#event-1', expires_at=int(time.time()) + 60)
+    old = mint(estate, tid, specification='Original exact scope', **args)
+    before = list(conn.iterdump())
+    new = mint(estate, tid, specification='Updated exact scope', **args)
+    assert old.get('ok') and 'error' in new, (old, new)
+    assert list(conn.iterdump()) == before
+    result = route(estate, tid, old['event_id'], specification='Original exact scope')
+    assert result.get('ok'), result
+
+
+def test_expired_historical_admission_replacement_is_rejected(estate, monkeypatch):
+    import tools.kanban_triage_routing as routing
+    conn, _ = estate
+    tid = _historical_triage(conn)
+    now = int(time.time())
+    with monkeypatch.context() as clock:
+        clock.setattr(routing.time, 'time', lambda: now)
+        old = mint(
+            estate, tid, owner_disposition_ref='estate/t_owner#event-1', expires_at=now + 1,
+        )
+    with monkeypatch.context() as clock:
+        clock.setattr(routing.time, 'time', lambda: now + 2)
+        before = list(conn.iterdump())
+        renewed = mint(
+            estate, tid, owner_disposition_ref='estate/t_owner#event-2', expires_at=now + 62,
+        )
+        assert 'error' in renewed, renewed
+        assert list(conn.iterdump()) == before
+    assert old['event_id'] == revision(conn, tid)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('actor', {'profile': 'gurney'}),
+    ('snapshot', 'not-a-digest'),
+    ('owner_disposition_ref', ''),
+    ('expires_at', True),
+])
+def test_historical_supersession_denies_malformed_prior_grant(estate, field, value):
+    from hermes_cli import kanban_db as kb
+    conn, _ = estate
+    tid = _historical_triage(conn)
+    first = mint(
+        estate, tid, owner_disposition_ref='estate/t_owner#event-1',
+        expires_at=int(time.time()) + 60,
+    )
+    event = kb.list_events(conn, tid)[-1]
+    with kb.write_txn(conn):
+        payload = dict(event.payload, **{field: value})
+        conn.execute('UPDATE task_events SET payload=? WHERE id=?', (json.dumps(payload), event.id))
+    before = list(conn.iterdump())
+    renewed = mint(
+        estate, tid, owner_disposition_ref='estate/t_owner#event-2',
+        expires_at=int(time.time()) + 120,
+    )
+    assert 'error' in renewed, (field, renewed)
+    assert list(conn.iterdump()) == before
+    assert first['event_id'] == event.id
