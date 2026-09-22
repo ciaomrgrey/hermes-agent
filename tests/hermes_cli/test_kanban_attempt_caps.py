@@ -12,6 +12,7 @@ from hermes_cli import kanban as kc
 from hermes_cli import kanban_db as kb
 from hermes_cli import kanban_db_connect as kbc
 from hermes_cli import kanban_db_dispatch as kbd
+from hermes_cli import kanban_transfer as kt
 from tools import kanban_tools
 
 
@@ -230,6 +231,29 @@ def test_reassigning_a_to_b_to_a_does_not_reset_attempt_history(conn) -> None:
         ("a", "reclaimed"),
         ("b", "reclaimed"),
     ]
+
+
+def test_administrative_hold_does_not_spend_first_dispatch(conn) -> None:
+    task_id = kb.create_task(conn, title="operator hold", assignee="builder", max_attempts=1)
+    assert kb.block_task(conn, task_id, reason="operator hold", kind="needs_input")
+    assert kb.unblock_task(conn, task_id)
+    assert not [event for event in kb.list_events(conn, task_id) if event.kind == "claimed"]
+    assert len(kb.list_runs(conn, task_id)) == 1
+
+    assert kb.claim_task(conn, task_id) is not None
+
+
+def test_claimed_worker_block_spends_attempt_after_machine_state_scrub(conn) -> None:
+    task_id = kb.create_task(conn, title="worker block", assignee="builder", max_attempts=1)
+    assert kb.claim_task(conn, task_id) is not None
+    assert kb.block_task(conn, task_id, reason="worker needs input", kind="needs_input")
+    with kb.write_txn(conn):
+        kt._scrub_local_state(conn)
+    assert kb.list_runs(conn, task_id)[0].claim_lock is None
+    assert kb.unblock_task(conn, task_id)
+
+    assert kb.claim_task(conn, task_id) is None
+    assert len(kb.list_runs(conn, task_id)) == 1
 
 
 def test_legacy_schema_migrates_attempt_cap_as_unlimited(tmp_path: Path) -> None:
