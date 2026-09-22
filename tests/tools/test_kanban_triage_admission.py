@@ -498,3 +498,125 @@ def test_historical_owner_admission_denials(estate, variant):
     result = mint(estate, tid, action='specify', specification='Current exact scope', assignee='cody', **args)
     assert 'error' in result, result
     assert list(conn.iterdump()) == before
+
+
+@pytest.mark.parametrize('variant', [
+    'null_block', 'wrong_recurrence', 'review_source', 'foreign_run', 'reordered',
+    'malformed_comment',
+])
+def test_historical_admission_requires_canonical_typed_run_history(estate, variant):
+    from hermes_cli import kanban_db as kb
+    conn, _ = estate
+    tid = _historical_triage(conn)
+    blocks = [event for event in kb.list_events(conn, tid)
+              if event.kind in {'blocked', 'block_loop_detected'}]
+    first = blocks[0]
+    payload = dict(first.payload)
+    with kb.write_txn(conn):
+        if variant == 'null_block':
+            conn.execute('UPDATE task_events SET payload=NULL WHERE id=?', (first.id,))
+        elif variant == 'wrong_recurrence':
+            payload['recurrences'] = 999
+            conn.execute('UPDATE task_events SET payload=? WHERE id=?', (json.dumps(payload), first.id))
+        elif variant == 'review_source':
+            payload['source_status'] = 'review'
+            conn.execute('UPDATE task_events SET payload=? WHERE id=?', (json.dumps(payload), first.id))
+        elif variant == 'foreign_run':
+            conn.execute('UPDATE task_events SET run_id=999999 WHERE id=?', (first.id,))
+        elif variant == 'reordered':
+            claimed = next(event for event in kb.list_events(conn, tid) if event.kind == 'claimed')
+            conn.execute('UPDATE task_events SET id=? WHERE id=?', (-first.id, first.id))
+            assert claimed.id > 0
+        else:
+            kb._append_event(conn, tid, 'commented', None)
+    before = list(conn.iterdump())
+    result = mint(
+        estate, tid, specification='Exact safe scope',
+        owner_disposition_ref='estate/t_owner#event-1', expires_at=int(time.time()) + 60,
+    )
+    assert 'error' in result, (variant, result)
+    assert list(conn.iterdump()) == before
+
+
+def test_historical_reassign_is_rejected_without_erasing_hold(estate):
+    from hermes_cli import kanban_db as kb
+    conn, _ = estate
+    tid = _historical_triage(conn)
+    before = list(conn.iterdump())
+    result = mint(
+        estate, tid, 'reassign', assignee='gurney',
+        owner_disposition_ref='estate/t_owner#event-1', expires_at=int(time.time()) + 60,
+    )
+    assert 'error' in result
+    assert list(conn.iterdump()) == before
+    task = kb.get_task(conn, tid)
+    assert task.assignee == 'cody'
+    assert task.block_kind == 'capability'
+    assert task.block_recurrences == kb.BLOCK_RECURRENCE_LIMIT
+
+
+def test_historical_profile_scope_returns_to_conductor_after_cron_consumption(estate):
+    from model_tools import get_tool_definitions
+    conn, root = estate
+    first = _historical_triage(conn)
+    second = _historical_triage(conn)
+    args = dict(owner_disposition_ref='estate/t_owner#event-1', expires_at=int(time.time()) + 60)
+    with caller(root, 'generalist'):
+        names = {schema['function']['name'] for schema in get_tool_definitions(enabled_toolsets=['kanban'])}
+        assert 'kanban_admit_triage' in names and 'kanban_route_triage' not in names
+        grant = dispatch('kanban_admit_triage', dict(
+            task_id=first, expected_event_id=revision(conn, first), action='specify', **args,
+        ))
+    with caller(root, 'gabriel', cron=True):
+        names = {schema['function']['name'] for schema in get_tool_definitions(enabled_toolsets=['kanban'])}
+        assert 'kanban_route_triage' in names and 'kanban_admit_triage' not in names
+        assert dispatch('kanban_route_triage', dict(
+            task_id=first, expected_event_id=grant['event_id'], action='specify',
+        ), cron=True).get('ok')
+    with caller(root, 'generalist'):
+        names = {schema['function']['name'] for schema in get_tool_definitions(enabled_toolsets=['kanban'])}
+        assert 'kanban_admit_triage' in names and 'kanban_route_triage' not in names
+        assert dispatch('kanban_admit_triage', dict(
+            task_id=second, expected_event_id=revision(conn, second), action='specify', **args,
+        )).get('ok')
+
+
+@pytest.mark.parametrize('record_id,extra_dependency_run,allowed', [
+    ('t_8f685beb', False, True),
+    ('t_3f1491a4', True, False),
+])
+def test_named_historical_record_shapes_are_immutable_fixtures(
+        estate, record_id, extra_dependency_run, allowed):
+    """Sanitized lifecycle shapes captured from the named records; no live DB access."""
+    from hermes_cli import kanban_db as kb
+    conn, _ = estate
+    tid = kb.create_task(conn, title=record_id, assignee='cody', triage=True)
+    assert kb.specify_triage_task(conn, tid)
+    if extra_dependency_run:
+        assert kb.claim_task(conn, tid)
+        assert kb.block_task(conn, tid, kind='dependency', reason='Recorded prerequisite')
+        kb.recompute_ready(conn)
+    for index in range(kb.BLOCK_RECURRENCE_LIMIT):
+        claimed = kb.claim_task(conn, tid)
+        assert claimed
+        with kb.write_txn(conn):
+            kb._append_event(
+                conn, tid, 'spawned', {'pid': 1000 + index, 'started_at': f'|fixture-{index}'},
+                run_id=claimed.current_run_id,
+            )
+            kb._append_event(conn, tid, 'heartbeat', None, run_id=claimed.current_run_id)
+        assert kb.block_task(conn, tid, kind='capability', reason='Recorded prerequisite')
+        if index < kb.BLOCK_RECURRENCE_LIMIT - 1:
+            assert kb.unblock_task(conn, tid)
+    kb.add_comment(conn, tid, author='owner', body='Immutable historical fixture marker')
+    with kb.write_txn(conn):
+        kb._append_event(conn, tid, 'attached', {'filename': 'fixture.txt', 'size': 1})
+    before = list(conn.iterdump())
+    result = mint(
+        estate, tid, specification='Exact current scope',
+        owner_disposition_ref=f'estate/{record_id}#owner-disposition',
+        expires_at=int(time.time()) + 60,
+    )
+    assert bool(result.get('ok')) is allowed, result
+    if not allowed:
+        assert list(conn.iterdump()) == before
