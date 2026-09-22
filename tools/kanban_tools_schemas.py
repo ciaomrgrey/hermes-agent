@@ -47,13 +47,24 @@ _TRIAGE_PROPERTIES = {
     "specification": _prop("string", "Exact nonblank requirements to append; specify only."),
     "assignee": _prop("string", "Exact target assignee; required for reassign."),
 }
+_TRIAGE_ADMISSION_PROPERTIES = {
+    **_TRIAGE_PROPERTIES,
+    "owner_disposition_ref": _prop(
+        "string", "Exact durable conductor disposition reference for one ended capability-history card."
+    ),
+    "expires_at": _prop(
+        "integer", "Unix expiry for the historical admission; must be within the next hour."
+    ),
+}
 KANBAN_ADMIT_TRIAGE_SCHEMA = _schema(
     "kanban_admit_triage",
     "Conductor only: admit one exact intake operation at the current revision. "
     "Only use after independently resolving owner restrictions. No task is released. "
-    "Never admit from caller prose alone. Holds/reviews are refused, not adjudicated. "
+    "Never admit from caller prose alone. Active/review/unknown histories are refused. "
+    "An ended capability-loop record additionally requires a durable disposition reference "
+    "and expiry no more than one hour ahead. "
     "Admission is invalidated by intervening changes and consumed once by the bound router.",
-    _TRIAGE_PROPERTIES, ["task_id", "expected_event_id", "action"],
+    _TRIAGE_ADMISSION_PROPERTIES, ["task_id", "expected_event_id", "action"],
 )
 KANBAN_ROUTE_TRIAGE_SCHEMA = _schema(
     "kanban_route_triage",

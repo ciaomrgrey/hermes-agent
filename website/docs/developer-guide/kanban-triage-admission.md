@@ -30,7 +30,10 @@ parameters. Ambient DB overrides and conflicting board pins are rejected.
 2. Conductor calls `kanban_admit_triage` with exact `task_id`, `expected_event_id`,
    `action` (`specify`, `promote`, `reassign`), optional `assignee`, and optional
    nonblank `specification` for `specify` only. `reassign` requires an assignee.
-   The target must be ordinary never-executed triage/todo intake.
+   The default target is ordinary never-executed triage/todo intake. A previously
+   executed record is accepted only when it is an ended, exact capability-loop
+   triage record and the conductor also supplies `owner_disposition_ref` plus an
+   `expires_at` no more than one hour ahead.
 3. Native `triage_admitted` audit storage records version, bound board/profile/job,
    task, exact operation, current task/dependency digest, revision and trusted
    conductor session/execution owner. Minting does not release the task.
@@ -50,11 +53,14 @@ CAS precedence.
 
 ## Fail-closed limits
 
-Absent, unknown, stale, consumed or mismatched admissions deny. Current/prior
-blocks, needs_input/capability restrictions, reviewer-derived histories, runs,
-comments, unknown lifecycle events and workflow-template records deny even with
-conductor access. Reviewed records cannot be assigned back to builders through
-this primitive. Unknown origin denies. Any intervening target event invalidates
+Absent, unknown, stale, expired, consumed or mismatched admissions deny. Active
+runs/claims/PIDs, needs_input blocks, review histories, open parents, unknown
+lifecycle events, ambiguous recurrence state and workflow-template records deny
+even with conductor access. Ended capability-loop runs and comments are accepted
+only by the expiring exact-disposition path; the prior state is retained in audit
+events while stale task claim/hold fields are cleared atomically on consumption.
+Reviewed records cannot be assigned back to builders through this primitive.
+Unknown origin denies. Any intervening target event invalidates
 the grant; full row/dependency hashes also reject changed bodies, owners and
 fields lacking a native event. Target profiles must exist on disk.
 
@@ -63,7 +69,8 @@ unrecognized wording) remain denied without separate trusted exact admission;
 there is deliberately no deny-word dictionary or model-based eligibility grant.
 The conductor is responsible for resolving prose restrictions before admitting an
 ordinary intake record. This does not authorize clearing an active native hold.
-Comments cannot grant admission and currently make the record ineligible.
+Comments never grant admission; they are only retained provenance on the narrowly
+admitted ended-history path.
 
 `specify` requires triage and lands in todo until parents are done, otherwise
 ready. `promote` requires todo and completed parents. `reassign` preserves phase.

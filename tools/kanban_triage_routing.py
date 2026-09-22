@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import time
 
 from tools.registry import no_cache_check_fn
 
@@ -102,7 +103,10 @@ def _handle(args, kw, *, mint):
         _require_orchestrator_tool(name)
         binding = _binding(mint)
         actor = _actor(binding, kw, mint)
-        if set(args) - {'task_id', 'expected_event_id', 'action', 'specification', 'assignee', 'board'}:
+        allowed = {'task_id', 'expected_event_id', 'action', 'specification', 'assignee', 'board'}
+        if mint:
+            allowed |= {'owner_disposition_ref', 'expires_at'}
+        if set(args) - allowed:
             raise ValueError('unsupported triage routing arguments')
         if args.get('board', binding['board']) != binding['board']:
             raise ValueError('triage routing board mismatch')
@@ -114,9 +118,22 @@ def _handle(args, kw, *, mint):
         operation = {k: args.get(k) for k in ('action', 'assignee', 'specification')}
         _validate_operation(operation)
         operation['specification'] = _redact_opt(operation['specification'])
+        disposition = args.get('owner_disposition_ref') if mint else None
+        expires_at = args.get('expires_at') if mint else None
+        historical = disposition is not None or expires_at is not None
+        if mint and historical:
+            _validate_disposition(disposition, expires_at)
         with _board(binding['board']) as (kb, conn):
             with kb.write_txn(conn):
-                task, events = _eligible(kb, conn, tid, revision)
+                if not mint:
+                    current_events = sorted(kb.list_events(conn, tid), key=lambda event: event.id)
+                    grant = current_events[-1].payload if current_events else None
+                    historical = bool(isinstance(grant, dict) and grant.get('historical'))
+                    disposition = grant.get('owner_disposition_ref') if historical else None
+                    expires_at = grant.get('expires_at') if historical else None
+                    if historical:
+                        _validate_disposition(disposition, expires_at)
+                task, events = _eligible(kb, conn, tid, revision, historical=historical)
                 owner = operation['assignee'] or task.assignee
                 if not owner or owner not in kb.list_profiles_on_disk():
                     raise ValueError('routing requires an existing exact assignee')
@@ -130,6 +147,9 @@ def _handle(args, kw, *, mint):
                 snapshot = _snapshot(conn, tid)
                 payload = dict(version=1, task_id=tid, binding=binding, operation=operation,
                                snapshot=snapshot, actor=actor, expected_event_id=revision)
+                if historical:
+                    payload.update(version=2, historical=True,
+                                   owner_disposition_ref=disposition, expires_at=expires_at)
                 if mint:
                     kb._append_event(conn, tid, 'triage_admitted', payload)
                 else:
@@ -144,8 +164,17 @@ def _handle(args, kw, *, mint):
                     body = task.body
                     if operation['specification'] is not None:
                         body = ((body + '\n\n') if body else '') + operation['specification']
-                    conn.execute('UPDATE tasks SET status=?, assignee=?, body=? WHERE id=?',
-                                 (status, owner, body, tid))
+                    if historical:
+                        conn.execute(
+                            'UPDATE tasks SET status=?,assignee=?,body=?,started_at=NULL,'
+                            'block_kind=NULL,block_recurrences=0,consecutive_failures=0,'
+                            'last_failure_error=NULL,claim_lock=NULL,claim_expires=NULL,worker_pid=NULL,'
+                            'worker_started_at=NULL,current_run_id=NULL WHERE id=?',
+                            (status, owner, body, tid),
+                        )
+                    else:
+                        conn.execute('UPDATE tasks SET status=?, assignee=?, body=? WHERE id=?',
+                                     (status, owner, body, tid))
                     payload.update(admission_event_id=admission.id,
                                    prior=dict(status=task.status, assignee=task.assignee),
                                    result=dict(status=status, assignee=owner))
@@ -170,22 +199,64 @@ def _validate_operation(operation):
         raise ValueError('reassign requires assignee')
 
 
+def _validate_disposition(reference, expires_at):
+    if (not isinstance(reference, str) or not reference.strip()
+            or reference != reference.strip() or len(reference) > 500):
+        raise ValueError('exact durable owner disposition reference required')
+    now = int(time.time())
+    if type(expires_at) is not int or expires_at <= now or expires_at > now + 3600:
+        raise ValueError('owner disposition expiry must be within the next hour')
+
+
 _ALLOWED_EVENTS = {'created', 'linked', 'dependency_wait', 'triage_admitted', 'triage_routed'}
+_HISTORICAL_EVENTS = _ALLOWED_EVENTS | {
+    'commented', 'specified', 'promoted', 'claimed', 'spawned', 'heartbeat', 'attached',
+    'blocked', 'unblocked', 'block_loop_detected', 'unlinked',
+}
 
 
-def _eligible(kb, conn, tid, revision):
+def _eligible(kb, conn, tid, revision, *, historical=False):
     task = kb.get_task(conn, tid)
     events = sorted(kb.list_events(conn, tid), key=lambda event: event.id)
     if not task or not events or events[-1].id != revision:
         raise ValueError('unknown task or stale expected_event_id')
-    if task.status not in {'triage', 'todo'}:
+    if task.status not in ({'triage'} if historical else {'triage', 'todo'}):
         raise ValueError('only ordinary triage/todo intake can be routed')
-    if (task.block_kind or task.block_recurrences or task.current_run_id or task.started_at
-            or task.completed_at or task.result or task.consecutive_failures or task.last_failure_error
-            or task.claim_lock or task.worker_pid or task.workflow_template_id or task.current_step_key):
+    if (task.current_run_id or task.completed_at or task.result or task.consecutive_failures or task.last_failure_error
+            or task.claim_lock or task.claim_expires or task.worker_pid
+            or task.workflow_template_id or task.current_step_key):
         raise ValueError('held, previously executed or ambiguous task')
-    if (events[0].kind != 'created' or any(e.kind not in _ALLOWED_EVENTS for e in events)
-            or kb.list_runs(conn, tid) or kb.list_comments(conn, tid)):
+    runs = kb.list_runs(conn, tid)
+    if historical:
+        from hermes_cli.kanban_db import BLOCK_RECURRENCE_LIMIT
+        blocked_kinds = {
+            e.payload.get('kind') for e in events
+            if e.kind in {'blocked', 'block_loop_detected'} and isinstance(e.payload, dict)
+        }
+        loops = [e for e in events if e.kind == 'block_loop_detected']
+        canonical_loop = (
+            len(loops) == 1 and isinstance(loops[0].payload, dict)
+            and loops[0].payload.get('kind') == 'capability'
+            and loops[0].payload.get('recurrences') == BLOCK_RECURRENCE_LIMIT
+            and loops[0].payload.get('limit') == BLOCK_RECURRENCE_LIMIT
+        )
+        canonical_runs = (
+            len(runs) == BLOCK_RECURRENCE_LIMIT
+            and all(run.ended_at is not None and run.status == 'blocked'
+                    and run.outcome == 'blocked' for run in runs)
+            and sum(e.kind == 'claimed' for e in events) == len(runs)
+            and sum(e.kind in {'blocked', 'block_loop_detected'} for e in events) == len(runs)
+            and sum(e.kind == 'unblocked' for e in events) == len(runs) - 1
+        )
+        if (task.block_kind != 'capability' or task.block_recurrences != BLOCK_RECURRENCE_LIMIT
+                or not task.started_at or any(e.kind not in _HISTORICAL_EVENTS for e in events)
+                or blocked_kinds != {'capability'} or not canonical_loop or not canonical_runs
+                or not kb._parents_satisfied(conn, tid)):
+            raise ValueError('historical owner disposition does not match a safely ended capability record')
+    elif (task.block_kind or task.block_recurrences or task.started_at
+            or any(e.kind not in _ALLOWED_EVENTS for e in events) or runs or kb.list_comments(conn, tid)):
+        raise ValueError('historical hold/review or ambiguous provenance')
+    if events[0].kind != 'created':
         raise ValueError('historical hold/review or ambiguous provenance')
     created = events[0].payload
     if not isinstance(created, dict) or created.get('status') not in {'triage', 'todo'}:
