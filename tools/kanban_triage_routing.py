@@ -133,10 +133,7 @@ def _handle(args, kw, *, mint):
                     expires_at = grant.get('expires_at') if historical else None
                     if historical:
                         _validate_disposition(disposition, expires_at)
-                task, events = _eligible(
-                    kb, conn, tid, revision, historical=historical, binding=binding)
-                if mint and historical and events[-1].kind == 'triage_admitted':
-                    raise ValueError('historical owner admission replacement is unsupported')
+                task, events = _eligible(kb, conn, tid, revision, historical=historical)
                 owner = operation['assignee'] or task.assignee
                 if not owner or owner not in kb.list_profiles_on_disk():
                     raise ValueError('routing requires an existing exact assignee')
@@ -220,7 +217,7 @@ _HISTORICAL_EVENTS = _ALLOWED_EVENTS | {
 }
 
 
-def _canonical_capability_history(events, runs, limit, expected_profile, expected_task_id, binding):
+def _canonical_capability_history(events, runs, limit):
     """Validate the one native capability-loop shape this admission supports."""
     passive = {'commented', 'attached', 'linked', 'unlinked'}
     preparation = {'specified', 'promoted', 'dependency_wait'}
@@ -248,55 +245,17 @@ def _canonical_capability_history(events, runs, limit, expected_profile, expecte
                 and isinstance(payload.get('parent'), str)
                 and bool(re.fullmatch(r't_[0-9a-f]{8}', payload['parent'])))
 
-    def valid_admission(payload, previous_event_id):
-        keys = {
-            'version', 'task_id', 'binding', 'operation', 'snapshot', 'actor',
-            'expected_event_id', 'historical', 'owner_disposition_ref', 'expires_at',
-        }
-        actor = payload.get('actor') if isinstance(payload, dict) else None
-        operation = payload.get('operation') if isinstance(payload, dict) else None
-        if (not isinstance(payload, dict) or set(payload) != keys
-                or type(payload.get('version')) is not int or payload.get('version') != 2
-                or payload.get('task_id') != expected_task_id
-                or payload.get('binding') != binding
-                or not isinstance(operation, dict)
-                or set(operation) != {'action', 'assignee', 'specification'}
-                or not isinstance(payload.get('snapshot'), str)
-                or not re.fullmatch(r'[0-9a-f]{64}', payload['snapshot'])
-                or not isinstance(actor, dict)
-                or set(actor) != {'profile', 'session_id', 'execution_owner'}
-                or actor.get('profile') != binding['conductor_profile']
-                or not all(isinstance(actor.get(key), str) and actor[key]
-                           for key in ('session_id', 'execution_owner'))
-                or type(payload.get('expected_event_id')) is not int
-                or payload.get('expected_event_id') != previous_event_id
-                or payload.get('historical') is not True
-                or not isinstance(payload.get('owner_disposition_ref'), str)
-                or not payload['owner_disposition_ref'].strip()
-                or payload['owner_disposition_ref'] != payload['owner_disposition_ref'].strip()
-                or len(payload['owner_disposition_ref']) > 500
-                or type(payload.get('expires_at')) is not int or payload['expires_at'] < 1):
-            return False
-        try:
-            _validate_operation(operation)
-        except ValueError:
-            return False
-        return True
-
     ordered_runs = sorted(runs, key=lambda run: run.id)
     if len(ordered_runs) != limit:
         return False
-    if any(type(run.started_at) is not int or type(run.ended_at) is not int
-           or run.ended_at < run.started_at or run.profile != expected_profile
-           or run.status != 'blocked' or run.outcome != 'blocked'
+    if any(run.ended_at is None or run.status != 'blocked' or run.outcome != 'blocked'
            for run in ordered_runs):
         return False
     run_index = 0
     phase = 'waiting'
     active_run = None
-    prepared = False
     admitted = False
-    for event_index, event in enumerate(events[1:], start=1):
+    for event in events[1:]:
         kind, payload = event.kind, event.payload
         if kind in passive:
             if event.run_id is not None or not valid_passive(kind, payload):
@@ -306,12 +265,9 @@ def _canonical_capability_history(events, runs, limit, expected_profile, expecte
             if (phase != 'waiting' or event.run_id is not None
                     or not valid_preparation(kind, payload)):
                 return False
-            if kind == 'specified':
-                prepared = True
             continue
         if kind == 'claimed':
-            if (phase != 'waiting' or run_index >= limit or not isinstance(payload, dict)
-                    or (run_index == 0 and not prepared)):
+            if phase != 'waiting' or run_index >= limit or not isinstance(payload, dict):
                 return False
             run = ordered_runs[run_index]
             if (type(payload.get('run_id')) is not int or payload.get('run_id') != run.id
@@ -343,12 +299,10 @@ def _canonical_capability_history(events, runs, limit, expected_profile, expecte
             if (phase != 'running' or kind != expected_kind or event.run_id != active_run
                     or not isinstance(payload, dict)
                     or payload.get('kind') != 'capability'
-                    or type(payload.get('recurrences')) is not int
                     or payload.get('recurrences') != run_index + 1
                     or payload.get('source_status') != 'ready'
                     or not isinstance(payload.get('reason'), str) or not payload.get('reason').strip()
-                    or (kind == 'block_loop_detected' and (
-                        type(payload.get('limit')) is not int or payload.get('limit') != limit))
+                    or (kind == 'block_loop_detected' and payload.get('limit') != limit)
                     or (kind == 'blocked' and 'limit' in payload)):
                 return False
             phase = 'terminal' if kind == 'block_loop_detected' else 'blocked'
@@ -367,8 +321,8 @@ def _canonical_capability_history(events, runs, limit, expected_profile, expecte
             continue
         if kind == 'triage_admitted':
             if (phase != 'terminal' or admitted or event is not events[-1]
-                    or event.run_id is not None
-                    or not valid_admission(payload, events[event_index - 1].id)):
+                    or event.run_id is not None or not isinstance(payload, dict)
+                    or payload.get('historical') is not True):
                 return False
             admitted = True
             continue
@@ -376,7 +330,7 @@ def _canonical_capability_history(events, runs, limit, expected_profile, expecte
     return phase == 'terminal' and run_index == limit - 1
 
 
-def _eligible(kb, conn, tid, revision, *, historical=False, binding=None):
+def _eligible(kb, conn, tid, revision, *, historical=False):
     task = kb.get_task(conn, tid)
     events = sorted(kb.list_events(conn, tid), key=lambda event: event.id)
     if not task or not events or events[-1].id != revision:
@@ -392,8 +346,7 @@ def _eligible(kb, conn, tid, revision, *, historical=False, binding=None):
         from hermes_cli.kanban_db import BLOCK_RECURRENCE_LIMIT
         if (task.block_kind != 'capability' or task.block_recurrences != BLOCK_RECURRENCE_LIMIT
                 or not task.started_at or any(e.kind not in _HISTORICAL_EVENTS for e in events)
-                or not _canonical_capability_history(
-                    events, runs, BLOCK_RECURRENCE_LIMIT, task.assignee, tid, binding)
+                or not _canonical_capability_history(events, runs, BLOCK_RECURRENCE_LIMIT)
                 or not kb._parents_satisfied(conn, tid)):
             raise ValueError('historical owner disposition does not match a safely ended capability record')
     elif (task.block_kind or task.block_recurrences or task.started_at

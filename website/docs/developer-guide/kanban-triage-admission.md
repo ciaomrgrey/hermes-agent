@@ -35,9 +35,7 @@ parameters. Ambient DB overrides and conflicting board pins are rejected.
    triage record and the conductor also supplies `owner_disposition_ref` plus an
    `expires_at` no more than one hour ahead. Historical `reassign` is unsupported
    and rejected before an admission is written; only an exact `specify` can release
-   this triage shape without erasing the hold discriminator. Historical admissions
-   cannot be replaced or renewed, even after expiry; a fresh disposition requires
-   owner reconciliation outside this primitive.
+   this triage shape without erasing the hold discriminator.
 3. Native `triage_admitted` audit storage records version, bound board/profile/job,
    task, exact operation, current task/dependency digest, revision and trusted
    conductor session/execution owner. Minting does not release the task.
@@ -45,8 +43,7 @@ parameters. Ambient DB overrides and conflicting board pins are rejected.
    admission event ID. All eligibility checks, latest-event CAS, digest comparison,
    task mutation and `triage_routed` audit append occur in one SQLite write
    transaction. The new event consumes the admission: replay or concurrent reuse
-   fails. For ordinary never-executed intake, a new conductor admission also
-   supersedes the prior one; historical admissions cannot be replaced.
+   fails. A new conductor admission also supersedes the prior one. Read the task
    back natively; a successful transition is not a worker claim or execution.
 
 Specification is appended, never a replacement that erases original restrictions.
