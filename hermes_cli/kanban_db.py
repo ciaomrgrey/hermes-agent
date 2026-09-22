@@ -2200,9 +2200,7 @@ def _claim_and_open_run(
     if max_attempts is not None:
         profile = trow["assignee"]
         attempts = int(conn.execute(
-            "SELECT COUNT(*) FROM task_runs "
-            "WHERE task_id = ? AND profile IS ? "
-            "AND (outcome IS NULL OR outcome != 'spawn_failed')",
+            "SELECT COUNT(*) FROM task_runs WHERE task_id = ? AND profile IS ?",
             (task_id, profile),
         ).fetchone()[0])
         if attempts >= max_attempts:
