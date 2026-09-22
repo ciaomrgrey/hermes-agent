@@ -294,6 +294,9 @@ def _canonical_capability_history(events, runs, limit, expected_profile, expecte
     run_index = 0
     phase = 'waiting'
     active_run = None
+    origin = events[0].payload if events and isinstance(events[0].payload, dict) else {}
+    specified = False
+    promoted = False
     prepared = False
     admitted = False
     for event_index, event in enumerate(events[1:], start=1):
@@ -307,6 +310,13 @@ def _canonical_capability_history(events, runs, limit, expected_profile, expecte
                     or not valid_preparation(kind, payload)):
                 return False
             if kind == 'specified':
+                if origin.get('status') != 'triage' or specified or promoted:
+                    return False
+                specified = True
+            elif kind == 'promoted':
+                if promoted or (origin.get('status') == 'triage' and not specified):
+                    return False
+                promoted = True
                 prepared = True
             continue
         if kind == 'claimed':

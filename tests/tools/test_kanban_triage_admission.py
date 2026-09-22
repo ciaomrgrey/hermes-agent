@@ -402,10 +402,13 @@ def test_admission_revision_is_monotonic_not_wall_clock(estate, monkeypatch):
     assert result.get('ok'), result
 
 
-def _historical_triage(conn, *, block_kind='capability'):
+def _historical_triage(conn, *, block_kind='capability', extra_preparation=None):
     from hermes_cli import kanban_db as kb
     tid = kb.create_task(conn, title='Historical repair', assignee='cody', triage=True)
     assert kb.specify_triage_task(conn, tid)
+    if extra_preparation:
+        with kb.write_txn(conn):
+            kb._append_event(conn, tid, extra_preparation)
     for index in range(kb.BLOCK_RECURRENCE_LIMIT):
         assert kb.claim_task(conn, tid)
         assert kb.block_task(conn, tid, kind=block_kind, reason='Recorded prerequisite')
@@ -413,6 +416,166 @@ def _historical_triage(conn, *, block_kind='capability'):
             assert kb.unblock_task(conn, tid)
     assert kb.get_task(conn, tid).status == 'triage'
     return tid
+
+
+def test_triage_origin_rejects_additional_todo_promotion(estate):
+    conn, _ = estate
+    tid = _historical_triage(conn, extra_preparation='promoted')
+    before = list(conn.iterdump())
+    result = mint(
+        estate, tid, owner_disposition_ref='estate/t_owner#event-1',
+        expires_at=int(time.time()) + 60,
+    )
+    assert 'error' in result, result
+    assert list(conn.iterdump()) == before
+
+
+def _exact_t8_history(conn):
+    """Sanitized event/run shape read from t_8f685beb through event 16690."""
+    from hermes_cli import kanban_db as kb
+
+    parent = kb.create_task(conn, title='Initial review', assignee='gurney', triage=True)
+    tid = kb.create_task(
+        conn, title='t_8f685beb', assignee='cody', triage=False, parents=[parent],
+    )
+    kb.add_comment(conn, tid, author='generalist', body='Lifecycle correction')
+    kb.add_comment(conn, tid, author='gurney', body='Qualified build')
+    with kb.write_txn(conn):
+        conn.execute("UPDATE tasks SET status='done',completed_at=1 WHERE id=?", (parent,))
+    assert kb.recompute_ready(conn)
+
+    for index in range(kb.BLOCK_RECURRENCE_LIMIT):
+        claimed = kb.claim_task(conn, tid)
+        assert claimed
+        with kb.write_txn(conn):
+            kb._append_event(
+                conn, tid, 'spawned',
+                {'pid': 67000 + index, 'started_at': f'|fixture-{index}'},
+                run_id=claimed.current_run_id,
+            )
+            kb._append_event(conn, tid, 'heartbeat', None, run_id=claimed.current_run_id)
+        if index == 0:
+            with kb.write_txn(conn):
+                kb._append_event(
+                    conn, tid, 'attached',
+                    {'filename': 'SEAM-BLOCKER.txt', 'size': 4719, 'by': 'agent'},
+                )
+            kb.add_comment(conn, tid, author='cody', body='Exact blocker evidence')
+        assert kb.block_task(conn, tid, kind='capability', reason='Recorded prerequisite')
+        if index < kb.BLOCK_RECURRENCE_LIMIT - 1:
+            linked = kb.create_task(conn, title='Requalification', assignee='gurney', triage=True)
+            with kb.write_txn(conn):
+                conn.execute("UPDATE tasks SET status='done',completed_at=1 WHERE id=?", (linked,))
+            kb.link_tasks(conn, parent_id=linked, child_id=tid)
+            kb.add_comment(conn, tid, author='worker', body='Owner amendment')
+            assert kb.unblock_task(conn, tid)
+            kb.add_comment(conn, tid, author='gurney', body='Requalified')
+            kb.recompute_ready(conn)
+
+    kb.add_comment(conn, tid, author='chas', body='Superseding live scope')
+    kb.add_comment(conn, tid, author='worker', body='Scheduled disposition')
+    post_loop = kb.create_task(conn, title='Admission prerequisite', assignee='gurney', triage=True)
+    with kb.write_txn(conn):
+        conn.execute("UPDATE tasks SET status='done',completed_at=1 WHERE id=?", (post_loop,))
+    kb.link_tasks(conn, parent_id=post_loop, child_id=tid)
+    return tid
+
+
+def test_exact_t8_event_and_run_shape_mints_and_consumes_once(estate):
+    from hermes_cli import kanban_db as kb
+
+    conn, _ = estate
+    tid = _exact_t8_history(conn)
+    admitted = mint(
+        estate, tid, specification='Current exact live-classifier scope', assignee='cody',
+        owner_disposition_ref='estate/t_a4fca41e#comments-2020-2023',
+        expires_at=int(time.time()) + 60,
+    )
+    assert admitted.get('ok'), admitted
+    result = route(
+        estate, tid, admitted['event_id'], specification='Current exact live-classifier scope',
+        assignee='cody',
+    )
+    assert result.get('ok'), result
+    task = kb.get_task(conn, tid)
+    assert task is not None and task.status == 'ready'
+
+
+@pytest.mark.parametrize('variant', [
+    'orphan_successor', 'foreign_profile', 'missing_predecessor', 'open_parent',
+    'active_run', 'reversed_time', 'altered_loop_count', 'post_loop_mutation',
+    'wrong_origin_transition',
+])
+def test_exact_t8_shape_denies_noncanonical_mutations(estate, variant):
+    from hermes_cli import kanban_db as kb
+
+    conn, _ = estate
+    tid = _exact_t8_history(conn)
+    with kb.write_txn(conn):
+        runs = kb.list_runs(conn, tid)
+        events = kb.list_events(conn, tid)
+        if variant == 'orphan_successor':
+            second = [event for event in events if event.kind == 'claimed'][1]
+            assert isinstance(second.payload, dict)
+            payload = dict(second.payload, run_id=999999)
+            conn.execute(
+                'UPDATE task_events SET payload=?,run_id=? WHERE id=?',
+                (json.dumps(payload), 999999, second.id),
+            )
+        elif variant == 'foreign_profile':
+            conn.execute("UPDATE task_runs SET profile='gurney' WHERE id=?", (runs[-1].id,))
+        elif variant == 'missing_predecessor':
+            first = next(event for event in events if event.kind == 'blocked')
+            conn.execute('DELETE FROM task_events WHERE id=?', (first.id,))
+        elif variant == 'open_parent':
+            parent = kb.create_task(conn, title='Open parent', assignee='gurney', triage=True)
+            conn.execute(
+                'INSERT INTO task_links(parent_id,child_id) VALUES(?,?)',
+                (parent, tid),
+            )
+        elif variant == 'active_run':
+            conn.execute(
+                "UPDATE task_runs SET status='running',outcome=NULL,ended_at=NULL WHERE id=?",
+                (runs[-1].id,),
+            )
+        elif variant == 'reversed_time':
+            conn.execute('UPDATE task_runs SET ended_at=started_at-1 WHERE id=?', (runs[-1].id,))
+        elif variant == 'altered_loop_count':
+            conn.execute('UPDATE tasks SET block_recurrences=3 WHERE id=?', (tid,))
+        elif variant == 'post_loop_mutation':
+            kb._append_event(conn, tid, 'future_unknown_transition')
+        else:
+            promoted = next(event for event in events if event.kind == 'promoted')
+            conn.execute("UPDATE task_events SET kind='specified' WHERE id=?", (promoted.id,))
+    before = list(conn.iterdump())
+    result = mint(
+        estate, tid, specification='Current exact live-classifier scope', assignee='cody',
+        owner_disposition_ref='estate/t_a4fca41e#comments-2020-2023',
+        expires_at=int(time.time()) + 60,
+    )
+    assert 'error' in result, (variant, result)
+    assert list(conn.iterdump()) == before
+
+
+def test_exact_t8_shape_rejects_duplicate_replacement_but_consumes_original(estate):
+    conn, _ = estate
+    tid = _exact_t8_history(conn)
+    original = mint(
+        estate, tid, specification='Current exact live-classifier scope',
+        owner_disposition_ref='estate/t_a4fca41e#comments-2020-2023',
+        expires_at=int(time.time()) + 60,
+    )
+    before = list(conn.iterdump())
+    replacement = mint(
+        estate, tid, specification='Unsupported replacement scope',
+        owner_disposition_ref='estate/t_a4fca41e#comments-2020-2023-replacement',
+        expires_at=int(time.time()) + 120,
+    )
+    assert original.get('ok') and 'error' in replacement, (original, replacement)
+    assert list(conn.iterdump()) == before
+    assert route(
+        estate, tid, original['event_id'], specification='Current exact live-classifier scope',
+    ).get('ok')
 
 
 def test_exact_owner_disposition_releases_ended_capability_history_once(estate):

@@ -62,7 +62,9 @@ Absent, unknown, stale, expired, consumed or mismatched admissions deny. Active
 runs/claims/PIDs, needs_input blocks, review histories, open parents, unknown
 lifecycle events, ambiguous recurrence state and workflow-template records deny
 even with conductor access. Ended capability-loop runs and comments are accepted
-only by the expiring exact-disposition path. Every claim, spawn/heartbeat, block,
+only by the expiring exact-disposition path. A native todo origin may establish
+readiness through its typed `promoted` event; a triage origin still requires the
+native `specified` transition. Every claim, spawn/heartbeat, block,
 unblock and terminal-loop event must have its native typed payload, recurrence,
 order and matching run identity; aggregate event counts are not sufficient. The
 prior state is retained in audit events while stale task claim/hold fields are
