@@ -33,9 +33,7 @@ parameters. Ambient DB overrides and conflicting board pins are rejected.
    The default target is ordinary never-executed triage/todo intake. A previously
    executed record is accepted only when it is an ended, exact capability-loop
    triage record and the conductor also supplies `owner_disposition_ref` plus an
-   `expires_at` no more than one hour ahead. Historical `reassign` is unsupported
-   and rejected before an admission is written; only an exact `specify` can release
-   this triage shape without erasing the hold discriminator.
+   `expires_at` no more than one hour ahead.
 3. Native `triage_admitted` audit storage records version, bound board/profile/job,
    task, exact operation, current task/dependency digest, revision and trusted
    conductor session/execution owner. Minting does not release the task.
@@ -59,11 +57,8 @@ Absent, unknown, stale, expired, consumed or mismatched admissions deny. Active
 runs/claims/PIDs, needs_input blocks, review histories, open parents, unknown
 lifecycle events, ambiguous recurrence state and workflow-template records deny
 even with conductor access. Ended capability-loop runs and comments are accepted
-only by the expiring exact-disposition path. Every claim, spawn/heartbeat, block,
-unblock and terminal-loop event must have its native typed payload, recurrence,
-order and matching run identity; aggregate event counts are not sufficient. The
-prior state is retained in audit events while stale task claim/hold fields are
-cleared atomically on consumption.
+only by the expiring exact-disposition path; the prior state is retained in audit
+events while stale task claim/hold fields are cleared atomically on consumption.
 Reviewed records cannot be assigned back to builders through this primitive.
 Unknown origin denies. Any intervening target event invalidates
 the grant; full row/dependency hashes also reject changed bodies, owners and

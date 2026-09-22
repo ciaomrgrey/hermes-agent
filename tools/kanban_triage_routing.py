@@ -138,8 +138,6 @@ def _handle(args, kw, *, mint):
                 if not owner or owner not in kb.list_profiles_on_disk():
                     raise ValueError('routing requires an existing exact assignee')
                 action = operation['action']
-                if historical and action == 'reassign':
-                    raise ValueError('historical owner admission does not support reassign')
                 required = {'specify': 'triage', 'promote': 'todo'}
                 if action in required and task.status != required[action]:
                     raise ValueError('action is invalid in current phase')
@@ -217,119 +215,6 @@ _HISTORICAL_EVENTS = _ALLOWED_EVENTS | {
 }
 
 
-def _canonical_capability_history(events, runs, limit):
-    """Validate the one native capability-loop shape this admission supports."""
-    passive = {'commented', 'attached', 'linked', 'unlinked'}
-    preparation = {'specified', 'promoted', 'dependency_wait'}
-
-    def valid_passive(kind, payload):
-        if not isinstance(payload, dict):
-            return False
-        if kind == 'commented':
-            return (isinstance(payload.get('author'), str) and bool(payload['author'].strip())
-                    and type(payload.get('len')) is int and payload['len'] >= 0)
-        if kind == 'attached':
-            by = payload.get('by')
-            return (isinstance(payload.get('filename'), str) and bool(payload['filename'].strip())
-                    and type(payload.get('size')) is int and payload['size'] >= 0
-                    and (by is None or isinstance(by, str)))
-        return all(isinstance(payload.get(key), str)
-                   and re.fullmatch(r't_[0-9a-f]{8}', payload[key])
-                   for key in ('parent', 'child'))
-
-    def valid_preparation(kind, payload):
-        if kind in {'specified', 'promoted'}:
-            return payload is None
-        return (isinstance(payload, dict)
-                and isinstance(payload.get('reason'), str) and bool(payload['reason'].strip())
-                and isinstance(payload.get('parent'), str)
-                and bool(re.fullmatch(r't_[0-9a-f]{8}', payload['parent'])))
-
-    ordered_runs = sorted(runs, key=lambda run: run.id)
-    if len(ordered_runs) != limit:
-        return False
-    if any(run.ended_at is None or run.status != 'blocked' or run.outcome != 'blocked'
-           for run in ordered_runs):
-        return False
-    run_index = 0
-    phase = 'waiting'
-    active_run = None
-    admitted = False
-    for event in events[1:]:
-        kind, payload = event.kind, event.payload
-        if kind in passive:
-            if event.run_id is not None or not valid_passive(kind, payload):
-                return False
-            continue
-        if kind in preparation:
-            if (phase != 'waiting' or event.run_id is not None
-                    or not valid_preparation(kind, payload)):
-                return False
-            continue
-        if kind == 'claimed':
-            if phase != 'waiting' or run_index >= limit or not isinstance(payload, dict):
-                return False
-            run = ordered_runs[run_index]
-            if (type(payload.get('run_id')) is not int or payload.get('run_id') != run.id
-                    or event.run_id != run.id
-                    or not isinstance(payload.get('lock'), str) or not payload.get('lock')
-                    or type(payload.get('expires')) is not int
-                    or payload.get('source_status') not in (None, 'ready')):
-                return False
-            active_run = run.id
-            phase = 'running'
-            continue
-        if kind == 'spawned':
-            if (phase != 'running' or event.run_id != active_run
-                    or not isinstance(payload, dict) or type(payload.get('pid')) is not int
-                    or payload.get('pid') < 1 or not isinstance(payload.get('started_at'), str)
-                    or not payload.get('started_at')):
-                return False
-            continue
-        if kind == 'heartbeat':
-            if (phase != 'running' or event.run_id != active_run
-                    or (payload is not None and (
-                        not isinstance(payload, dict) or set(payload) != {'note'}
-                        or not isinstance(payload.get('note'), str) or not payload['note'].strip()
-                    ))):
-                return False
-            continue
-        if kind in {'blocked', 'block_loop_detected'}:
-            expected_kind = 'block_loop_detected' if run_index == limit - 1 else 'blocked'
-            if (phase != 'running' or kind != expected_kind or event.run_id != active_run
-                    or not isinstance(payload, dict)
-                    or payload.get('kind') != 'capability'
-                    or payload.get('recurrences') != run_index + 1
-                    or payload.get('source_status') != 'ready'
-                    or not isinstance(payload.get('reason'), str) or not payload.get('reason').strip()
-                    or (kind == 'block_loop_detected' and payload.get('limit') != limit)
-                    or (kind == 'blocked' and 'limit' in payload)):
-                return False
-            phase = 'terminal' if kind == 'block_loop_detected' else 'blocked'
-            active_run = None
-            continue
-        if kind == 'unblocked':
-            if phase != 'blocked' or event.run_id is not None:
-                return False
-            if payload is not None and (
-                    not isinstance(payload, dict)
-                    or payload.get('status') not in {'ready', 'todo'}
-                    or payload.get('resume_status') != 'ready'):
-                return False
-            run_index += 1
-            phase = 'waiting'
-            continue
-        if kind == 'triage_admitted':
-            if (phase != 'terminal' or admitted or event is not events[-1]
-                    or event.run_id is not None or not isinstance(payload, dict)
-                    or payload.get('historical') is not True):
-                return False
-            admitted = True
-            continue
-        return False
-    return phase == 'terminal' and run_index == limit - 1
-
-
 def _eligible(kb, conn, tid, revision, *, historical=False):
     task = kb.get_task(conn, tid)
     events = sorted(kb.list_events(conn, tid), key=lambda event: event.id)
@@ -344,9 +229,28 @@ def _eligible(kb, conn, tid, revision, *, historical=False):
     runs = kb.list_runs(conn, tid)
     if historical:
         from hermes_cli.kanban_db import BLOCK_RECURRENCE_LIMIT
+        blocked_kinds = {
+            e.payload.get('kind') for e in events
+            if e.kind in {'blocked', 'block_loop_detected'} and isinstance(e.payload, dict)
+        }
+        loops = [e for e in events if e.kind == 'block_loop_detected']
+        canonical_loop = (
+            len(loops) == 1 and isinstance(loops[0].payload, dict)
+            and loops[0].payload.get('kind') == 'capability'
+            and loops[0].payload.get('recurrences') == BLOCK_RECURRENCE_LIMIT
+            and loops[0].payload.get('limit') == BLOCK_RECURRENCE_LIMIT
+        )
+        canonical_runs = (
+            len(runs) == BLOCK_RECURRENCE_LIMIT
+            and all(run.ended_at is not None and run.status == 'blocked'
+                    and run.outcome == 'blocked' for run in runs)
+            and sum(e.kind == 'claimed' for e in events) == len(runs)
+            and sum(e.kind in {'blocked', 'block_loop_detected'} for e in events) == len(runs)
+            and sum(e.kind == 'unblocked' for e in events) == len(runs) - 1
+        )
         if (task.block_kind != 'capability' or task.block_recurrences != BLOCK_RECURRENCE_LIMIT
                 or not task.started_at or any(e.kind not in _HISTORICAL_EVENTS for e in events)
-                or not _canonical_capability_history(events, runs, BLOCK_RECURRENCE_LIMIT)
+                or blocked_kinds != {'capability'} or not canonical_loop or not canonical_runs
                 or not kb._parents_satisfied(conn, tid)):
             raise ValueError('historical owner disposition does not match a safely ended capability record')
     elif (task.block_kind or task.block_recurrences or task.started_at
