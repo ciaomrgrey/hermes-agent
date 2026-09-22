@@ -185,6 +185,8 @@ _SPECS = [
              help="Per-task runtime cap. Accepts seconds (300) or durations (90s, "
                   "30m, 2h, 1d). When exceeded, the dispatcher SIGTERMs (then "
                   "SIGKILLs) the worker and re-queues the task."),
+        _arg("--max-attempts", type=int, metavar="N",
+             help="Hard cap on claimed runs per assignee profile. Omit for unlimited dispatch."),
         _arg("--created-by", default="user", help="Author name recorded on the task (default: user)"),
         _arg("--skill", action="append", default=[], dest="skills",
              help="Skill to force-load into the worker (repeatable). The kanban "
@@ -250,6 +252,10 @@ _SPECS = [
          help="Show a task with comments + events"),
     _cmd("assign", [_TASK_ID, _arg("profile", help="Profile name (or 'none' to unassign)")],
          help="Assign or reassign a task"),
+    _cmd("set-attempts", [
+        _TASK_ID,
+        _arg("count", help="Positive claimed-run cap per profile, or 'none' to clear it"),
+    ], help="Set or clear a task's hard dispatch-attempt cap"),
     _cmd("set-model", [
         _TASK_ID,
         _arg("model", nargs="?", help="Model to pin the worker to (or 'none' to clear the override)"),
