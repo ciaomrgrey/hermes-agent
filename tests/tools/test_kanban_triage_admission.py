@@ -430,6 +430,34 @@ def test_triage_origin_rejects_additional_todo_promotion(estate):
     assert list(conn.iterdump()) == before
 
 
+@pytest.mark.parametrize('unblocked_payload', [None, {'status': 'ready', 'resume_status': 'ready'}])
+def test_direct_ready_unblock_rejects_additional_promotion(estate, unblocked_payload):
+    from hermes_cli import kanban_db as kb
+
+    conn, _ = estate
+    tid = kb.create_task(conn, title='Direct ready repair', assignee='cody', triage=True)
+    assert kb.specify_triage_task(conn, tid)
+    assert kb.claim_task(conn, tid)
+    assert kb.block_task(conn, tid, kind='capability', reason='Recorded prerequisite')
+    assert kb.unblock_task(conn, tid)
+    with kb.write_txn(conn):
+        unblocked = next(event for event in kb.list_events(conn, tid) if event.kind == 'unblocked')
+        conn.execute(
+            'UPDATE task_events SET payload=? WHERE id=?',
+            (json.dumps(unblocked_payload) if unblocked_payload is not None else None, unblocked.id),
+        )
+        kb._append_event(conn, tid, 'promoted')
+    assert kb.claim_task(conn, tid)
+    assert kb.block_task(conn, tid, kind='capability', reason='Recorded prerequisite')
+    before = list(conn.iterdump())
+    result = mint(
+        estate, tid, owner_disposition_ref='estate/t_owner#event-1',
+        expires_at=int(time.time()) + 60,
+    )
+    assert 'error' in result, result
+    assert list(conn.iterdump()) == before
+
+
 def _exact_t8_history(conn):
     """Sanitized event/run shape read from t_8f685beb through event 16690."""
     from hermes_cli import kanban_db as kb
@@ -464,13 +492,15 @@ def _exact_t8_history(conn):
         assert kb.block_task(conn, tid, kind='capability', reason='Recorded prerequisite')
         if index < kb.BLOCK_RECURRENCE_LIMIT - 1:
             linked = kb.create_task(conn, title='Requalification', assignee='gurney', triage=True)
-            with kb.write_txn(conn):
-                conn.execute("UPDATE tasks SET status='done',completed_at=1 WHERE id=?", (linked,))
             kb.link_tasks(conn, parent_id=linked, child_id=tid)
             kb.add_comment(conn, tid, author='worker', body='Owner amendment')
             assert kb.unblock_task(conn, tid)
+            waiting = kb.get_task(conn, tid)
+            assert waiting is not None and waiting.status == 'todo'
+            with kb.write_txn(conn):
+                conn.execute("UPDATE tasks SET status='done',completed_at=1 WHERE id=?", (linked,))
             kb.add_comment(conn, tid, author='gurney', body='Requalified')
-            kb.recompute_ready(conn)
+            assert kb.recompute_ready(conn)
 
     kb.add_comment(conn, tid, author='chas', body='Superseding live scope')
     kb.add_comment(conn, tid, author='worker', body='Scheduled disposition')
@@ -486,6 +516,20 @@ def test_exact_t8_event_and_run_shape_mints_and_consumes_once(estate):
 
     conn, _ = estate
     tid = _exact_t8_history(conn)
+    lifecycle = [
+        (event.kind, event.payload)
+        for event in kb.list_events(conn, tid)
+        if event.kind in {'promoted', 'blocked', 'linked', 'unblocked', 'block_loop_detected'}
+    ]
+    assert [kind for kind, _ in lifecycle].count('promoted') == 2
+    assert ('unblocked', {'status': 'todo', 'resume_status': 'ready'}) in lifecycle
+    first_promotion = next(index for index, item in enumerate(lifecycle) if item[0] == 'promoted')
+    unblock = next(index for index, item in enumerate(lifecycle) if item[0] == 'unblocked')
+    second_promotion = next(
+        index for index, item in enumerate(lifecycle)
+        if item[0] == 'promoted' and index > first_promotion
+    )
+    assert first_promotion < unblock < second_promotion
     admitted = mint(
         estate, tid, specification='Current exact live-classifier scope', assignee='cody',
         owner_disposition_ref='estate/t_a4fca41e#comments-2020-2023',
@@ -499,12 +543,20 @@ def test_exact_t8_event_and_run_shape_mints_and_consumes_once(estate):
     assert result.get('ok'), result
     task = kb.get_task(conn, tid)
     assert task is not None and task.status == 'ready'
+    before_replay = list(conn.iterdump())
+    replay = route(
+        estate, tid, admitted['event_id'], specification='Current exact live-classifier scope',
+        assignee='cody',
+    )
+    assert 'error' in replay, replay
+    assert list(conn.iterdump()) == before_replay
 
 
 @pytest.mark.parametrize('variant', [
     'orphan_successor', 'foreign_profile', 'missing_predecessor', 'open_parent',
     'active_run', 'reversed_time', 'altered_loop_count', 'post_loop_mutation',
-    'wrong_origin_transition',
+    'wrong_origin_transition', 'missing_repromotion', 'duplicate_repromotion',
+    'noncanonical_unblock_payload',
 ])
 def test_exact_t8_shape_denies_noncanonical_mutations(estate, variant):
     from hermes_cli import kanban_db as kb
@@ -544,6 +596,27 @@ def test_exact_t8_shape_denies_noncanonical_mutations(estate, variant):
             conn.execute('UPDATE tasks SET block_recurrences=3 WHERE id=?', (tid,))
         elif variant == 'post_loop_mutation':
             kb._append_event(conn, tid, 'future_unknown_transition')
+        elif variant == 'missing_repromotion':
+            promotions = [event for event in events if event.kind == 'promoted']
+            conn.execute('DELETE FROM task_events WHERE id=?', (promotions[1].id,))
+        elif variant == 'duplicate_repromotion':
+            unblocked = next(event for event in events if event.kind == 'unblocked')
+            second_promotion = [event for event in events if event.kind == 'promoted'][1]
+            between = next(
+                event for event in events
+                if unblocked.id < event.id < second_promotion.id and event.kind == 'commented'
+            )
+            conn.execute(
+                "UPDATE task_events SET kind='promoted',payload=NULL WHERE id=?", (between.id,),
+            )
+        elif variant == 'noncanonical_unblock_payload':
+            unblocked = next(event for event in events if event.kind == 'unblocked')
+            conn.execute(
+                'UPDATE task_events SET payload=? WHERE id=?',
+                (json.dumps({
+                    'status': 'todo', 'resume_status': 'ready', 'unexpected': True,
+                }), unblocked.id),
+            )
         else:
             promoted = next(event for event in events if event.kind == 'promoted')
             conn.execute("UPDATE task_events SET kind='specified' WHERE id=?", (promoted.id,))

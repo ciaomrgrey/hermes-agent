@@ -296,8 +296,9 @@ def _canonical_capability_history(events, runs, limit, expected_profile, expecte
     active_run = None
     origin = events[0].payload if events and isinstance(events[0].payload, dict) else {}
     specified = False
-    promoted = False
-    prepared = False
+    phase_promoted = False
+    phase_prepared = False
+    promotion_allowed = True
     admitted = False
     for event_index, event in enumerate(events[1:], start=1):
         kind, payload = event.kind, event.payload
@@ -310,18 +311,20 @@ def _canonical_capability_history(events, runs, limit, expected_profile, expecte
                     or not valid_preparation(kind, payload)):
                 return False
             if kind == 'specified':
-                if origin.get('status') != 'triage' or specified or promoted:
+                if origin.get('status') != 'triage' or specified or phase_promoted:
                     return False
                 specified = True
             elif kind == 'promoted':
-                if promoted or (origin.get('status') == 'triage' and not specified):
+                if (not promotion_allowed or phase_promoted
+                        or (run_index == 0 and origin.get('status') == 'triage' and not specified)):
                     return False
-                promoted = True
-                prepared = True
+                phase_promoted = True
+                phase_prepared = True
+                promotion_allowed = False
             continue
         if kind == 'claimed':
             if (phase != 'waiting' or run_index >= limit or not isinstance(payload, dict)
-                    or (run_index == 0 and not prepared)):
+                    or not phase_prepared):
                 return False
             run = ordered_runs[run_index]
             if (type(payload.get('run_id')) is not int or payload.get('run_id') != run.id
@@ -369,11 +372,15 @@ def _canonical_capability_history(events, runs, limit, expected_profile, expecte
                 return False
             if payload is not None and (
                     not isinstance(payload, dict)
+                    or set(payload) != {'status', 'resume_status'}
                     or payload.get('status') not in {'ready', 'todo'}
                     or payload.get('resume_status') != 'ready'):
                 return False
             run_index += 1
             phase = 'waiting'
+            phase_promoted = False
+            promotion_allowed = payload == {'status': 'todo', 'resume_status': 'ready'}
+            phase_prepared = not promotion_allowed
             continue
         if kind == 'triage_admitted':
             if (phase != 'terminal' or admitted or event is not events[-1]
