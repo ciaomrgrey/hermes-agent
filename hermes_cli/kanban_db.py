@@ -1592,21 +1592,6 @@ def set_model_override(
     )
 
 
-def set_max_attempts(
-    conn: sqlite3.Connection, task_id: str, max_attempts: Optional[int],
-) -> bool:
-    """Set or clear a task's per-profile claimed-run budget."""
-    if max_attempts is not None:
-        max_attempts = int(max_attempts)
-        if max_attempts < 1:
-            raise ValueError("max_attempts must be >= 1")
-    return _set_task_override(
-        conn, task_id, "UPDATE tasks SET max_attempts = ? WHERE id = ?", (max_attempts,),
-        "attempt_limit_set", {"max_attempts": max_attempts},
-        ("max_attempts",), archived_msg="cannot set attempt limit",
-    )
-
-
 def _set_task_override(
     conn: sqlite3.Connection, task_id: str, sql: str, params: tuple, event_kind: str, payload: dict,
     changed_fields: tuple[str, ...], *, archived_msg: str,

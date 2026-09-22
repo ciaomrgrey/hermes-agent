@@ -7,10 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from hermes_cli import kanban as kc
 from hermes_cli import kanban_db as kb
 from hermes_cli import kanban_db_connect as kbc
-from tools import kanban_tools
 
 
 @pytest.fixture
@@ -139,25 +137,3 @@ def test_concurrent_dispatchers_cannot_exceed_attempt_cap(tmp_path: Path) -> Non
         assert task.current_run_id is not None
     finally:
         verify.close()
-
-
-def test_attempt_cap_can_be_set_and_cleared_through_cli(conn, monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    task_id = kb.create_task(conn, title="bounded later", assignee="builder")
-
-    created = kc.run_slash("create 'bounded from cli' --assignee builder --max-attempts 2 --json")
-    created_id = __import__("json").loads(created)["id"]
-    assert kb.get_task(conn, created_id).max_attempts == 2
-    assert "Set attempt cap" in kc.run_slash(f"set-attempts {task_id} 1")
-    assert kb.get_task(conn, task_id).max_attempts == 1
-    assert "Cleared attempt cap" in kc.run_slash(f"set-attempts {task_id} none")
-    assert kb.get_task(conn, task_id).max_attempts is None
-
-
-def test_tool_show_reads_back_attempt_cap(conn, monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    task_id = kb.create_task(conn, title="bounded", assignee="builder", max_attempts=2)
-
-    payload = __import__("json").loads(kanban_tools._handle_show({"task_id": task_id}))
-
-    assert payload["task"]["max_attempts"] == 2
