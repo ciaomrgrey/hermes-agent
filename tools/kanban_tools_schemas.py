@@ -478,11 +478,6 @@ KANBAN_CREATE_SCHEMA = _schema(
                 "dispatcher SIGTERMs the worker and re-queues the "
                 "task with outcome='timed_out'."
         )),
-        "max_attempts": _prop("integer", (
-                "Hard cap on claimed runs per assignee profile. Reviews use the "
-                "reviewer's own profile budget; returning to an implementer does "
-                "not erase that implementer's prior attempts. Omit for unlimited."
-        )),
         "initial_status": {
             "type": "string",
             "enum": ["running", "blocked"],

@@ -708,8 +708,6 @@ class Task:
     worker_pid: Optional[int] = None
     last_failure_error: Optional[str] = None
     max_runtime_seconds: Optional[int] = None
-    # Hard cap on claimed runs per assignee profile; NULL preserves unlimited dispatch.
-    max_attempts: Optional[int] = None
     last_heartbeat_at: Optional[int] = None
     current_run_id: Optional[int] = None
     workflow_template_id: Optional[str] = None
@@ -757,7 +755,7 @@ _TASK_REQUIRED_COLUMNS = (
 # Later-added columns read as NULL when absent from the row.
 _TASK_OPTIONAL_COLUMNS = (
     "branch_name", "project_id", "tenant", "result", "idempotency_key", "worker_pid",
-    "max_runtime_seconds", "max_attempts", "last_heartbeat_at", "current_run_id", "workflow_template_id",
+    "max_runtime_seconds", "last_heartbeat_at", "current_run_id", "workflow_template_id",
     "current_step_key", "max_retries", "session_id", "completion_contract",
 )
 # Text columns where "" is stored/read as "not set".
@@ -902,9 +900,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- Short excerpt of the most recent failure's error text.
     last_failure_error   TEXT,
     max_runtime_seconds  INTEGER,
-    -- Hard dispatch budget counted from durable task_runs, scoped to the
-    -- assignee profile. NULL preserves the historical unlimited behaviour.
-    max_attempts         INTEGER,
     last_heartbeat_at    INTEGER,
     -- Pointer into task_runs for the currently-active run (NULL if no
     -- run is in-flight). Denormalised for cheap reads.
@@ -1252,7 +1247,6 @@ def create_task(
     branch_name: Optional[str] = None, tenant: Optional[str] = None, priority: int = 0,
     parents: Iterable[str] = (), triage: bool = False, idempotency_key: Optional[str] = None,
     max_runtime_seconds: Optional[int] = None, skills: Optional[Iterable[str]] = None,
-    max_attempts: Optional[int] = None,
     max_retries: Optional[int] = None, model_override: Optional[str] = None,
     provider_override: Optional[str] = None, reasoning_effort: Optional[str] = None,
     goal_mode: bool = False, goal_max_turns: Optional[int] = None, initial_status: str = "running",
@@ -1287,8 +1281,6 @@ def create_task(
         raise ValueError("title is required")
     if initial_status not in VALID_INITIAL_STATUSES:
         raise ValueError(f"initial_status must be one of {sorted(VALID_INITIAL_STATUSES)}")
-    if max_attempts is not None and int(max_attempts) < 1:
-        raise ValueError("max_attempts must be >= 1")
     # A project-scoped board anchors every new task to its project's repo
     # (deterministic worktree + branch) without each surface repeating it.
     # An explicit ``scratch`` (or ``project_id=""``) is a request for no project:
@@ -1358,17 +1350,17 @@ def create_task(
                         id, title, body, assignee, status, priority,
                         created_by, created_at, workspace_kind, workspace_path,
                         branch_name, project_id, tenant, idempotency_key,
-                        max_runtime_seconds, max_attempts,
+                        max_runtime_seconds,
                         skills, max_retries, model_override, provider_override,
                         reasoning_effort,
                         goal_mode, goal_max_turns, session_id, completion_contract
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task_id, title.strip(), body, assignee, task_status, priority,
                         created_by, now, workspace_kind, workspace_path,
                         branch_name, project_id, tenant, idempotency_key,
-                        _opt_int(max_runtime_seconds), _opt_int(max_attempts),
+                        _opt_int(max_runtime_seconds),
                         json.dumps(skills_list) if skills_list is not None else None,
                         _opt_int(max_retries), model_override, provider_override, reasoning_effort,
                         1 if goal_mode else 0, _opt_int(goal_max_turns), session_id, completion_contract,
@@ -2173,40 +2165,7 @@ def _claim_and_open_run(
     *, event_extra: Optional[dict] = None,
 ) -> Optional[int]:
     """CAS ``source_status -> running``, open a run row, emit ``claimed``; None
-    when the CAS lost or the assignee exhausted its durable attempt budget.
-    Caller holds the txn, making the budget check and claim one atomic decision."""
-    trow = conn.execute(
-        "SELECT assignee, max_runtime_seconds, max_attempts, current_step_key "
-        "FROM tasks WHERE id = ?", (task_id,),
-    ).fetchone()
-    if trow is None:
-        return None
-    max_attempts = _opt_int(_row_get(trow, "max_attempts"))
-    if max_attempts is not None:
-        profile = trow["assignee"]
-        attempts = int(conn.execute(
-            "SELECT COUNT(*) FROM task_runs WHERE task_id = ? AND profile IS ?",
-            (task_id, profile),
-        ).fetchone()[0])
-        if attempts >= max_attempts:
-            reason = (
-                f"dispatch attempt limit exhausted for profile {profile or '(unassigned)'}: "
-                f"{attempts}/{max_attempts} claimed runs"
-            )
-            exhausted = conn.execute(
-                f"UPDATE tasks SET status = 'blocked', claim_lock = NULL, claim_expires = NULL, "
-                f"worker_pid = NULL, worker_started_at = NULL, current_run_id = NULL "
-                f"WHERE id = ? AND status = '{source_status}' AND claim_lock IS NULL",
-                (task_id,),
-            )
-            if exhausted.rowcount == 1:
-                _append_event(conn, task_id, "attempt_limit_exhausted", {
-                    "profile": profile,
-                    "attempts": attempts,
-                    "max_attempts": max_attempts,
-                    "reason": reason,
-                })
-            return None
+    when the CAS lost. Caller holds the txn."""
     cur = conn.execute(
         f"""
         UPDATE tasks
