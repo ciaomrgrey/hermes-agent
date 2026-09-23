@@ -531,3 +531,23 @@ KANBAN_LINK_SCHEMA = _schema(
     },
     ["parent_id", "child_id"],
 )
+
+
+KANBAN_UNLINK_SCHEMA = _schema(
+    "kanban_unlink",
+    (
+        "Remove one existing parent→child dependency edge. This is an "
+        "orchestrator-only repair operation: dispatcher-spawned task workers "
+        "never see it. Both tasks and the exact edge must exist on the resolved "
+        "board, and an optional tenant scope must match both tasks."
+    ),
+    {
+        "parent_id": _prop("string", "Parent task id."),
+        "child_id": _prop("string", "Child task id."),
+        "tenant": _prop("string", (
+            "Optional tenant namespace guard. When omitted, HERMES_TENANT is "
+            "used if set; when resolved, both tasks must belong to it."
+        )),
+    },
+    ["parent_id", "child_id"],
+)

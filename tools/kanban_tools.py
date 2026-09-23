@@ -24,7 +24,7 @@ from tools.kanban_tools_schemas import (
     KANBAN_ATTACH_URL_SCHEMA, KANBAN_ATTACHMENTS_SCHEMA, KANBAN_BLOCK_SCHEMA, KANBAN_COMMENT_SCHEMA,
     KANBAN_COMPLETE_SCHEMA, KANBAN_CREATE_SCHEMA, KANBAN_HEARTBEAT_SCHEMA, KANBAN_LINK_SCHEMA,
     KANBAN_LIST_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA, KANBAN_REQUEST_REVIEW_SCHEMA,
-    KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA)
+    KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA, KANBAN_UNLINK_SCHEMA)
 
 logger = logging.getLogger(__name__)
 
@@ -209,8 +209,10 @@ def _worker_guard(tool_name: str, args: dict) -> str:
 
 def _require_orchestrator_tool(tool_name: str) -> None:
     """The check_fn already hides orchestrator tools from workers; this catches
-    a stale registration or test harness routing a worker here anyway."""
-    if os.environ.get("HERMES_KANBAN_TASK"):
+    a stale registration or test harness routing a dispatcher-owned worker here.
+    An in-process cron run may inherit the worker env but is explicitly marked
+    non-owner, matching the availability gate in :func:`_visible`."""
+    if os.environ.get("HERMES_KANBAN_TASK") and _is_dispatcher_owned_worker():
         raise _Reject(
             f"{tool_name} is orchestrator-only; dispatcher-spawned workers must use "
             "kanban_complete, kanban_block, kanban_heartbeat, or kanban_comment for their "
@@ -1017,10 +1019,39 @@ def _handle_link(args: dict, **kw) -> str:
                    **({"gated_by": parent_id} if gated else {}))
 
 
+@_kanban_handler("kanban_unlink")
+def _handle_unlink(args: dict, **kw) -> str:
+    """Remove one verified parent→child edge in an orchestrator context."""
+    _reject_delegated_child_mutation("kanban_unlink")
+    _require_orchestrator_tool("kanban_unlink")
+    parent_id = args.get("parent_id")
+    child_id = args.get("child_id")
+    _check(parent_id and child_id, "both parent_id and child_id are required")
+    _check(parent_id != child_id, "a task cannot be unlinked from itself")
+    tenant = args.get("tenant") if "tenant" in args else os.environ.get("HERMES_TENANT")
+    with _board(args.get("board")) as (kb, conn):
+        parent = _existing_task(kb, conn, str(parent_id))
+        child = _existing_task(kb, conn, str(child_id))
+        if tenant is not None:
+            _check(
+                parent.tenant == tenant and child.tenant == tenant,
+                f"tenant scope {tenant!r} does not match both tasks",
+            )
+        _check(
+            kb.unlink_tasks(conn, parent_id=str(parent_id), child_id=str(child_id)),
+            f"dependency link {parent_id} -> {child_id} does not exist",
+        )
+        _check(
+            str(parent_id) not in kb.parent_ids(conn, str(child_id)),
+            f"dependency link {parent_id} -> {child_id} still exists after unlink",
+        )
+        return _ok(parent_id=parent_id, child_id=child_id)
+
+
 # --- Registration (order preserved: it is the order tools appear in the schema) ---
 
-# kanban_list / kanban_unblock route the board and are hidden from task workers.
-_ORCHESTRATOR_TOOLS = frozenset({"kanban_list", "kanban_unblock"})
+# Board-routing/repair tools are hidden from task workers.
+_ORCHESTRATOR_TOOLS = frozenset({"kanban_list", "kanban_unblock", "kanban_unlink"})
 _TOOLS = (
     ("kanban_show", KANBAN_SHOW_SCHEMA, _handle_show, "📋"),
     ("kanban_list", KANBAN_LIST_SCHEMA, _handle_list, "📋"),
@@ -1035,7 +1066,8 @@ _TOOLS = (
     ("kanban_attachments", KANBAN_ATTACHMENTS_SCHEMA, _handle_attachments, "📎"),
     ("kanban_create", KANBAN_CREATE_SCHEMA, _handle_create, "➕"),
     ("kanban_unblock", KANBAN_UNBLOCK_SCHEMA, _handle_unblock, "▶"),
-    ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"))
+    ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"),
+    ("kanban_unlink", KANBAN_UNLINK_SCHEMA, _handle_unlink, "🔓"))
 
 for _name, _sch, _handler, _emoji in _TOOLS:
     _gate = _check_kanban_orchestrator_mode if _name in _ORCHESTRATOR_TOOLS else _check_kanban_mode

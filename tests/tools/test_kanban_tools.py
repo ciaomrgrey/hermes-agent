@@ -516,6 +516,120 @@ def test_link_happy_path(worker_env):
     assert d["ok"] is True
 
 
+def test_unlink_orchestrator_removes_only_the_exact_scoped_edge(monkeypatch, tmp_path):
+    """The native unlink surface removes one verified edge and fails closed on
+    malformed, absent, cross-board, and cross-tenant targets."""
+    from pathlib import Path
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_PROFILE", "gabriel")
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    monkeypatch.delenv("HERMES_KANBAN_BOARD", raising=False)
+
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+
+    kb._INITIALIZED_PATHS.clear()
+    with kbc.connect_closing() as conn:
+        parent = kb.create_task(conn, title="parent", tenant="estate")
+        child = kb.create_task(conn, title="child", parents=[parent], tenant="estate")
+        unrelated = kb.create_task(conn, title="unrelated", tenant="estate")
+
+    controls = (
+        ({"parent_id": parent, "child_id": parent, "tenant": "estate"}, "itself"),
+        ({"parent_id": "t_unknown", "child_id": child, "tenant": "estate"}, "not found"),
+        ({"parent_id": parent, "child_id": unrelated, "tenant": "estate"}, "does not exist"),
+        ({"parent_id": parent, "child_id": child, "tenant": "other"}, "tenant"),
+        ({"parent_id": parent, "child_id": child, "board": "other"}, "not found"),
+    )
+    for args, expected in controls:
+        result = json.loads(kt._handle_unlink(args))
+        assert expected in result.get("error", "").lower(), result
+        with kbc.connect_closing() as conn:
+            assert kb.parent_ids(conn, child) == [parent]
+
+    result = json.loads(kt._handle_unlink({
+        "parent_id": parent,
+        "child_id": child,
+        "tenant": "estate",
+    }))
+    assert result == {"ok": True, "parent_id": parent, "child_id": child}
+    with kbc.connect_closing() as conn:
+        assert kb.parent_ids(conn, child) == []
+
+
+def test_unlink_is_exposed_only_to_configured_ordinary_orchestrators(monkeypatch, tmp_path):
+    """A fresh Gabriel-style selected toolset sees the schema; dispatcher workers
+    and delegated children neither see nor may invoke the mutation."""
+    from pathlib import Path
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_PROFILE", "gabriel")
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+
+    from agent.delegation_context import delegated_child_context, non_dispatcher_owned_context
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    from hermes_cli.config import save_config
+    from model_tools import _clear_tool_defs_cache, get_tool_definitions
+    from tools import kanban_tools as kt
+    from tools.registry import invalidate_check_fn_cache
+
+    save_config({"platform_toolsets": {"cli": ["kanban"]}})
+    invalidate_check_fn_cache()
+    _clear_tool_defs_cache()
+
+    def schemas():
+        return {
+            row["function"]["name"]: row["function"]
+            for row in get_tool_definitions(
+                ["kanban"], quiet_mode=True, skip_tool_search_assembly=True)
+            if row["function"]["name"].startswith("kanban_")
+        }
+
+    ordinary = schemas()
+    assert ordinary["kanban_unlink"]["parameters"]["required"] == ["parent_id", "child_id"]
+    assert {"parent_id", "child_id", "tenant", "board"} <= set(
+        ordinary["kanban_unlink"]["parameters"]["properties"])
+
+    kb._INITIALIZED_PATHS.clear()
+    with kbc.connect_closing() as conn:
+        parent = kb.create_task(conn, title="parent", tenant="estate")
+        child = kb.create_task(conn, title="child", parents=[parent], tenant="estate")
+
+    monkeypatch.setenv("HERMES_KANBAN_TASK", child)
+    assert "kanban_unlink" not in schemas()
+    refused = json.loads(kt._handle_unlink({"parent_id": parent, "child_id": child}))
+    assert "orchestrator-only" in refused.get("error", "")
+
+    with non_dispatcher_owned_context():
+        assert "kanban_unlink" in schemas()
+        unlinked = json.loads(kt._handle_unlink({
+            "parent_id": parent,
+            "child_id": child,
+            "tenant": "estate",
+        }))
+    assert unlinked.get("ok") is True
+    with kbc.connect_closing() as conn:
+        assert kb.parent_ids(conn, child) == []
+        kb.link_tasks(conn, parent, child)
+
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    with delegated_child_context():
+        assert "kanban_unlink" not in schemas()
+        refused = json.loads(kt._handle_unlink({"parent_id": parent, "child_id": child}))
+    assert "delegate_task child" in refused.get("error", "")
+    with kbc.connect_closing() as conn:
+        assert kb.parent_ids(conn, child) == [parent]
+
+
 def test_unblock_happy_path(monkeypatch, worker_env):
     monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
     from hermes_cli import kanban_db as kb
