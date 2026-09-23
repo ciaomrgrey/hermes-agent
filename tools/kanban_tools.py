@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Optional
 
 from agent.redact import redact_sensitive_text
-from hermes_cli.goals import judge_goal, review_handoff_goal
+from hermes_cli.goals import judge_goal
 from tools.registry import no_cache_check_fn, registry, tool_error
 from hermes_cli.config import cfg_get, load_config
 from tools.kanban_tools_schemas import (
@@ -399,12 +399,14 @@ def _goal_gate(tool_name: str, task, tid: str, evidence: str) -> None:
     A broken judge fails open (logged) so it cannot permanently wedge work."""
     if not task or not task.goal_mode or not _goal_judge_available():
         return
-    goal = f"{task.title}\n\n{task.body or ''}".strip()
-    if tool_name == "kanban_request_review":
-        goal = review_handoff_goal(goal)
     try:
-        verdict, reason, _, _, _ = judge_goal(
-            goal=goal, last_response=evidence.strip())
+        goal = f"{task.title}\n\n{task.body or ''}".strip()
+        if tool_name == "kanban_request_review":
+            result = judge_goal(
+                goal=goal, last_response=evidence.strip(), review_handoff=True)
+        else:
+            result = judge_goal(goal=goal, last_response=evidence.strip())
+        verdict, reason, _, _, _ = result
     except Exception as judge_exc:
         logger.warning(
             "goal judge check failed, allowing lifecycle handoff: %s", judge_exc, exc_info=True)

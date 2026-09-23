@@ -176,6 +176,15 @@ JUDGE_BACKGROUND_BLOCK_TEMPLATE = (
     "on one of these):\n{background_lines}\n\n"
 )
 
+REVIEW_HANDOFF_JUDGE_BLOCK = (
+    "Review-handoff decision: evaluate only whether the implementation and its "
+    "verification evidence are complete enough to begin independent review. The "
+    "handoff must not require an independent review verdict, reviewer-authored "
+    "results, post-review acceptance, activation, release, or deployment. A missing "
+    "or incomplete implementation is CONTINUE; an unachievable or external blocker "
+    "is BLOCKED.\n\n"
+)
+
 JUDGE_USER_PROMPT_TEMPLATE = (
     "Goal:\n{goal}\n\n"
     "Agent's most recent response:\n{response}\n\n"
@@ -870,6 +879,7 @@ def judge_goal(
     background_processes: Optional[List[Dict[str, Any]]] = None,
     contract: Optional[GoalContract] = None,
     active_delegations: int = 0,
+    review_handoff: bool = False,
 ) -> Tuple[str, str, bool, Optional[Dict[str, Any]], bool]:
     """Ask the auxiliary model whether the goal is satisfied.
 
@@ -911,6 +921,8 @@ def judge_goal(
         prompt = JUDGE_USER_PROMPT_WITH_SUBGOALS_TEMPLATE.format(subgoals_block=_truncate(subgoals_block, 2000), **common)
     else:
         prompt = JUDGE_USER_PROMPT_TEMPLATE.format(**common)
+    if review_handoff:
+        prompt = REVIEW_HANDOFF_JUDGE_BLOCK + prompt
 
     try:
         raw = _call_goal_judge_llm(call_llm, JUDGE_SYSTEM_PROMPT, prompt, timeout)
@@ -927,24 +939,6 @@ def judge_goal(
     logger.info("goal judge: verdict=%s reason=%s%s", verdict, _truncate(reason, 120),
                 f" wait={wait_directive}" if wait_directive else "")
     return verdict, reason, parse_failed, wait_directive, False
-
-
-def review_handoff_goal(goal: str) -> str:
-    """Scope a lifecycle judge to readiness for independent review.
-
-    The card remains visible as the source of implementation requirements, but
-    outcomes that can only be produced after this transition are not admission
-    requirements for the transition itself.
-    """
-    return (
-        "Review-handoff decision: evaluate only whether the implementation and its "
-        "verification evidence are complete enough to begin independent review. The "
-        "handoff must not require an independent review verdict, reviewer-authored "
-        "results, post-review acceptance, activation, release, or deployment. A missing "
-        "or incomplete implementation is CONTINUE; an unachievable or external blocker "
-        "is BLOCKED.\n\nCard requirements:\n"
-        f"{goal.strip()}"
-    )
 
 
 def count_active_delegations(session_id: Optional[str]) -> int:

@@ -833,15 +833,17 @@ def _goal_mode_handoff_rejection(
     if client is None or not model:
         return ("done", None)
 
-    from hermes_cli.goals import judge_goal, review_handoff_goal
+    from hermes_cli.goals import judge_goal
 
     verdict, reason = "done", ""
     try:
         goal = f"{task.title}\n\n{task.body or ''}".strip()
         if review_handoff:
-            goal = review_handoff_goal(goal)
-        verdict, reason, _, _, _ = judge_goal(goal=goal,
-                                              last_response=evidence.strip())
+            result = judge_goal(
+                goal=goal, last_response=evidence.strip(), review_handoff=True)
+        else:
+            result = judge_goal(goal=goal, last_response=evidence.strip())
+        verdict, reason, _, _, _ = result
     except Exception as judge_exc:
         import logging as _logging
 

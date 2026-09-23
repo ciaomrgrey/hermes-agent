@@ -291,6 +291,61 @@ def test_cli_reopen_review_is_transition_first_and_redacts_reason(
         assert secret not in comments[0].body
 
 
+def test_goal_judge_preserves_card_budget_and_surface_parity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from typing import cast
+
+    from tools import kanban_tools as tools
+
+    title = "Boundary card"
+    marker = "IMPLEMENTATION CRITERION: preserve this late requirement"
+    card_prefix = f"{title}\n\n"
+    body = "x" * (1734 - len(card_prefix)) + marker
+    body += "y" * (1831 - len(card_prefix) - len(body))
+    card = f"{card_prefix}{body}"
+    assert len(card) == 1831
+    assert card.index(marker) == 1734
+
+    task = cast(kb.Task, SimpleNamespace(
+        id="t_boundary",
+        title=title,
+        body=body,
+        goal_mode=True,
+    ))
+    prompts: list[str] = []
+
+    def capture_call_llm(**kwargs):
+        prompts.append(kwargs["messages"][1]["content"])
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(
+                content='{"done": true, "reason": "ready"}'
+            ))]
+        )
+
+    monkeypatch.setattr(tools, "_goal_judge_available", lambda: True)
+    monkeypatch.setattr("agent.auxiliary_client.call_llm", capture_call_llm)
+    monkeypatch.setattr(
+        "agent.auxiliary_client.get_text_auxiliary_client",
+        lambda purpose: (object(), "judge-model"),
+    )
+
+    tools._goal_gate("kanban_complete", task, task.id, "verified")
+    assert kc._goal_mode_handoff_rejection(task, "verified") == ("done", None)
+    tools._goal_gate("kanban_request_review", task, task.id, "verified")
+    assert kc._goal_mode_handoff_rejection(
+        task, "verified", review_handoff=True
+    ) == ("done", None)
+
+    tool_completion, cli_completion, tool_review, cli_review = prompts
+    assert tool_completion == cli_completion
+    assert tool_review == cli_review
+    assert all(marker in prompt for prompt in prompts)
+    assert "Review-handoff decision" not in tool_completion
+    assert "Review-handoff decision" in tool_review
+
+
 def test_goal_mode_review_handoff_judges_implementation_readiness_on_both_surfaces(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -318,14 +373,9 @@ def test_goal_mode_review_handoff_judges_implementation_readiness_on_both_surfac
             return task_id, claimed.current_run_id
 
     def readiness_judge(*args, **kwargs):
-        goal = kwargs.get("goal", args[0] if args else "")
         evidence = kwargs.get("last_response", args[1] if len(args) > 1 else "")
-        goal_lower = goal.lower()
         evidence_lower = evidence.lower()
-        review_scope = (
-            "independent review verdict" in goal_lower
-            and "must not require" in goal_lower
-        )
+        review_scope = kwargs.get("review_handoff", False)
         if "external repository is unavailable" in evidence_lower:
             return "blocked", "external repository is unavailable", False, None, False
         if review_scope and "implementation and regression tests pass" in evidence_lower:
