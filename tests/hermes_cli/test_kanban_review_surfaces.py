@@ -291,6 +291,111 @@ def test_cli_reopen_review_is_transition_first_and_redacts_reason(
         assert secret not in comments[0].body
 
 
+def test_goal_mode_review_handoff_judges_implementation_readiness_on_both_surfaces(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_PROFILE", "builder")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    kb._INITIALIZED_PATHS.clear()
+    kb.init_db()
+
+    body = (
+        "Acceptance: implementation and regression tests are complete. "
+        "After handoff, Gurney must independently review the candidate and record a verdict."
+    )
+
+    def create_claimed(title: str) -> tuple[str, int]:
+        with kbc.connect() as conn:
+            task_id = kb.create_task(
+                conn, title=title, body=body, assignee="builder", goal_mode=True
+            )
+            claimed = kb.claim_task(conn, task_id, claimer=f"builder:{title}")
+            assert claimed is not None and claimed.current_run_id is not None
+            return task_id, claimed.current_run_id
+
+    def readiness_judge(*args, **kwargs):
+        goal = kwargs.get("goal", args[0] if args else "")
+        evidence = kwargs.get("last_response", args[1] if len(args) > 1 else "")
+        goal_lower = goal.lower()
+        evidence_lower = evidence.lower()
+        review_scope = (
+            "independent review verdict" in goal_lower
+            and "must not require" in goal_lower
+        )
+        if "external repository is unavailable" in evidence_lower:
+            return "blocked", "external repository is unavailable", False, None, False
+        if review_scope and "implementation and regression tests pass" in evidence_lower:
+            return "done", "implementation is ready for independent review", False, None, False
+        return "continue", "independent review verdict is not recorded", False, None, False
+
+    from tools import kanban_tools as tools
+    from hermes_cli import goals
+
+    monkeypatch.setattr(tools, "_goal_judge_available", lambda: True)
+    monkeypatch.setattr(tools, "judge_goal", readiness_judge)
+    monkeypatch.setattr(
+        "agent.auxiliary_client.get_text_auxiliary_client",
+        lambda purpose: (object(), "judge-model"),
+    )
+    monkeypatch.setattr(goals, "judge_goal", readiness_judge)
+
+    tool_task, tool_run = create_claimed("Tool review handoff")
+    monkeypatch.setenv("HERMES_KANBAN_TASK", tool_task)
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(tool_run))
+    admitted = json.loads(tools._handle_request_review({
+        "summary": "Implementation and regression tests pass; candidate is ready.",
+    }))
+    assert admitted["ok"] is True
+
+    cli_task, cli_run = create_claimed("CLI review handoff")
+    monkeypatch.setenv("HERMES_KANBAN_TASK", cli_task)
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(cli_run))
+    output = kc.run_slash(
+        f"request-review {cli_task} --summary "
+        "'Implementation and regression tests pass; candidate is ready.'"
+    )
+    assert "Requested review" in output
+
+    completion_task, completion_run = create_claimed("Completion still needs review")
+    monkeypatch.setenv("HERMES_KANBAN_TASK", completion_task)
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(completion_run))
+    rejected = json.loads(tools._handle_complete({
+        "summary": "Implementation and regression tests pass; candidate is ready.",
+    }))
+    assert "rejected by judge" in rejected["error"]
+    with kbc.connect() as conn:
+        completion_after = kb.get_task(conn, completion_task)
+        assert completion_after is not None and completion_after.status == "running"
+
+    cli_completion_task, cli_completion_run = create_claimed("CLI completion still needs review")
+    monkeypatch.setenv("HERMES_KANBAN_TASK", cli_completion_task)
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(cli_completion_run))
+    completion_output = kc.run_slash(
+        f"complete {cli_completion_task} --summary "
+        "'Implementation and regression tests pass; candidate is ready.'"
+    )
+    assert "rejected by judge" in completion_output
+    with kbc.connect() as conn:
+        cli_completion_after = kb.get_task(conn, cli_completion_task)
+        assert cli_completion_after is not None
+        assert cli_completion_after.status == "running"
+
+    blocked_task, blocked_run = create_claimed("Blocked review handoff")
+    monkeypatch.setenv("HERMES_KANBAN_TASK", blocked_task)
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(blocked_run))
+    blocked = json.loads(tools._handle_request_review({
+        "summary": "The external repository is unavailable.",
+    }))
+    assert "kanban_block" in blocked["error"]
+    with kbc.connect() as conn:
+        blocked_after = kb.get_task(conn, blocked_task)
+        assert blocked_after is not None and blocked_after.status == "running"
+
+
 def test_goal_mode_review_handoff_cannot_bypass_judge(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

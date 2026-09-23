@@ -808,8 +808,10 @@ def _worker_run_id_for(task_id: str) -> Optional[int]:
         return None
 
 
-def _goal_mode_handoff_rejection(task: Optional[kb.Task], evidence: str):
-    """Goal judge for every terminal worker handoff (including review).
+def _goal_mode_handoff_rejection(
+    task: Optional[kb.Task], evidence: str, *, review_handoff: bool = False,
+):
+    """Goal judge for completion or implementation-readiness review handoff.
 
     Returns ``(verdict, reason_or_None)``: ``"done"`` allows; ``"blocked"`` = judge ruled the goal
     unachievable; ``"continue"``/``"wait"`` reject with the judge's reason. Judge failures allow
@@ -831,11 +833,14 @@ def _goal_mode_handoff_rejection(task: Optional[kb.Task], evidence: str):
     if client is None or not model:
         return ("done", None)
 
-    from hermes_cli.goals import judge_goal
+    from hermes_cli.goals import judge_goal, review_handoff_goal
 
     verdict, reason = "done", ""
     try:
-        verdict, reason, _, _, _ = judge_goal(goal=f"{task.title}\n\n{task.body or ''}".strip(),
+        goal = f"{task.title}\n\n{task.body or ''}".strip()
+        if review_handoff:
+            goal = review_handoff_goal(goal)
+        verdict, reason, _, _, _ = judge_goal(goal=goal,
                                               last_response=evidence.strip())
     except Exception as judge_exc:
         import logging as _logging
@@ -846,11 +851,12 @@ def _goal_mode_handoff_rejection(task: Optional[kb.Task], evidence: str):
 
 
 def _goal_gate_error(conn, tid: str, evidence: str, handoff: str, blocked_hint: str,
-                     continue_hint: str) -> Optional[str]:
+                     continue_hint: str, *, review_handoff: bool = False) -> Optional[str]:
     """Goal-mode judge gate shared by ``complete`` / ``request-review`` (mirrors tools/kanban_tools.py);
     applied to every terminal handoff so request-review can't bypass it. Returns the error line, or
     None to allow."""
-    verdict, rejection = _goal_mode_handoff_rejection(kb.get_task(conn, tid), evidence)
+    verdict, rejection = _goal_mode_handoff_rejection(
+        kb.get_task(conn, tid), evidence, review_handoff=review_handoff)
     if verdict == "blocked":
         return (f"kanban: goal {handoff} of {tid} rejected: judge ruled "
                 f"the goal unachievable — {rejection}. {blocked_hint}")
@@ -977,7 +983,7 @@ def _cmd_request_review(args: argparse.Namespace) -> int:
         gate_err = _goal_gate_error(
             conn, tid, summary or "", "review handoff",
             "Record the block with kanban block instead of requesting review.",
-            "Provide acceptance evidence matching the task.")
+            "Provide acceptance evidence matching the task.", review_handoff=True)
         if gate_err:
             return _err(gate_err)
         ok, reason = kb.request_review(

@@ -929,6 +929,24 @@ def judge_goal(
     return verdict, reason, parse_failed, wait_directive, False
 
 
+def review_handoff_goal(goal: str) -> str:
+    """Scope a lifecycle judge to readiness for independent review.
+
+    The card remains visible as the source of implementation requirements, but
+    outcomes that can only be produced after this transition are not admission
+    requirements for the transition itself.
+    """
+    return (
+        "Review-handoff decision: evaluate only whether the implementation and its "
+        "verification evidence are complete enough to begin independent review. The "
+        "handoff must not require an independent review verdict, reviewer-authored "
+        "results, post-review acceptance, activation, release, or deployment. A missing "
+        "or incomplete implementation is CONTINUE; an unachievable or external blocker "
+        "is BLOCKED.\n\nCard requirements:\n"
+        f"{goal.strip()}"
+    )
+
+
 def count_active_delegations(session_id: Optional[str]) -> int:
     """Live async delegation batches spawned by this session (fail-safe 0)."""
     if not session_id:
