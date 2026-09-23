@@ -234,17 +234,21 @@ def test_domain_and_cli_review_handoffs_redact_before_persistence(
         assert secret not in json.dumps(event.payload)
 
 
-def test_worker_guidance_distinguishes_same_card_and_downstream_review() -> None:
+def test_worker_guidance_requires_flat_same_card_review() -> None:
     from agent.prompt_builder import KANBAN_GUIDANCE
     from hermes_cli.config_defaults import DEFAULT_CONFIG
 
-    assert "lists child IDs" in KANBAN_GUIDANCE
-    assert "inspect those cards" in KANBAN_GUIDANCE
-    assert "pre-created review, QA, or release child" in KANBAN_GUIDANCE
+    assert "One card equals one outcome" in KANBAN_GUIDANCE
+    assert "never pass `parents=`" in KANBAN_GUIDANCE
+    assert "do not call `kanban_link`" in KANBAN_GUIDANCE
+    assert "Review stays on the same card" in KANBAN_GUIDANCE
+    assert "file a new flat card" in KANBAN_GUIDANCE
+    assert "Omit `parents`" in KANBAN_GUIDANCE
     assert "call `kanban_complete`" in KANBAN_GUIDANCE
-    assert "Never sticky-block that parent for `review-required`" in KANBAN_GUIDANCE
     assert "`kanban_request_changes`" in KANBAN_GUIDANCE
     assert "metadata=..." in KANBAN_GUIDANCE
+    assert "parents=[your-task-id]" not in KANBAN_GUIDANCE
+    assert "fan out into child tasks" not in KANBAN_GUIDANCE
     kanban_defaults = DEFAULT_CONFIG["kanban"]
     assert isinstance(kanban_defaults, dict)
     assert kanban_defaults["review_dispatch"] is True

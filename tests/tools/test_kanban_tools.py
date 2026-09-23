@@ -778,7 +778,7 @@ def test_kanban_guidance_orchestrator_decision_ownership():
     from agent.prompt_builder import KANBAN_GUIDANCE
 
     assert KANBAN_GUIDANCE.count("Decision ownership.") == 1
-    assert "Never let two subtree cards decide the same question" in KANBAN_GUIDANCE
+    assert "Never let two fan-out cards decide the same question" in KANBAN_GUIDANCE
     assert "workers cannot see sibling context" in KANBAN_GUIDANCE
 
 
