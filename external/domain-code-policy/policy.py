@@ -603,7 +603,7 @@ def _python_inline_source(segment: list[str]) -> str | None:
     for index, token in enumerate(segment[1:], start=1):
         if token == "-c":
             return segment[index + 1] if index + 1 < len(segment) else "def <unresolved>(:\npass"
-        clustered = re.fullmatch(r"-[bBdEhiIOPqRsSuvVx]*c(.*)", token)
+        clustered = re.fullmatch(r"-[bBdEhiIOPqRsSuvVx]*c(.*)", token, re.DOTALL)
         if clustered:
             return clustered.group(1) or (
                 segment[index + 1] if index + 1 < len(segment) else "def <unresolved>(:\npass"
@@ -744,7 +744,27 @@ def terminal_candidates(
     command: str, workdir: str | None = None,
 ) -> list[tuple[str, str, bool]] | None:
     """Extract common shell authoring in execution order."""
-    lines = command.splitlines()
+    normalized: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if char == "\\" and quote != "'" and index + 1 < len(command):
+            following = command[index + 1]
+            if following == "\n":
+                index += 2
+                continue
+            normalized.extend((char, following))
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            if quote is None:
+                quote = char
+            elif quote == char:
+                quote = None
+        normalized.append(char)
+        index += 1
+    lines = "".join(normalized).splitlines()
     found: list[tuple[str, str, bool]] = []
     projected: dict[str, str] = {}
     variables: dict[str, str] = {}

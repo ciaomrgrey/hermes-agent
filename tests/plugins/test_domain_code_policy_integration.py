@@ -832,6 +832,39 @@ def test_python_c_source_creation_is_blocked_before_mutation(
     assert ledger.read_bytes() == b"unchanged\n"
 
 
+@pytest.mark.parametrize("shape", ["attached-multiline", "continued-command"])
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_composed_python_c_source_creation_is_blocked_before_mutation(
+    installed_policy, tmp_path, shape, preexisting,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    original = b"print('safe')\n" if preexisting else None
+    if original is not None:
+        target.write_bytes(original)
+    ledger = tmp_path / "ledger.txt"
+    ledger.write_bytes(b"unchanged\n")
+    source = (
+        "from pathlib import Path\n"
+        f"Path({str(target)!r}).write_text('conn.commit()\\n')"
+    )
+    command = "python3 -c" + shlex.quote(source)
+    if shape == "continued-command":
+        command = "python3 \\\n-c " + shlex.quote(source)
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in (result.get("error") or ""), result
+    if original is None:
+        assert not target.exists()
+    else:
+        assert target.read_bytes() == original
+    assert ledger.read_bytes() == b"unchanged\n"
+
+
 @pytest.mark.parametrize("carrier", ["write_file", "execute_code", "terminal"])
 def test_literal_arithmetic_dispatches_normally(installed_policy, tmp_path, carrier):
     from model_tools import handle_function_call
@@ -860,6 +893,23 @@ def test_multiline_python_c_non_authoring_dispatches_normally(installed_policy):
         {"command": "python3 -c 'print(1 + 1)\nprint(3 + 4)'"},
         task_id="t_domain",
         session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c'print(1 + 1)\nprint(3 + 4)'",
+        "python3 \\\n-c 'print(1 + 1)'",
+    ],
+)
+def test_composed_python_c_non_authoring_dispatches_normally(installed_policy, command):
+    from model_tools import handle_function_call
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
     ))
 
     assert "Cody-owned" not in (result.get("error") or ""), result
