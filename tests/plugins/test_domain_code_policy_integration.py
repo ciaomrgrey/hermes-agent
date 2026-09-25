@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import shutil
 import sqlite3
 import time
@@ -798,6 +799,100 @@ def test_direct_tee_authoring_is_blocked(
         assert not target.exists()
     else:
         assert target.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "shape", ["compact-c", "multiline-c", "clustered-Bc", "clustered-qc"],
+)
+def test_python_c_source_creation_is_blocked_before_mutation(
+    installed_policy, tmp_path, shape,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    ledger = tmp_path / "ledger.txt"
+    ledger.write_bytes(b"unchanged\n")
+    source = (
+        "from pathlib import Path; "
+        f"Path({str(target)!r}).write_text('conn.commit()\\n')"
+    )
+    if shape == "compact-c":
+        command = "python3 -c" + shlex.quote(source)
+    elif shape.startswith("clustered-"):
+        command = "python3 -" + shape.removeprefix("clustered-") + shlex.quote(source)
+    else:
+        command = "python3 -c " + shlex.quote(source.replace("; ", "\n"))
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in result["error"]
+    assert not target.exists()
+    assert ledger.read_bytes() == b"unchanged\n"
+
+
+@pytest.mark.parametrize("carrier", ["write_file", "execute_code", "terminal"])
+def test_literal_arithmetic_dispatches_normally(installed_policy, tmp_path, carrier):
+    from model_tools import handle_function_call
+
+    source = "print(1 + 1)\n"
+    target = tmp_path / "arithmetic.py"
+    if carrier == "write_file":
+        args = {"path": str(target), "content": source}
+    elif carrier == "execute_code":
+        args = {"code": source}
+    else:
+        args = {"command": "python3 -c " + shlex.quote(source)}
+
+    result = json.loads(handle_function_call(
+        carrier, args, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+
+
+def test_multiline_python_c_non_authoring_dispatches_normally(installed_policy):
+    from model_tools import handle_function_call
+
+    result = json.loads(handle_function_call(
+        "terminal",
+        {"command": "python3 -c 'print(1 + 1)\nprint(3 + 4)'"},
+        task_id="t_domain",
+        session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+
+
+def test_python_warning_option_before_c_dispatches_normally(installed_policy):
+    from model_tools import handle_function_call
+
+    result = json.loads(handle_function_call(
+        "terminal",
+        {"command": "python3 -Wignore::DeprecationWarning -c 'print(1 + 1)'"},
+        task_id="t_domain",
+        session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+
+
+def test_ordinary_nested_read_dispatches_normally(installed_policy, tmp_path):
+    from model_tools import handle_function_call
+
+    notes = tmp_path / "notes.txt"
+    notes.write_text("ordinary notes\n")
+    code = (
+        "from hermes_tools import read_file\n"
+        f"print(read_file({str(notes)!r}))\n"
+    )
+
+    result = json.loads(handle_function_call(
+        "execute_code", {"code": code}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
 
 
 @pytest.mark.parametrize(

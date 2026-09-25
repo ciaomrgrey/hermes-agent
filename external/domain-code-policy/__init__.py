@@ -32,11 +32,16 @@ def _is_code_like(path: str, content: str) -> bool:
     return Path(path).suffix.lower() in CODE_SUFFIXES or content.startswith("#!")
 
 
-def _block(path: str) -> dict[str, str]:
+def _block(path: str, unresolved_reason: str | None = None) -> dict[str, str]:
+    explanation = (
+        f"{unresolved_reason.rstrip('.')}. Unresolved executable tooling is Cody-owned."
+        if unresolved_reason
+        else "substantive executable task tooling is Cody-owned."
+    )
     return {
         "action": "block",
         "message": (
-            "BLOCKED: substantive executable task tooling is Cody-owned. "
+            f"BLOCKED: {explanation} "
             f"Reuse or create a Cody Kanban card for {path}."
         ),
     }
@@ -90,7 +95,7 @@ def _evaluate(ctx, tool_name: str, args: Any, task_id: str, session_id: str):
             profile=ctx.profile_name, task_id=task_id, session_id=session_id,
             tool_name=tool_name, path="", content_sha256="",
         )
-        return _block(label)
+        return _block(label, reason)
 
     if not isinstance(args, dict):
         if tool_name in {"write_file", "patch", "execute_code", "terminal"}:
@@ -125,7 +130,10 @@ def _evaluate(ctx, tool_name: str, args: Any, task_id: str, session_id: str):
                 content_sha256=hashlib.sha256(code.encode("utf-8")).hexdigest(),
             )
             if not audited:
-                return _block("the unresolved nested-dispatch audit")
+                return _block(
+                    "the unresolved nested-dispatch audit",
+                    "nested-dispatch audit could not be persisted",
+                )
         else:
             candidates.extend(embedded)
     elif tool_name == "terminal":
@@ -164,7 +172,10 @@ def _evaluate(ctx, tool_name: str, args: Any, task_id: str, session_id: str):
                 path=effective_path, content_sha256=digest,
             )
             if not audited:
-                return _block("the unresolved exception audit")
+                return _block(
+                    "the unresolved exception audit",
+                    "exception audit could not be persisted",
+                )
             continue
         classification_paths: list[str] = []
         for classification_path in (path, effective_path):
@@ -194,7 +205,11 @@ def _evaluate(ctx, tool_name: str, args: Any, task_id: str, session_id: str):
                 task_id=task_id, session_id=session_id, tool_name=tool_name,
                 path=effective_path, content_sha256=digest,
             )
-            return _block(path)
+            return _block(
+                path,
+                "executable source could not be classified before dispatch"
+                if verdict.kind == "unresolved" else None,
+            )
     return None
 
 
@@ -218,6 +233,8 @@ def register(ctx) -> None:
                 task_id=task_id, session_id=session_id, tool_name=tool_name,
                 path="", content_sha256="",
             )
-            return _block("the unresolved policy evaluation")
+            return _block(
+                "the unresolved policy evaluation", "policy evaluation failed closed",
+            )
 
     ctx.register_hook("pre_tool_call", pre_tool_call)

@@ -210,6 +210,42 @@ def test_native_rpc_call_keeps_its_binding_before_later_reimport():
     assert verdict.kind == "trivial"
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "print(1 + 1)\n",
+        "print(-(2 * 3))\n",
+        "from hermes_tools import read_file\nprint(read_file('/tmp/notes.txt'))\n",
+    ],
+)
+def test_literal_arithmetic_and_native_read_are_proven_trivial(source):
+    verdict = load_policy().classify_source(
+        "<execute_code>.py", source, allow_native_rpc=True,
+    )
+
+    assert verdict.kind == "trivial"
+
+
+def test_unresolved_source_returns_a_precise_block_reason(tmp_path):
+    plugin = load_plugin()
+    ctx = FakeContext({"enabled": True, "audit_path": str(tmp_path / "audit.jsonl")})
+    plugin.register(ctx)
+
+    result = ctx.hook(
+        tool_name="write_file",
+        args={"path": "worker.py", "content": "custom_operation(record)\n"},
+        task_id="t_domain",
+        session_id="s_domain",
+    )
+
+    assert result["action"] == "block"
+    assert result["message"] == (
+        "BLOCKED: executable source could not be classified before dispatch. "
+        "Unresolved executable tooling is Cody-owned. "
+        "Reuse or create a Cody Kanban card for worker.py."
+    )
+
+
 def test_dangerous_binding_is_not_retroactively_replaced_by_later_import():
     source = (
         "from os import system as terminal\n"
@@ -818,7 +854,8 @@ def test_classifier_error_fails_closed_for_code_like_write(monkeypatch):
     assert result == {
         "action": "block",
         "message": (
-            "BLOCKED: substantive executable task tooling is Cody-owned. "
+            "BLOCKED: policy evaluation failed closed. "
+            "Unresolved executable tooling is Cody-owned. "
             "Reuse or create a Cody Kanban card for the unresolved policy evaluation."
         ),
     }

@@ -189,6 +189,7 @@ def _is_proven_trivial_non_python(suffix: str, source: str) -> bool:
 _SAFE_IMPORT_MODULES = frozenset({"builtins", "hermes_tools", "io", "json", "os"})
 _NATIVE_RPC_FUNCTIONS = frozenset({
     "hermes_tools.patch",
+    "hermes_tools.read_file",
     "hermes_tools.terminal",
     "hermes_tools.tool_call",
     "hermes_tools.write_file",
@@ -219,6 +220,10 @@ def _is_proven_trivial_python(
             return True
         if isinstance(node, ast.Name):
             return node.id in safe_receivers
+        if isinstance(node, ast.UnaryOp):
+            return safe_expression(node.operand)
+        if isinstance(node, ast.BinOp):
+            return safe_expression(node.left) and safe_expression(node.right)
         if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
             return all(safe_expression(item) for item in node.elts)
         if isinstance(node, ast.Dict):
@@ -594,6 +599,20 @@ def _python_segment(segment: list[str]) -> list[str] | None:
     return None
 
 
+def _python_inline_source(segment: list[str]) -> str | None:
+    for index, token in enumerate(segment[1:], start=1):
+        if token == "-c":
+            return segment[index + 1] if index + 1 < len(segment) else "def <unresolved>(:\npass"
+        clustered = re.fullmatch(r"-[bBdEhiIOPqRsSuvVx]*c(.*)", token)
+        if clustered:
+            return clustered.group(1) or (
+                segment[index + 1] if index + 1 < len(segment) else "def <unresolved>(:\npass"
+            )
+        if token == "<<<":
+            return segment[index + 1] if index + 1 < len(segment) else "def <unresolved>(:\npass"
+    return None
+
+
 def _assignments_before(
     tokens: list[str], end: int, existing: dict[str, str],
 ) -> dict[str, str]:
@@ -743,13 +762,11 @@ def terminal_candidates(
     index = 0
     while index < len(lines):
         line = lines[index]
-        tokens = _shell_tokens(line)
-        if not tokens:
-            index += 1
-            continue
         body_source: str | None = None
         next_index = index + 1
-        delimiter_match = re.search(r"(<<-?)\s*['\"]?([A-Za-z_][\w-]*)['\"]?", line)
+        delimiter_match = re.search(
+            r"(?<!<)(<<-?)(?!<)\s*['\"]?([A-Za-z_][\w-]*)['\"]?", line,
+        )
         if delimiter_match:
             strip_tabs = delimiter_match.group(1) == "<<-"
             delimiter = delimiter_match.group(2)
@@ -768,18 +785,24 @@ def terminal_candidates(
                 body_source = "\n".join(body) + ("\n" if body else "")
                 next_index = end_index + 1
 
+        tokens = _shell_tokens(line)
+        while tokens is None and next_index < len(lines) and delimiter_match is None:
+            line += "\n" + lines[next_index]
+            next_index += 1
+            tokens = _shell_tokens(line)
+        if tokens is None:
+            return None
+        if not tokens:
+            index = next_index
+            continue
+
         for raw_segment in _command_segments(tokens):
             segment = _python_segment(raw_segment)
             if segment is None:
                 continue
-            if "-c" in segment:
-                code_index = segment.index("-c") + 1
-                found.append((
-                    "<terminal-python>.py",
-                    segment[code_index] if code_index < len(segment)
-                    else "def <unresolved>(:\npass",
-                    True,
-                ))
+            inline_source = _python_inline_source(segment)
+            if inline_source is not None:
+                found.append(("<terminal-python>.py", inline_source, True))
             elif body_source is not None:
                 found.append(("<terminal-python>.py", body_source, True))
 
