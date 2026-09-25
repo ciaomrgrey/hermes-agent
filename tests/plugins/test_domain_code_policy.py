@@ -75,12 +75,15 @@ def test_python_state_mutation_is_substantive():
 
 def test_control_flow_and_data_transformation_is_substantive():
     policy = load_policy()
-    source = "def transform(items):\n    return [item.strip() for item in items if item]\n"
+    sources = [
+        "def transform(items):\n    return [item.strip() for item in items if item]\n",
+        "rows = [json.loads(line) for line in lines]\n",
+    ]
 
-    verdict = policy.classify_source("transform.py", source)
-
-    assert verdict.kind == "substantive"
-    assert verdict.reason == "substantive control flow and logic"
+    for source in sources:
+        verdict = policy.classify_source("transform.py", source)
+        assert verdict.kind == "substantive"
+        assert verdict.reason == "substantive control flow and logic"
 
 
 @pytest.mark.parametrize(
@@ -98,6 +101,8 @@ def test_recorded_domain_fixtures_are_substantive(fixture_name):
     [
         "print('ok')\n", "value = 1\n", "import json\n", "items.append(value)\n",
         "text.replace('a', 'b')\n", "payload.update(other)\n",
+        "io.open('data.txt', 'r').read()\n",
+        "os.open('away.txt', os.O_RDONLY)\n",
     ],
 )
 def test_trivial_python_controls_pass(source):
@@ -107,6 +112,21 @@ def test_trivial_python_controls_pass(source):
 def test_javascript_control_flow_and_api_logic_is_substantive():
     source = "for (const item of items) { await api.update(item); }\n"
     assert load_policy().classify_source("worker.js", source).kind == "substantive"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "rm ledger.txt\n", "touch /tmp/x\n", "mkdir /tmp/x\n",
+        "curl -X POST https://example.test/items -d x=1\n",
+        "curl --request=POST https://example.test/items\n",
+        "echo '#!/bin/sh' > generated.sh\n",
+    ],
+)
+def test_shell_state_mutation_is_substantive(source):
+    verdict = load_policy().classify_source("worker.sh", source)
+    assert verdict.kind == "substantive"
+    assert verdict.reason == "state-mutating source"
 
 
 def test_unparseable_code_stays_unresolved():
@@ -122,11 +142,57 @@ def test_unparseable_code_stays_unresolved():
         "os.remove('x')\n",
         "requests.post(url, json=data)\n",
         "subprocess.run(['git', 'commit', '-m', 'x'])\n",
+        "subprocess.run(['touch', '/tmp/created'])\n",
+        "subprocess.run(['bash', '-c', 'rm victim'])\n",
+        "subprocess.run(['python', '-c', \"Path('/tmp/x').write_text('x')\"])\n",
+        "subprocess.run(['git', 'checkout', '-b', 'topic'])\n",
+        "subprocess.run(['git', 'diff', '--output=worker.py'])\n",
+        "subprocess.run(args=['rm', 'victim'])\n",
+        "subprocess.run('echo data > worker.py', shell=True)\n",
+        "subprocess.check_output(['rm', 'victim'])\n",
+        "os.system('touch /tmp/created')\n",
+        "os.chmod('/tmp/x', 0o600)\n",
+        "os.chown('/tmp/x', 1, 1)\n",
+        "os.truncate('/tmp/x', 0)\n",
+        "os.open('/tmp/x', os.O_WRONLY | os.O_CREAT)\n",
+        "from os import remove\nremove('/tmp/x')\n",
+        "import subprocess as sp\nsp.run(['rm', '/tmp/x'])\n",
+        "shutil.copyfile('a', 'b')\n",
         "subprocess.run(command)\n",
+        "cursor.executemany('INSERT INTO t VALUES (?)', rows)\n",
         "cursor.execute(query)\n",
         "api.delete(record_id)\n",
         "client.update(record)\n",
         "open('x', 'w').write('data')\n",
+        "open('x', mode='w')\n",
+        "mode = 'w'\nopen('x', mode=mode)\n",
+        "Path('x').open('w')\n",
+        "io.open('foo', 'w').write('x')\n",
+        "from builtins import open as op\nop('/tmp/x', 'w')\n",
+        "import builtins as b\nb.open('/tmp/x', 'w')\n",
+        "file.writelines(lines)\n",
+        "handle.write(payload)\n",
+        "fh.truncate()\n",
+        "print('x', file=handle)\n",
+        "boto3.client('s3').upload_file('a', 'bucket', 'key')\n",
+        "smtp.send_message(msg)\n",
+        "socket.sendall(data)\n",
+        "smtp.sendmail(sender, recipients, body)\n",
+        "s3.upload_fileobj(stream, 'bucket', 'key')\n",
+        "client.post('/records', json=data)\n",
+        "requests.Session().post(url, json=data)\n",
+        "httpx.Client().delete(url)\n",
+        "transport.patch(url, json=payload)\n",
+        "artifact.rename('new')\n",
+        "artifact.replace('new')\n",
+        "artifact.chmod(0o600)\n",
+        "Path('link').symlink_to('target')\n",
+        "cursor.execute('WITH doomed AS (SELECT 1) DELETE FROM t')\n",
+        "cursor.execute('VACUUM')\n",
+        "cursor.execute('PRAGMA journal_mode=WAL')\n",
+        "requests.request('POST', url, json=data)\n",
+        "requests.request(method='POST', url=url)\n",
+        "httpx.delete(url)\n",
     ],
 )
 def test_state_mutating_python_apis_are_always_substantive(source):
@@ -187,13 +253,36 @@ def test_execute_code_nested_write_is_blocked_before_kernel_dispatch():
     assert "/tmp/retract_240.py" in result["message"]
 
 
-def test_execute_code_nested_patch_is_blocked_before_kernel_dispatch():
+def test_execute_code_nested_terminal_uses_literal_workdir(tmp_path):
     plugin = load_plugin()
     ctx = FakeContext({"enabled": True})
     plugin.register(ctx)
+    assert ctx.hook is not None
+    target = tmp_path / "worker.py"
+    target.write_text("print('safe')\n")
+    (tmp_path / "notes.txt").symlink_to(target)
+    code = (
+        "from hermes_tools import terminal\n"
+        f"terminal(command=\"echo 'conn.commit()' > notes.txt\", workdir={str(tmp_path)!r})\n"
+    )
+
+    result = ctx.hook(
+        tool_name="execute_code", args={"code": code},
+        task_id="t1", session_id="s1", profile="emma",
+    )
+
+    assert "worker.py" in result["message"]
+
+
+def test_execute_code_nested_patch_is_blocked_before_kernel_dispatch(tmp_path):
+    plugin = load_plugin()
+    ctx = FakeContext({"enabled": True})
+    plugin.register(ctx)
+    target = tmp_path / "worker.py"
+    target.write_text("old\n")
     code = (
         "from hermes_tools import patch\n"
-        "patch(path='worker.py', old_string='old', "
+        f"patch(path={str(target)!r}, old_string='old', "
         "new_string='conn.commit()\\n', mode='replace')\n"
     )
 
@@ -225,15 +314,17 @@ def test_execute_code_nested_tool_call_is_blocked_before_rpc_dispatch():
     assert "worker.py" in result["message"]
 
 
-def test_patch_replace_with_mutating_source_is_blocked():
+def test_patch_replace_with_mutating_source_is_blocked(tmp_path):
     plugin = load_plugin()
     ctx = FakeContext({"enabled": True})
     plugin.register(ctx)
+    target = tmp_path / "worker.py"
+    target.write_text("return rows\n")
 
     result = ctx.hook(
         tool_name="patch",
         args={
-            "mode": "replace", "path": "worker.py", "old_string": "return rows",
+            "mode": "replace", "path": str(target), "old_string": "return rows",
             "new_string": "conn.execute('DELETE FROM rows')\nconn.commit()",
         },
         task_id="t_domain", session_id="s_domain",
@@ -265,12 +356,14 @@ def test_multi_file_patch_blocks_code_candidate_after_prose():
     assert "worker.py" in result["message"]
 
 
-def test_deletion_only_code_patch_is_unresolved_and_blocked():
+def test_deletion_only_code_patch_is_unresolved_and_blocked(tmp_path):
     plugin = load_plugin()
     ctx = FakeContext({"enabled": True})
     plugin.register(ctx)
-    payload = """*** Begin Patch
-*** Update File: worker.py
+    target = tmp_path / "worker.py"
+    target.write_text("conn.commit()\n")
+    payload = f"""*** Begin Patch
+*** Update File: {target}
 @@
 -conn.commit()
 *** End Patch
@@ -369,6 +462,43 @@ def test_exact_unexpired_exception_allows_bound_write(tmp_path):
     assert result is None
 
 
+def test_patch_exception_hash_binds_effective_artifact(tmp_path):
+    plugin = load_plugin()
+    path = tmp_path / "approved.py"
+    path.write_text("open('ledger.txt', 'r')\n")
+    effective = "open('ledger.txt', 'w')\n"
+    exception = {
+        "profile": "emma", "task_id": "t_domain", "session_id": "s_domain",
+        "path": str(path.resolve()),
+        "sha256": hashlib.sha256(effective.encode()).hexdigest(),
+        "expires_at": time.time() + 60,
+    }
+    ctx = FakeContext({"enabled": True, "exceptions": [exception]})
+    plugin.register(ctx)
+    assert ctx.hook is not None
+
+    allowed = ctx.hook(
+        tool_name="patch",
+        args={
+            "mode": "replace", "path": str(path),
+            "old_string": "'r'", "new_string": "'w'",
+        },
+        task_id="t_domain", session_id="s_domain",
+    )
+    exception["sha256"] = hashlib.sha256(b"'w'").hexdigest()
+    denied = ctx.hook(
+        tool_name="patch",
+        args={
+            "mode": "replace", "path": str(path),
+            "old_string": "'r'", "new_string": "'w'",
+        },
+        task_id="t_domain", session_id="s_domain",
+    )
+
+    assert allowed is None
+    assert denied["action"] == "block"
+
+
 @pytest.mark.parametrize(
     ("field", "wrong_value"),
     [
@@ -460,6 +590,26 @@ def test_unresolved_source_is_preserved_in_audit(tmp_path):
     assert "content" not in rows[0]
 
 
+@pytest.mark.parametrize("tool_name", ["write_file", "patch", "execute_code", "terminal"])
+def test_malformed_authoring_payload_is_blocked_and_audited(tmp_path, tool_name):
+    plugin = load_plugin()
+    audit_path = tmp_path / "audit.jsonl"
+    ctx = FakeContext({"enabled": True, "audit_path": str(audit_path)})
+    plugin.register(ctx)
+    assert ctx.hook is not None
+
+    result = ctx.hook(
+        tool_name=tool_name, args="not-an-object",
+        task_id="t_domain", session_id="s_domain",
+    )
+
+    assert result["action"] == "block"
+    assert f"unresolved {tool_name} payload" in result["message"]
+    row = json.loads(audit_path.read_text().strip())
+    assert row["classification"] == "unresolved"
+    assert row["reason"] == f"malformed {tool_name} payload"
+
+
 def test_classifier_error_fails_closed_for_code_like_write(monkeypatch):
     plugin = load_plugin()
     ctx = FakeContext({"enabled": True})
@@ -509,7 +659,9 @@ def test_exception_audit_failure_fails_closed(tmp_path, monkeypatch):
     assert "unresolved exception audit" in result["message"]
 
 
-def test_exception_path_binding_canonicalizes_relative_and_symlink_paths(tmp_path, monkeypatch):
+def test_exception_path_binding_canonicalizes_relative_symlink_and_tilde_paths(
+    tmp_path, monkeypatch,
+):
     plugin = load_plugin()
     target = tmp_path / "approved.py"
     target.write_text("placeholder\n")
@@ -525,12 +677,32 @@ def test_exception_path_binding_canonicalizes_relative_and_symlink_paths(tmp_pat
     ctx = FakeContext({"enabled": True, "exceptions": [exception]})
     plugin.register(ctx)
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
 
-    for path in ("approved.py", str(link)):
+    for path in ("approved.py", str(link), "~/approved.py"):
         assert ctx.hook(
             tool_name="write_file", args={"path": path, "content": content},
             task_id="t_domain", session_id="s_domain",
         ) is None
+
+
+def test_symlink_suffix_disagreement_considers_executable_alias(tmp_path):
+    plugin = load_plugin()
+    target = tmp_path / "notes.txt"
+    target.write_text("ordinary data\n")
+    link = tmp_path / "worker.py"
+    link.symlink_to(target)
+    ctx = FakeContext({"enabled": True})
+    plugin.register(ctx)
+    assert ctx.hook is not None
+
+    result = ctx.hook(
+        tool_name="write_file", args={"path": str(link), "content": "conn.commit()\n"},
+        task_id="t_domain", session_id="s_domain",
+    )
+
+    assert result["action"] == "block"
+    assert "worker.py" in result["message"]
 
 
 def test_concurrent_blocks_append_complete_audit_records(tmp_path):

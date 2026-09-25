@@ -9,9 +9,9 @@ When `enabled: true`, the default profile allowlist is `emma`, `sophia`, `plutus
 The policy inspects code-like payloads carried by:
 
 - `write_file`
-- replace and V4A multi-file `patch`
-- `execute_code`, including statically resolvable nested `write_file`, `patch`, `terminal`, and `tool_call` invocations
-- common non-adversarial terminal authoring forms: heredoc redirection, `echo`/`printf` redirection, and Python `-c`
+- replace and V4A multi-file `patch`, classified from the projected post-patch artifact (moves and deletion-only changes fail closed)
+- `execute_code`, including statically resolvable nested `write_file`, `patch`, `terminal`, and `tool_call` invocations; dynamic nested payloads are audited and re-evaluated at concrete RPC dispatch
+- common non-adversarial terminal authoring forms: heredoc redirection, Python stdin heredocs and `-c`, compact or spaced `echo`/`printf` redirects, append redirects, and `tee`
 
 Python source is parsed with `ast`; other supported source extensions use bounded lexical classification. State-mutating filesystem, network, subprocess, SQL, and persistence operations are substantive. Control flow combined with data/API/persistence/error-handling logic is substantive. Syntax or carrier shapes that are recognizably code-like but cannot be classified fail closed. Non-code writes, prose/data work, native domain APIs, ordinary CLI usage, and trivial one-line probes pass.
 

@@ -24,8 +24,14 @@ CODE_SUFFIXES = frozenset({
 })
 
 
+def _canonical_path(path: str) -> str:
+    if path.startswith("<") and path.endswith(">.py"):
+        return path
+    return str(Path(path).expanduser().resolve())
+
+
 def _is_code_like(path: str, content: str) -> bool:
-    return Path(path).suffix.lower() in CODE_SUFFIXES or content.startswith("#!")
+    return Path(_canonical_path(path)).suffix.lower() in CODE_SUFFIXES or content.startswith("#!")
 
 
 def _block(path: str) -> dict[str, str]:
@@ -67,7 +73,7 @@ def _exception_matches(
         "profile": profile,
         "task_id": task_id,
         "session_id": session_id,
-        "path": str(Path(path).resolve()),
+        "path": _canonical_path(path),
     }
     if any(item.get(key) != value or not value for key, value in required.items()):
         return False
@@ -79,62 +85,93 @@ def _exception_matches(
 
 
 def _evaluate(ctx, tool_name: str, args: Any, task_id: str, session_id: str):
+    def unresolved(reason: str, label: str):
+        _audit(
+            ctx, decision="block", classification="unresolved", reason=reason,
+            profile=ctx.profile_name, task_id=task_id, session_id=session_id,
+            tool_name=tool_name, path="", content_sha256="",
+        )
+        return _block(label)
+
     if not isinstance(args, dict):
-        return _block("the unresolved code-like write") if tool_name in {
-            "write_file", "patch", "execute_code"
-        } else None
+        if tool_name in {"write_file", "patch", "execute_code", "terminal"}:
+            return unresolved(
+                f"malformed {tool_name} payload", f"the unresolved {tool_name} payload",
+            )
+        return None
     candidates: list[tuple[str, str]] = []
     if tool_name == "write_file":
         path, content = args.get("path"), args.get("content")
         if not isinstance(path, str) or not isinstance(content, str):
-            return _block("the unresolved code-like write")
+            return unresolved("malformed write_file payload", "the unresolved write_file payload")
         candidates = [(path, content)]
     elif tool_name == "patch":
         extracted = patch_candidates(args)
         if extracted is None:
-            return _block("the unresolved code-like patch")
+            return unresolved("unresolved patch projection", "the unresolved patch payload")
         candidates = extracted
     elif tool_name == "execute_code":
         code = args.get("code")
         if not isinstance(code, str):
-            return _block("the unresolved code-like write")
+            return unresolved("malformed execute_code payload", "the unresolved execute_code payload")
         embedded = embedded_write_candidates(code)
+        candidates = [("<execute_code>.py", code)]
         if embedded is None:
-            return _block("the unresolved execute_code source")
-        candidates = [("<execute_code>.py", code), *embedded]
+            audited = _audit(
+                ctx, decision="defer_nested", classification="unresolved",
+                reason="nested payload deferred to concrete RPC dispatch",
+                profile=ctx.profile_name, task_id=task_id, session_id=session_id,
+                tool_name=tool_name, path="<execute_code>.py",
+                content_sha256=hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            )
+            if not audited:
+                return _block("the unresolved nested-dispatch audit")
+        else:
+            candidates.extend(embedded)
     elif tool_name == "terminal":
         command = args.get("command")
         if not isinstance(command, str):
-            return None
-        candidates = terminal_candidates(command)
+            return unresolved("malformed terminal payload", "the unresolved terminal payload")
+        workdir = args.get("workdir")
+        if workdir is not None and not isinstance(workdir, str):
+            return unresolved("malformed terminal workdir", "the unresolved terminal payload")
+        extracted = terminal_candidates(command, workdir)
+        if extracted is None:
+            return unresolved("unresolved terminal authoring target", "the unresolved terminal payload")
+        candidates = extracted
     else:
         return None
     exceptions = ctx.get_config("exceptions", [])
     exceptions = exceptions if isinstance(exceptions, list) else []
     for path, content in candidates:
-        if not _is_code_like(path, content):
+        effective_path = _canonical_path(path)
+        submitted_code_like = (
+            Path(path).expanduser().suffix.lower() in CODE_SUFFIXES
+            or content.startswith("#!")
+        )
+        if not (_is_code_like(effective_path, content) or submitted_code_like):
             continue
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         if any(_exception_matches(
             item, profile=ctx.profile_name, task_id=task_id,
-            session_id=session_id, path=path, content=content,
+            session_id=session_id, path=effective_path, content=content,
         ) for item in exceptions):
             audited = _audit(
                 ctx, decision="allow_exception", classification="exception",
                 reason="exact bounded exception", profile=ctx.profile_name,
                 task_id=task_id, session_id=session_id, tool_name=tool_name,
-                path=str(Path(path).resolve()), content_sha256=digest,
+                path=effective_path, content_sha256=digest,
             )
             if not audited:
                 return _block("the unresolved exception audit")
             continue
-        verdict = classify_source(path, content)
+        verdict = classify_source(effective_path, content)
         if verdict.kind in {"substantive", "unresolved"}:
             _audit(
                 ctx, decision="block", classification=verdict.kind,
                 reason=verdict.reason, profile=ctx.profile_name,
                 task_id=task_id, session_id=session_id, tool_name=tool_name,
-                path=str(Path(path).resolve()), content_sha256=digest,
+                path=effective_path, content_sha256=digest,
             )
             return _block(path)
     return None
