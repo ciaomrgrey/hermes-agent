@@ -25,13 +25,11 @@ CODE_SUFFIXES = frozenset({
 
 
 def _canonical_path(path: str) -> str:
-    if path.startswith("<") and path.endswith(">.py"):
-        return path
     return str(Path(path).expanduser().resolve())
 
 
 def _is_code_like(path: str, content: str) -> bool:
-    return Path(_canonical_path(path)).suffix.lower() in CODE_SUFFIXES or content.startswith("#!")
+    return Path(path).suffix.lower() in CODE_SUFFIXES or content.startswith("#!")
 
 
 def _block(path: str) -> dict[str, str]:
@@ -61,6 +59,7 @@ def _audit(ctx, **fields: Any) -> bool:
 
 def _exception_matches(
     item: Any, *, profile: str, task_id: str, session_id: str, path: str, content: str,
+    synthetic_path: bool = False,
 ) -> bool:
     if not isinstance(item, dict):
         return False
@@ -73,7 +72,7 @@ def _exception_matches(
         "profile": profile,
         "task_id": task_id,
         "session_id": session_id,
-        "path": _canonical_path(path),
+        "path": path if synthetic_path else _canonical_path(path),
     }
     if any(item.get(key) != value or not value for key, value in required.items()):
         return False
@@ -99,23 +98,24 @@ def _evaluate(ctx, tool_name: str, args: Any, task_id: str, session_id: str):
                 f"malformed {tool_name} payload", f"the unresolved {tool_name} payload",
             )
         return None
-    candidates: list[tuple[str, str]] = []
+    # The third field marks an internal synthetic carrier, never a filesystem path.
+    candidates: list[tuple[str, str, bool]] = []
     if tool_name == "write_file":
         path, content = args.get("path"), args.get("content")
         if not isinstance(path, str) or not isinstance(content, str):
             return unresolved("malformed write_file payload", "the unresolved write_file payload")
-        candidates = [(path, content)]
+        candidates = [(path, content, False)]
     elif tool_name == "patch":
         extracted = patch_candidates(args)
         if extracted is None:
             return unresolved("unresolved patch projection", "the unresolved patch payload")
-        candidates = extracted
+        candidates = [(path, content, False) for path, content in extracted]
     elif tool_name == "execute_code":
         code = args.get("code")
         if not isinstance(code, str):
             return unresolved("malformed execute_code payload", "the unresolved execute_code payload")
         embedded = embedded_write_candidates(code)
-        candidates = [("<execute_code>.py", code)]
+        candidates = [("<execute_code>.py", code, True)]
         if embedded is None:
             audited = _audit(
                 ctx, decision="defer_nested", classification="unresolved",
@@ -143,8 +143,8 @@ def _evaluate(ctx, tool_name: str, args: Any, task_id: str, session_id: str):
         return None
     exceptions = ctx.get_config("exceptions", [])
     exceptions = exceptions if isinstance(exceptions, list) else []
-    for path, content in candidates:
-        effective_path = _canonical_path(path)
+    for path, content, synthetic_path in candidates:
+        effective_path = path if synthetic_path else _canonical_path(path)
         submitted_code_like = (
             Path(path).expanduser().suffix.lower() in CODE_SUFFIXES
             or content.startswith("#!")
@@ -155,6 +155,7 @@ def _evaluate(ctx, tool_name: str, args: Any, task_id: str, session_id: str):
         if any(_exception_matches(
             item, profile=ctx.profile_name, task_id=task_id,
             session_id=session_id, path=effective_path, content=content,
+            synthetic_path=synthetic_path,
         ) for item in exceptions):
             audited = _audit(
                 ctx, decision="allow_exception", classification="exception",
@@ -165,7 +166,27 @@ def _evaluate(ctx, tool_name: str, args: Any, task_id: str, session_id: str):
             if not audited:
                 return _block("the unresolved exception audit")
             continue
-        verdict = classify_source(effective_path, content)
+        classification_paths: list[str] = []
+        for classification_path in (path, effective_path):
+            if (
+                Path(classification_path).expanduser().suffix.lower() in CODE_SUFFIXES
+                and classification_path not in classification_paths
+            ):
+                classification_paths.append(classification_path)
+        if content.startswith("#!") and not classification_paths:
+            classification_paths.append(path)
+        verdicts = [
+            classify_source(
+                classification_path,
+                content,
+                allow_native_rpc=synthetic_path,
+            )
+            for classification_path in classification_paths
+        ]
+        verdict = next(
+            (item for item in verdicts if item.kind == "substantive"),
+            next((item for item in verdicts if item.kind == "unresolved"), verdicts[0]),
+        )
         if verdict.kind in {"substantive", "unresolved"}:
             _audit(
                 ctx, decision="block", classification=verdict.kind,

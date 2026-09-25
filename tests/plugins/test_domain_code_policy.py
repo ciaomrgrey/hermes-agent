@@ -99,10 +99,13 @@ def test_recorded_domain_fixtures_are_substantive(fixture_name):
 @pytest.mark.parametrize(
     "source",
     [
-        "print('ok')\n", "value = 1\n", "import json\n", "items.append(value)\n",
-        "text.replace('a', 'b')\n", "payload.update(other)\n",
-        "io.open('data.txt', 'r').read()\n",
-        "os.open('away.txt', os.O_RDONLY)\n",
+        "print('ok')\n", "value = 1\n", "import json\n",
+        "items = []\nvalue = 1\nitems.append(value)\n",
+        "text = 'abc'\ntext.replace('a', 'b')\n",
+        "payload = {}\nother = {}\npayload.update(other)\n",
+        "print('ok')\nprint = 1\n",
+        "import io\nio.open('data.txt', 'r').read()\n",
+        "import os\nos.open('away.txt', os.O_RDONLY)\n",
     ],
 )
 def test_trivial_python_controls_pass(source):
@@ -112,6 +115,113 @@ def test_trivial_python_controls_pass(source):
 def test_javascript_control_flow_and_api_logic_is_substantive():
     source = "for (const item of items) { await api.update(item); }\n"
     assert load_policy().classify_source("worker.js", source).kind == "substantive"
+
+
+@pytest.mark.parametrize(
+    ("path", "source"),
+    [
+        ("worker.js", "require('fs').writeFileSync('ledger.txt', 'changed')\n"),
+        ("worker.sh", "git commit -am change\n"),
+        ("worker.sh", "echo $(git commit -am change)\n"),
+        ("worker.sh", "git diff --output=/tmp/ledger.patch\n"),
+        ("worker.sh", "git show --output=/tmp/ledger.txt HEAD\n"),
+        ("worker.py", "df.to_csv('ledger.csv')\n"),
+    ],
+)
+def test_additional_ordinary_mutation_primitives_are_substantive(path, source):
+    verdict = load_policy().classify_source(path, source)
+
+    assert verdict.kind == "substantive"
+    assert verdict.reason == "state-mutating source"
+
+
+@pytest.mark.parametrize(
+    ("path", "source"),
+    [
+        ("worker.py", "custom_operation(record)\n"),
+        ("worker.py", "client.get(url)\n"),
+        ("worker.py", "ledger.append(record)\n"),
+        ("worker.py", "import json\njson.loads(payload, object_hook=custom_operation)\n"),
+        ("worker.js", "customOperation(record)\n"),
+        ("worker.js", "console.log(customOperation(record))\n"),
+        ("worker.sh", "custom-command record\n"),
+        ("worker.sh", "echo <(custom-command record)\n"),
+        ("worker.sh", "echo >(custom-command record)\n"),
+        ("worker.sh", "echo safe; custom-command record\n"),
+        ("worker.sh", "echo safe && custom-command record\n"),
+        ("worker.sh", "./echo destructive-action\n"),
+        ("worker.sh", "/tmp/date --set=tomorrow\n"),
+        ("worker.sh", "git diff --ext-diff\n"),
+        ("worker.sh", "//bin/sh -c destructive-action\n"),
+        ("worker.sh", "//tmp/custom-command record\n"),
+        ("worker.sh", "echo $(custom-command record)\n"),
+    ],
+)
+def test_unknown_executable_semantics_stay_unresolved(path, source):
+    verdict = load_policy().classify_source(path, source)
+
+    assert verdict.kind == "unresolved"
+    assert verdict.reason == "source could not be classified"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import os\nterminal = os.system\nterminal('touch /tmp/x')\n",
+        "import os\nhermes_tools = os\nhermes_tools.system('touch /tmp/x')\n",
+        "print = custom_operation\nprint(record)\n",
+        "records = client\nrecords.append(record)\n",
+        "import custom_module\n",
+        "record['approved'] = True\n",
+        "record.approved = True\n",
+        "record << payload\n",
+        "import os\nimport hermes_tools\nhermes_tools.terminal = os.system\n"
+        "hermes_tools.terminal('touch /tmp/x')\n",
+        "import hermes_tools\nhermes_tools.os.system('touch /tmp/x')\n",
+        "from hermes_tools import os\nos.system('touch /tmp/x')\n",
+        "import hermes_tools\nhermes_tools._call('terminal', {})\n",
+        "import hermes_tools\nx: hermes_tools.os.system('touch /tmp/x') = 1\n",
+        "from os import *\nopen('/tmp/x', flags=577)\n",
+        "terminal('touch /tmp/x')\nfrom hermes_tools import terminal\n",
+        "records.update({'approved': True})\nrecords = {}\n",
+        "items.append(value)\nitems = []\nvalue = 1\n",
+        "import os\nimport json\njson.loads = os.system\njson.loads('touch /tmp/x')\n",
+        "import os\nimport builtins\nbuiltins.print = os.system\nprint('touch /tmp/x')\n",
+        "def print(value):\n    record['approved'] = value\nprint(True)\n",
+    ],
+)
+def test_native_rpc_and_trivial_names_require_proven_bindings(source):
+    verdict = load_policy().classify_source("<execute_code>.py", source, allow_native_rpc=True)
+
+    assert verdict.kind == "unresolved"
+
+
+def test_native_rpc_call_keeps_its_binding_before_later_reimport():
+    source = (
+        "from hermes_tools import terminal as invoke\n"
+        "invoke(command='pwd')\n"
+        "from os import system as invoke\n"
+    )
+
+    verdict = load_policy().classify_source(
+        "<execute_code>.py", source, allow_native_rpc=True,
+    )
+
+    assert verdict.kind == "trivial"
+
+
+def test_dangerous_binding_is_not_retroactively_replaced_by_later_import():
+    source = (
+        "from os import system as terminal\n"
+        "terminal('touch /tmp/x')\n"
+        "from hermes_tools import terminal\n"
+    )
+
+    verdict = load_policy().classify_source(
+        "<execute_code>.py", source, allow_native_rpc=True,
+    )
+
+    assert verdict.kind == "substantive"
 
 
 @pytest.mark.parametrize(
@@ -255,7 +365,8 @@ def test_execute_code_nested_write_is_blocked_before_kernel_dispatch():
 
 def test_execute_code_nested_terminal_uses_literal_workdir(tmp_path):
     plugin = load_plugin()
-    ctx = FakeContext({"enabled": True})
+    audit_path = tmp_path / "audit.jsonl"
+    ctx = FakeContext({"enabled": True, "audit_path": str(audit_path)})
     plugin.register(ctx)
     assert ctx.hook is not None
     target = tmp_path / "worker.py"
@@ -271,7 +382,86 @@ def test_execute_code_nested_terminal_uses_literal_workdir(tmp_path):
         task_id="t1", session_id="s1", profile="emma",
     )
 
-    assert "worker.py" in result["message"]
+    assert "notes.txt" in result["message"]
+    assert json.loads(audit_path.read_text())["path"] == str(target.resolve())
+
+
+@pytest.mark.parametrize("tool_name", ["write_file", "patch"])
+def test_literal_execute_sentinel_filename_is_external(
+    tmp_path, monkeypatch, tool_name,
+):
+    plugin = load_plugin()
+    ctx = FakeContext({"enabled": True})
+    plugin.register(ctx)
+    assert ctx.hook is not None
+    monkeypatch.chdir(tmp_path)
+    target = Path("<execute_code>.py")
+    original = "print('safe')\n"
+    source = "from hermes_tools import terminal\nterminal(command='pwd')\n"
+    if tool_name == "patch":
+        target.write_text(original)
+        args = {
+            "mode": "replace", "path": str(target),
+            "old_string": original.rstrip(), "new_string": source.rstrip(),
+        }
+    else:
+        args = {"path": str(target), "content": source}
+
+    result = ctx.hook(tool_name, args, "t_domain", "s_domain")
+
+    assert result and result["action"] == "block"
+
+
+@pytest.mark.parametrize("tool_name", ["write_file", "patch"])
+def test_execute_sentinel_symlink_classifies_canonical_target(
+    tmp_path, monkeypatch, tool_name,
+):
+    plugin = load_plugin()
+    ctx = FakeContext({"enabled": True})
+    plugin.register(ctx)
+    assert ctx.hook is not None
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "worker.sh"
+    original = "echo safe\n"
+    target.write_text(original)
+    alias = Path("<execute_code>.py")
+    alias.symlink_to(target)
+    source = "from hermes_tools import terminal\nterminal(command='pwd')\n"
+    if tool_name == "patch":
+        args = {
+            "mode": "replace", "path": str(alias),
+            "old_string": original.rstrip(), "new_string": source.rstrip(),
+        }
+    else:
+        args = {"path": str(alias), "content": source}
+
+    result = ctx.hook(tool_name, args, "t_domain", "s_domain")
+
+    assert result and result["action"] == "block"
+
+
+def test_terminal_synthetic_candidate_cannot_use_filesystem_exception(
+    tmp_path, monkeypatch,
+):
+    plugin = load_plugin()
+    monkeypatch.chdir(tmp_path)
+    code = "open('ledger.txt', 'w')"
+    real_path = Path("<terminal-python>.py")
+    exception = {
+        "profile": "emma", "task_id": "t_domain", "session_id": "s_domain",
+        "path": str(real_path.resolve()),
+        "sha256": hashlib.sha256(code.encode()).hexdigest(),
+        "expires_at": time.time() + 60,
+    }
+    ctx = FakeContext({"enabled": True, "exceptions": [exception]})
+    plugin.register(ctx)
+    assert ctx.hook is not None
+
+    result = ctx.hook(
+        "terminal", {"command": f"python -c {code!r}"}, "t_domain", "s_domain",
+    )
+
+    assert result and result["action"] == "block"
 
 
 def test_execute_code_nested_patch_is_blocked_before_kernel_dispatch(tmp_path):
@@ -299,7 +489,8 @@ def test_execute_code_nested_tool_call_is_blocked_before_rpc_dispatch():
     plugin = load_plugin()
     ctx = FakeContext({"enabled": True})
     plugin.register(ctx)
-    code = """tool_call(calls=[{
+    code = """from hermes_tools import tool_call
+tool_call(calls=[{
     'name': 'write_file',
     'arguments': {'path': 'worker.py', 'content': 'conn.commit()\\n'},
 }])

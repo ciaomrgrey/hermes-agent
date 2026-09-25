@@ -224,6 +224,189 @@ def test_symlink_uses_canonical_target_for_code_gating(installed_policy, tmp_pat
     assert target.read_bytes() == original
 
 
+@pytest.mark.parametrize(
+    ("name", "source"),
+    [
+        ("worker.js", "require('fs').writeFileSync('ledger.txt', 'changed')\n"),
+        ("worker.js", "console.log(customOperation(record))\n"),
+        ("worker.sh", "git commit -am change\n"),
+        ("worker.sh", "echo $(git commit -am change)\n"),
+        ("worker.sh", "echo <(custom-command record)\n"),
+        ("worker.sh", "echo >(custom-command record)\n"),
+        ("worker.sh", "git diff --output=/tmp/ledger.patch\n"),
+        ("worker.py", "df.to_csv('ledger.csv')\n"),
+        ("worker.py", "import json\njson.loads(payload, object_hook=custom_operation)\n"),
+        ("worker.py", "import custom_module\n"),
+        ("worker.py", "record['approved'] = True\n"),
+        ("worker.py", "record.approved = True\n"),
+        ("worker.py", "record << payload\n"),
+        (
+            "worker.py",
+            "import os\nimport hermes_tools\nhermes_tools.terminal = os.system\n",
+        ),
+    ],
+)
+def test_native_nontrivial_source_is_blocked_before_creation(
+    installed_policy, tmp_path, name, source,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / name
+    result = json.loads(handle_function_call(
+        "write_file", {"path": str(target), "content": source},
+        task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in result["error"]
+    assert not target.exists()
+
+
+@pytest.mark.parametrize(
+    "shadow", ["terminal", "hermes_tools", "member", "module_attr", "annotation"],
+)
+def test_execute_code_shadowed_native_name_is_blocked_before_side_effect(
+    installed_policy, tmp_path, shadow,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "escaped.txt"
+    if shadow == "terminal":
+        source = (
+            "import os\nterminal = os.system\n"
+            f"terminal('touch {target}')\n"
+        )
+    elif shadow == "hermes_tools":
+        source = (
+            "import os\nhermes_tools = os\n"
+            f"hermes_tools.system('touch {target}')\n"
+        )
+    elif shadow == "member":
+        source = (
+            "import os\nimport hermes_tools\nhermes_tools.terminal = os.system\n"
+            f"hermes_tools.terminal('touch {target}')\n"
+        )
+    elif shadow == "module_attr":
+        source = (
+            "import hermes_tools\n"
+            f"hermes_tools.os.system('touch {target}')\n"
+        )
+    else:
+        source = (
+            "import hermes_tools\n"
+            f"x: hermes_tools.os.system('touch {target}') = 1\n"
+        )
+
+    result = json.loads(handle_function_call(
+        "execute_code", {"code": source}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in result["error"]
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("tool_name", ["write_file", "patch", "terminal"])
+def test_executable_alias_to_data_target_preserves_language_identity(
+    installed_policy, tmp_path, tool_name,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "payload.txt"
+    original = b"original\n"
+    target.write_bytes(original)
+    alias = tmp_path / "worker.py"
+    alias.symlink_to(target)
+    source = "open('ledger.txt', 'w')\n"
+    if tool_name == "write_file":
+        read = json.loads(handle_function_call(
+            "read_file", {"path": str(alias)}, task_id="t_domain", session_id="s_domain",
+        ))
+        assert "original" in read.get("content", ""), read
+        args = {"path": str(alias), "content": source}
+    elif tool_name == "patch":
+        args = {
+            "mode": "replace", "path": str(alias),
+            "old_string": "original", "new_string": source.rstrip(),
+        }
+    else:
+        args = {"command": f"printf '%s\\n' \"open('ledger.txt', 'w')\" > {alias}"}
+
+    result = json.loads(handle_function_call(
+        tool_name, args, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in result["error"]
+    assert target.read_bytes() == original
+
+
+def test_data_alias_to_executable_target_still_uses_canonical_language(
+    installed_policy, tmp_path,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    original = b"print('safe')\n"
+    target.write_bytes(original)
+    alias = tmp_path / "payload.txt"
+    alias.symlink_to(target)
+
+    read = json.loads(handle_function_call(
+        "read_file", {"path": str(alias)}, task_id="t_domain", session_id="s_domain",
+    ))
+    assert "safe" in read.get("content", ""), read
+
+    result = json.loads(handle_function_call(
+        "write_file", {"path": str(alias), "content": "df.to_csv('ledger.csv')\n"},
+        task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in result["error"]
+    assert target.read_bytes() == original
+
+
+def test_patch_through_data_alias_uses_executable_target_language(
+    installed_policy, tmp_path,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    original = b"print('safe')\n"
+    target.write_bytes(original)
+    alias = tmp_path / "payload.txt"
+    alias.symlink_to(target)
+
+    result = json.loads(handle_function_call(
+        "patch",
+        {
+            "mode": "replace", "path": str(alias),
+            "old_string": "print('safe')", "new_string": "df.to_csv('ledger.csv')",
+        },
+        task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in result["error"]
+    assert target.read_bytes() == original
+
+
+def test_non_code_symlink_remains_allowed(installed_policy, tmp_path):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "payload.txt"
+    target.write_text("old\n")
+    alias = tmp_path / "notes.md"
+    alias.symlink_to(target)
+    read = json.loads(handle_function_call(
+        "read_file", {"path": str(alias)}, task_id="t_domain", session_id="s_domain",
+    ))
+    assert "old" in read.get("content", ""), read
+    result = json.loads(handle_function_call(
+        "write_file", {"path": str(alias), "content": "ordinary domain notes\n"},
+        task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert result.get("verified") is True, result
+    assert target.read_text() == "ordinary domain notes\n"
+
+
 def test_permitted_terminal_call_dispatches_once_without_approval_side_effects(
     installed_policy,
 ):

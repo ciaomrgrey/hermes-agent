@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from collections import defaultdict
 import re
 import shlex
 import subprocess
@@ -29,15 +30,22 @@ _MUTATING_METHODS = frozenset({
     "commit", "flush", "hardlink_to", "mkdir", "rmdir", "save", "send", "send_message",
     "sendall", "sendmail", "symlink_to", "touch", "truncate", "unlink", "upload",
     "upload_file", "upload_fileobj", "write_bytes", "write_text", "writelines",
+    "to_csv", "to_excel", "to_feather", "to_hdf", "to_json", "to_orc", "to_parquet",
+    "to_pickle", "to_sql",
 })
 _STATEFUL_RECEIVERS = frozenset({
     "api", "client", "collection", "conn", "connection", "cursor", "database", "db",
     "ledger", "repo", "repository", "session", "store", "table",
 })
 _LEXICAL_MUTATION = re.compile(
-    r"(?ix)(?:\b(?:delete|insert|update|drop|alter|create)\s+|"
+    r"(?imx)(?:\b(?:delete|insert|update|drop|alter|create)\s+|"
     r"(?:^|[;&|]\s*)(?:rm|mv|cp|install|tee|touch|mkdir|rmdir|chmod|chown|ln|truncate)\s+|"
-    r"\b(?:writeFile|appendFile|unlink|rename|remove|rmtree|commit)\s*\(|"
+    r"\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|unlink|rename|remove|rmtree|commit)\s*\(|"
+    r"(?:^|[;&|]\s*|\$\(\s*|`\s*)git\s+"
+    r"(?:add|am|branch|checkout|cherry-pick|clean|commit|merge|mv|"
+    r"pull|push|rebase|reset|restore|rm|stash|switch|tag)\b|"
+    r"(?:^|[;&|]\s*)git\s+(?:blame|diff|log|show)\b[^\n]*"
+    r"(?:\s-o(?:\s|=)|\s--output(?:\s|=))|"
     r"\bcurl\b[^\n]*(?:-X\s*(?:POST|PUT|PATCH|DELETE)|--request\s*=?\s*(?:POST|PUT|PATCH|DELETE)|"
     r"-d\b|--data\b|--upload-file\b|-T\b)|"
     r"\bwget\b[^\n]*(?:--post-data|--post-file|--method\s*=?(?:POST|PUT|PATCH|DELETE))|"
@@ -50,52 +58,76 @@ _LEXICAL_LOGIC = re.compile(
 )
 
 
-def classify_source(path: str, source: str) -> Verdict:
+def classify_source(path: str, source: str, *, allow_native_rpc: bool = False) -> Verdict:
     """Classify source payloads without executing them."""
     suffix = Path(path).suffix.lower()
     if suffix not in _PYTHON_SUFFIXES:
+        if suffix in _SHELL_SUFFIXES and re.search(r"[<>]\(", source):
+            return Verdict("unresolved", "source could not be classified")
         if _LEXICAL_MUTATION.search(source):
             return Verdict("substantive", "state-mutating source")
         if suffix in _SHELL_SUFFIXES and re.search(r"(?:^|\s)(?:\d*)>{1,2}\s*\S", source):
             return Verdict("substantive", "state-mutating source")
         if _LEXICAL_CONTROL.search(source) and _LEXICAL_LOGIC.search(source):
             return Verdict("substantive", "substantive control flow and logic")
-        if source.strip() and ("\n" in source.strip() or ";" in source):
-            return Verdict("unresolved", "source could not be classified")
-        return Verdict("trivial", "no substantive source semantics")
+        if _is_proven_trivial_non_python(suffix, source):
+            return Verdict("trivial", "no substantive source semantics")
+        return Verdict("unresolved", "source could not be classified")
     try:
         tree = ast.parse(source, filename=path)
     except (SyntaxError, ValueError):
         return Verdict("unresolved", "source could not be classified")
-    aliases: dict[str, str] = {}
-    for imported in ast.walk(tree):
-        if isinstance(imported, ast.Import):
-            for item in imported.names:
-                aliases[item.asname or item.name.split(".", 1)[0]] = item.name
-        elif isinstance(imported, ast.ImportFrom) and imported.module:
-            for item in imported.names:
-                aliases[item.asname or item.name] = f"{imported.module}.{item.name}"
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        name = _expand_alias(_call_name(node.func), aliases)
-        if _is_mutating_call(node, name):
-            return Verdict("substantive", "state-mutating source")
-        if name.rsplit(".", 1)[-1] in {"execute", "executemany", "executescript"} and node.args:
-            value = node.args[0]
-            if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
-                return Verdict("substantive", "state-mutating source")
-            statements = [part.lstrip().lower() for part in value.value.split(";") if part.strip()]
-            if any(
-                not statement.startswith(("select ", "explain "))
-                for statement in statements
-            ):
-                return Verdict("substantive", "state-mutating source")
+    if _has_ordered_mutation(tree):
+        return Verdict("substantive", "state-mutating source")
     has_control_flow = any(isinstance(node, _CONTROL_FLOW) for node in ast.walk(tree))
     has_logic = any(_is_logic(node) for node in ast.walk(tree))
     if has_control_flow and has_logic:
         return Verdict("substantive", "substantive control flow and logic")
-    return Verdict("trivial", "no substantive source semantics")
+    if _is_proven_trivial_python(tree, {}, allow_native_rpc):
+        return Verdict("trivial", "no substantive source semantics")
+    return Verdict("unresolved", "source could not be classified")
+
+
+def _has_ordered_mutation(tree: ast.Module) -> bool:
+    aliases: dict[str, str] = {}
+    for statement in tree.body:
+        if isinstance(statement, ast.Import):
+            for item in statement.names:
+                aliases[item.asname or item.name.split(".", 1)[0]] = item.name
+            continue
+        if isinstance(statement, ast.ImportFrom) and statement.module:
+            for item in statement.names:
+                aliases[item.asname or item.name] = f"{statement.module}.{item.name}"
+            continue
+        for node in ast.walk(statement):
+            if not isinstance(node, ast.Call):
+                continue
+            name = _expand_alias(_call_name(node.func), aliases)
+            if _is_mutating_call(node, name):
+                return True
+            if name.rsplit(".", 1)[-1] in {"execute", "executemany", "executescript"} and node.args:
+                value = node.args[0]
+                if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
+                    return True
+                statements = [
+                    part.lstrip().lower() for part in value.value.split(";") if part.strip()
+                ]
+                if any(
+                    not sql_statement.startswith(("select ", "explain "))
+                    for sql_statement in statements
+                ):
+                    return True
+        rebound: set[str] = set()
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Assign):
+                rebound.update(*(_assigned_target_names(item) for item in node.targets))
+            elif isinstance(node, ast.AnnAssign):
+                rebound.update(_assigned_target_names(node.target))
+            elif isinstance(node, ast.NamedExpr):
+                rebound.update(_assigned_target_names(node.target))
+        for name in rebound:
+            aliases.pop(name, None)
+    return False
 
 
 _CONTROL_FLOW = (
@@ -108,6 +140,296 @@ def _is_logic(node: ast.AST) -> bool:
     if isinstance(node, ast.Call):
         return _call_name(node.func) not in {"print"}
     return isinstance(node, (ast.BinOp, ast.BoolOp, ast.Compare, ast.comprehension))
+
+
+_TRIVIAL_SHELL_COMMANDS = frozenset({
+    "echo", "false", "printf", "pwd", "true",
+})
+
+
+def _is_proven_trivial_non_python(suffix: str, source: str) -> bool:
+    stripped = source.strip()
+    comment_prefixes = ("#",) if suffix in _SHELL_SUFFIXES else ("#", "//")
+    if not stripped or all(
+        not line.strip() or line.lstrip().startswith(comment_prefixes)
+        for line in source.splitlines()
+    ):
+        return True
+    if suffix in _SHELL_SUFFIXES:
+        for line in source.splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if "$(" in line or "`" in line:
+                return False
+            tokens = _shell_tokens(line)
+            if not tokens or any(
+                token in {";", "&", "&&", "||", "|", "<", ">", ">>"}
+                for token in tokens
+            ):
+                return False
+            executable = tokens[0].rsplit("/", 1)[-1]
+            if tokens[0] != executable or executable not in _TRIVIAL_SHELL_COMMANDS:
+                return False
+        return True
+    return bool(
+        re.fullmatch(
+            r"(?:console\.log|print)\s*\(\s*"
+            r"(?:[-+]?\d+(?:\.\d+)?|true|false|null|undefined|['\"][^'\"]*['\"])"
+            r"\s*\);?",
+            stripped,
+        )
+        or re.fullmatch(
+            r"(?:const|let|var)?\s*[A-Za-z_$][\w$]*\s*=\s*"
+            r"(?:[-+]?\d+(?:\.\d+)?|true|false|null|undefined|['\"][^'\"]*['\"]);?",
+            stripped,
+        )
+    )
+
+
+_SAFE_IMPORT_MODULES = frozenset({"builtins", "hermes_tools", "io", "json", "os"})
+_NATIVE_RPC_FUNCTIONS = frozenset({
+    "hermes_tools.patch",
+    "hermes_tools.terminal",
+    "hermes_tools.tool_call",
+    "hermes_tools.write_file",
+})
+
+
+def _is_proven_trivial_python(
+    tree: ast.Module, aliases: dict[str, str], allow_native_rpc: bool,
+) -> bool:
+    bound: set[str] = set()
+    reassigned: set[str] = set()
+    safe_receivers: set[str] = set()
+    active_aliases: dict[str, str] = {}
+
+    def safe_binding(node: ast.AST) -> bool:
+        if isinstance(node, (ast.Constant, ast.Dict, ast.List, ast.Set, ast.Tuple)):
+            return True
+        if isinstance(node, ast.Name):
+            return node.id in safe_receivers
+        return bool(
+            isinstance(node, ast.Call)
+            and allow_native_rpc
+            and _is_imported_native_rpc(node, active_aliases, reassigned)
+        )
+
+    def safe_expression(node: ast.AST) -> bool:
+        if isinstance(node, ast.Constant):
+            return True
+        if isinstance(node, ast.Name):
+            return node.id in safe_receivers
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return all(safe_expression(item) for item in node.elts)
+        if isinstance(node, ast.Dict):
+            return all(
+                (key is None or safe_expression(key)) and safe_expression(value)
+                for key, value in zip(node.keys, node.values)
+            )
+        if isinstance(node, ast.Attribute):
+            root = _call_name(node).partition(".")[0]
+            return active_aliases.get(root) == "os" and node.attr == "O_RDONLY"
+        if isinstance(node, ast.Call):
+            if not _is_proven_trivial_python_call(
+                node, active_aliases, allow_native_rpc, bound, reassigned, safe_receivers,
+            ):
+                return False
+            return all(safe_expression(item) for item in node.args) and all(
+                keyword.arg is not None and safe_expression(keyword.value)
+                for keyword in node.keywords
+            )
+        return False
+
+    for statement in tree.body:
+        if isinstance(statement, ast.Import):
+            if any(item.name not in _SAFE_IMPORT_MODULES for item in statement.names):
+                return False
+            for item in statement.names:
+                local_name = item.asname or item.name.split(".", 1)[0]
+                active_aliases[local_name] = item.name
+                safe_receivers.discard(local_name)
+                bound.add(local_name)
+                reassigned.discard(local_name)
+            continue
+        if isinstance(statement, ast.ImportFrom):
+            if (
+                statement.level
+                or statement.module not in _SAFE_IMPORT_MODULES
+                or any(item.name == "*" for item in statement.names)
+            ):
+                return False
+            if statement.module == "hermes_tools" and any(
+                f"hermes_tools.{item.name}" not in _NATIVE_RPC_FUNCTIONS
+                for item in statement.names
+            ):
+                return False
+            for item in statement.names:
+                local_name = item.asname or item.name
+                active_aliases[local_name] = f"{statement.module}.{item.name}"
+                safe_receivers.discard(local_name)
+                bound.add(local_name)
+                reassigned.discard(local_name)
+            continue
+        if isinstance(statement, ast.Assign):
+            if not all(isinstance(target, ast.Name) for target in statement.targets):
+                return False
+            if not safe_expression(statement.value):
+                return False
+            binding_is_safe = safe_binding(statement.value)
+            for target in statement.targets:
+                if not isinstance(target, ast.Name):
+                    return False
+                active_aliases.pop(target.id, None)
+                if binding_is_safe:
+                    safe_receivers.add(target.id)
+                else:
+                    safe_receivers.discard(target.id)
+                bound.add(target.id)
+                reassigned.add(target.id)
+            continue
+        if isinstance(statement, ast.AnnAssign):
+            return False
+        if isinstance(statement, ast.Expr):
+            if not safe_expression(statement.value):
+                return False
+            continue
+        if isinstance(statement, ast.Pass):
+            continue
+        return False
+    return True
+
+
+def _is_proven_trivial_python_call(
+    node: ast.Call,
+    aliases: dict[str, str],
+    allow_native_rpc: bool,
+    bound_names: set[str],
+    reassigned_names: set[str],
+    safe_receivers: set[str],
+) -> bool:
+    raw_name = _call_name(node.func)
+    name = _expand_alias(raw_name, aliases)
+    root = raw_name.partition(".")[0]
+    method = name.rsplit(".", 1)[-1]
+    receiver = raw_name.rsplit(".", 1)[0].split(".", 1)[0] if "." in raw_name else ""
+    if allow_native_rpc and _is_imported_native_rpc(node, aliases, reassigned_names):
+        return True
+    if raw_name == name and name not in bound_names and name in {
+        "abs", "all", "any", "bool", "dict", "enumerate", "float", "int", "len",
+        "list", "max", "min", "print", "range", "repr", "set", "sorted", "str",
+        "sum", "tuple", "zip",
+    }:
+        return True
+    if name in {"json.dumps", "json.loads"} and root not in reassigned_names:
+        imported = aliases.get(root, "")
+        if imported == "json" or imported in {"json.dumps", "json.loads"}:
+            callback_keywords = {
+                "cls", "default", "object_hook", "object_pairs_hook", "parse_constant",
+                "parse_float", "parse_int",
+            }
+            return not any(keyword.arg in callback_keywords for keyword in node.keywords)
+    if receiver in safe_receivers and method in {
+        "append", "copy", "count", "endswith", "extend", "find", "get", "index", "items",
+        "join", "keys", "lower", "lstrip", "removeprefix", "removesuffix", "rstrip",
+        "split", "splitlines", "startswith", "strip", "upper", "values",
+    }:
+        return True
+    if method == "update" and receiver in safe_receivers:
+        return True
+    if method == "replace" and receiver in safe_receivers:
+        return True
+    if method == "read" and receiver in safe_receivers:
+        return True
+    if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Call):
+        if method == "read":
+            return _is_proven_trivial_python_call(
+                node.func.value,
+                aliases,
+                allow_native_rpc,
+                bound_names,
+                reassigned_names,
+                safe_receivers,
+            )
+    if name == "os.open":
+        return aliases.get(root) == "os" and not _is_mutating_call(node, name)
+    if raw_name == "open" and raw_name not in bound_names:
+        return not _is_mutating_call(node, name)
+    if name in {"builtins.open", "io.open"} and aliases.get(root) in {
+        "builtins", "builtins.open", "io", "io.open",
+    }:
+        return not _is_mutating_call(node, name)
+    return False
+
+
+def _assigned_target_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return set().union(*(_assigned_target_names(item) for item in node.elts))
+    return set()
+
+
+def _is_literal_memory_value(node: ast.AST) -> bool:
+    return isinstance(
+        node,
+        (
+            ast.Constant, ast.Dict, ast.DictComp, ast.List, ast.ListComp,
+            ast.Set, ast.SetComp, ast.Tuple,
+        ),
+    )
+
+
+def _is_imported_native_rpc(
+    node: ast.Call, aliases: dict[str, str], reassigned_names: set[str],
+) -> bool:
+    raw_name = _call_name(node.func)
+    root = raw_name.partition(".")[0]
+    imported = aliases.get(root, "")
+    return bool(
+        root not in reassigned_names
+        and (imported == "hermes_tools" or imported.startswith("hermes_tools."))
+        and _expand_alias(raw_name, aliases) in _NATIVE_RPC_FUNCTIONS
+    )
+
+
+def _python_bindings(
+    tree: ast.AST, aliases: dict[str, str], allow_native_rpc: bool,
+) -> tuple[set[str], set[str], set[str]]:
+    bound = set(aliases)
+    reassigned: set[str] = set()
+    assignments: dict[str, list[bool]] = defaultdict(list)
+    for node in ast.walk(tree):
+        targets: set[str] = set()
+        value: ast.AST | None = None
+        if isinstance(node, ast.Assign):
+            targets = set().union(*(_assigned_target_names(item) for item in node.targets))
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = _assigned_target_names(node.target)
+            value = node.value
+        elif isinstance(node, ast.NamedExpr):
+            targets = _assigned_target_names(node.target)
+            value = node.value
+        elif isinstance(node, ast.arg):
+            targets = {node.arg}
+        if not targets:
+            continue
+        bound.update(targets)
+        reassigned.update(targets)
+        safe = value is not None and (
+            _is_literal_memory_value(value)
+            or (
+                allow_native_rpc
+                and isinstance(value, ast.Call)
+                and _is_imported_native_rpc(value, aliases, reassigned - targets)
+            )
+        )
+        for target in targets:
+            assignments[target].append(safe)
+    safe_receivers = {
+        name for name, verdicts in assignments.items() if verdicts and all(verdicts)
+    }
+    return bound, reassigned, safe_receivers
 
 
 def _expand_alias(name: str, aliases: dict[str, str]) -> str:
@@ -346,7 +668,7 @@ def _resolve_shell_target(target: str, base: Path, variables: dict[str, str]) ->
     path = Path(target).expanduser()
     if not path.is_absolute():
         path = base / path
-    return str(path.resolve())
+    return str(path.absolute())
 
 
 def _shell_literal_body(tokens: list[str]) -> str | None:
@@ -401,10 +723,10 @@ def _pipeline_body(tokens: list[str], stop: int) -> str | None:
 
 def terminal_candidates(
     command: str, workdir: str | None = None,
-) -> list[tuple[str, str]] | None:
+) -> list[tuple[str, str, bool]] | None:
     """Extract common shell authoring in execution order."""
     lines = command.splitlines()
-    found: list[tuple[str, str]] = []
+    found: list[tuple[str, str, bool]] = []
     projected: dict[str, str] = {}
     variables: dict[str, str] = {}
     base = Path(workdir).expanduser().resolve() if workdir else Path.cwd()
@@ -416,7 +738,7 @@ def terminal_candidates(
         else:
             content = _effective_redirect_content(target, body, append)
         projected[canonical] = content
-        found.append((target, content))
+        found.append((target, content, False))
 
     index = 0
     while index < len(lines):
@@ -456,9 +778,10 @@ def terminal_candidates(
                     "<terminal-python>.py",
                     segment[code_index] if code_index < len(segment)
                     else "def <unresolved>(:\npass",
+                    True,
                 ))
             elif body_source is not None:
-                found.append(("<terminal-python>.py", body_source))
+                found.append(("<terminal-python>.py", body_source, True))
 
         segment_start = 0
         for segment_end in range(len(tokens) + 1):
@@ -690,15 +1013,22 @@ def patch_candidates(args: dict[str, object]) -> list[tuple[str, str]] | None:
     return found
 
 
-def _invocation_candidates(name: str, arguments: object) -> list[tuple[str, str]] | None:
+def _invocation_candidates(name: str, arguments: object) -> list[tuple[str, str, bool]] | None:
     if not isinstance(arguments, dict):
         return None
     short_name = name.rsplit(".", 1)[-1]
     if short_name == "write_file":
         path, content = arguments.get("path"), arguments.get("content")
-        return [(path, content)] if isinstance(path, str) and isinstance(content, str) else None
+        return (
+            [(path, content, False)]
+            if isinstance(path, str) and isinstance(content, str) else None
+        )
     if short_name == "patch":
-        return patch_candidates(arguments)
+        extracted = patch_candidates(arguments)
+        return (
+            [(path, content, False) for path, content in extracted]
+            if extracted is not None else None
+        )
     if short_name == "terminal":
         command = arguments.get("command")
         workdir = arguments.get("workdir")
@@ -708,13 +1038,13 @@ def _invocation_candidates(name: str, arguments: object) -> list[tuple[str, str]
     return []
 
 
-def embedded_write_candidates(source: str) -> list[tuple[str, str]] | None:
+def embedded_write_candidates(source: str) -> list[tuple[str, str, bool]] | None:
     """Return statically resolvable nested authoring payloads from execute_code."""
     try:
         tree = ast.parse(source, filename="<execute_code>")
     except (SyntaxError, ValueError):
         return None
-    found: list[tuple[str, str]] = []
+    found: list[tuple[str, str, bool]] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
