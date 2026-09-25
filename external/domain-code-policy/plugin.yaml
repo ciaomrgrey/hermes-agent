@@ -1,0 +1,5 @@
+name: domain-code-policy
+version: "0.1.0"
+description: "Default-off pre-dispatch admission for substantive executable tooling authored by configured domain profiles."
+hooks:
+  - pre_tool_call
