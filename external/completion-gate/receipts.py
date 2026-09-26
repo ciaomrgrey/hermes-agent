@@ -16,7 +16,8 @@ from pathlib import Path
 
 _CARD = re.compile(r"\bt_[0-9a-f]{8}\b", re.I)
 _ARCHIVE_ONLY = re.compile(
-    r"^\s*(?:SWITCHBOARD-ARCHIVE|STATUS-REQUEST|BOT-WAKE)-[A-Z0-9_-]+\b", re.I)
+    r"^\s*(?:SWITCHBOARD-ARCHIVE|STATUS-REQUEST|BOT-WAKE|COMPLETION(?:-RECEIPT)?|"
+    r"CLOSURE|RESULT|RELEASE|FOLLOW-UP)-[A-Z0-9_-]+\b", re.I)
 _CONSULTATION_ONLY = re.compile(r"^\s*DECISION-[A-Z0-9_-]+\s*:.*\?\s*$", re.I | re.S)
 _INACTION = re.compile(
     r"\b(?:did not|could not|cannot|can't|will not|won't|nothing I can do|no(?:thing)?\s*[-—:]?\s*not between messages|"
@@ -163,6 +164,8 @@ def _receipt_connect(path):
     )""")
     db.execute("""CREATE INDEX IF NOT EXISTS completion_receipts_source
         ON completion_receipts(profile,session_id,source_channel,source_request_id,source_timestamp)""")
+    db.execute("""CREATE INDEX IF NOT EXISTS completion_receipts_stable_source
+        ON completion_receipts(profile,source_channel,source_request_id)""")
     db.commit()
     return db
 
@@ -186,10 +189,9 @@ def _append_receipt(db, record, disposition, message_id=""):
 
 def _latest_source_receipt(db, record):
     return db.execute("""SELECT * FROM completion_receipts
-        WHERE profile=? AND session_id=? AND source_channel=? AND source_request_id=?
-        AND source_timestamp=? ORDER BY id DESC LIMIT 1""", (
-        record["profile"], record["session_id"], record["source_channel"],
-        record["source_request_id"], record["source_timestamp"],
+        WHERE profile=? AND source_channel=? AND source_request_id=?
+        ORDER BY id DESC LIMIT 1""", (
+        record["profile"], record["source_channel"], record["source_request_id"],
     )).fetchone()
 
 
@@ -302,6 +304,8 @@ def receipt_send(settings, *, source_request_id, card_id, message_file):
         settings.get("state_db_path"), session_id, source_request_id, source_timestamp)
     if action is None or card_id not in action["cards"]:
         raise ValueError("source_turn_action_missing")
+    if not action["source_is_current"]:
+        raise ValueError("source_not_current")
 
     record = {
         "profile": profile, "session_id": session_id, "source_channel": channel,
@@ -393,10 +397,10 @@ def _durable_receipt_row(settings, source_identity, session_id):
         with _open_readonly(settings.get("db_path")) as db:
             db.row_factory = sqlite3.Row
             row = db.execute("""SELECT * FROM completion_receipts
-                WHERE profile=? AND session_id=? AND source_channel=? AND source_request_id=?
-                AND source_timestamp=? ORDER BY id DESC LIMIT 1""", (
-                source_identity.get("profile"), session_id, source_identity.get("channel"),
-                source_identity.get("request_id"), source_identity.get("timestamp"),
+                WHERE profile=? AND source_channel=? AND source_request_id=?
+                ORDER BY id DESC LIMIT 1""", (
+                source_identity.get("profile"), source_identity.get("channel"),
+                source_identity.get("request_id"),
             )).fetchone()
     except Exception:
         return None
@@ -711,13 +715,11 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
         return (_invalid_after_attempt(identity) if durable_attempt
                 else _reconcile(identity, "action_evidence_unavailable"))
     persisted_action_cards = persisted_action["cards"]
-    if persisted_action["source_is_current"]:
-        if persisted_action_cards:
-            acted = True
-            verified_action_cards.update(persisted_action_cards)
-    else:
-        acted = bool(persisted_action_cards)
-        verified_action_cards = set(persisted_action_cards)
+    if not persisted_action["source_is_current"]:
+        return None
+    if persisted_action_cards:
+        acted = True
+        verified_action_cards.update(persisted_action_cards)
     if not acted:
         return _invalid_after_attempt(identity) if durable_attempt else None
     if source_cards:

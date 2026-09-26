@@ -395,6 +395,89 @@ def test_markerless_action_qualifies_and_incidental_superseded_word_does_not_byp
     ) is None
 
 
+def test_stale_historical_closure_is_silent_but_current_lars_decision_qualifies(tmp_path):
+    receipts = load_receipts()
+    historical_id = "1789883785.216179"
+    historical_card = "t_004ccb7b"
+    state, board = databases(tmp_path, source_id=historical_id, card=historical_card)
+    cfg = {**settings(state, board), "db_path": str(tmp_path / "gate.db")}
+    action = action_message(task_id=historical_card)
+    closure = (
+        f"Chas bridge follow-up for source {historical_id}: complete. "
+        f"Card {historical_card}. No Lars action remains."
+    )
+    with sqlite3.connect(state) as db:
+        db.execute(
+            "INSERT INTO messages(session_id,role,content,tool_name,timestamp) VALUES(?,?,?,?,?)",
+            ("source-session", "tool", action["content"], action["tool_name"], 1789000000.5),
+        )
+        db.execute(
+            "INSERT INTO messages(session_id,role,content,platform_message_id,timestamp) "
+            "VALUES(?,?,?,?,?)",
+            ("source-session", "user", "a later turn", "1789883786.000001", 1789000002.0),
+        )
+        # The live incident produced two identical destination-session rows. They are
+        # one source receipt, not two independently actionable deliveries.
+        db.execute(
+            "INSERT INTO messages(session_id,role,content,timestamp) VALUES(?,?,?,?)",
+            ("telegram-session", "assistant", closure, 1789000002.1),
+        )
+        db.execute(
+            "INSERT INTO messages(session_id,role,content,timestamp) VALUES(?,?,?,?)",
+            ("telegram-session", "assistant", closure, 1789000002.2),
+        )
+    record = {
+        "profile": "generalist", "session_id": "source-session",
+        "source_channel": "C0BTEFMAAJX", "source_request_id": historical_id,
+        "source_timestamp": 1789000000.123456, "source_row_id": 1,
+        "card_id": historical_card, "destination": "telegram:123456789",
+        "destination_session_id": "telegram-session",
+        "message_hash": receipts._message_hash(closure),
+    }
+    with receipts._receipt_connect(cfg["db_path"]) as db:
+        receipts._append_receipt(db, record, "reserved")
+        receipts._append_receipt(db, record, "transport_only", "5236")
+        receipts._append_receipt(db, record, "mirrored", "5236")
+        db.commit()
+
+    assert receipts.assess_chat_receipt(
+        profile="generalist",
+        source=source(request_id=historical_id),
+        user_message=f"Apply {historical_card} now.",
+        final_response=closure,
+        messages=[action],
+        session_id="source-session",
+        settings=cfg,
+    ) is None
+
+    current_dir = tmp_path / "current"
+    current_dir.mkdir()
+    current_state, current_board = databases(current_dir)
+    current = receipts.assess_chat_receipt(
+        profile="generalist", source=source(),
+        user_message="Lars decided: apply t_ab12cd34 now.",
+        final_response="Applied t_ab12cd34.", messages=[action_message()],
+        session_id="source-session", settings=settings(current_state, current_board),
+    )
+    assert current["verdict"] == "failed"
+    assert current["mismatch"] == "uncarded_commitment:missing_chat_telegram_receipt"
+
+
+@pytest.mark.parametrize("carrier", [
+    "STATUS-REQUEST-20260926-01: t_ab12cd34 is complete.",
+    "COMPLETION-RECEIPT-20260926-01: t_ab12cd34 is done.",
+    "CLOSURE-20260926-01: no Lars action remains on t_ab12cd34.",
+])
+def test_current_routine_status_and_closure_carriers_are_silent(tmp_path, carrier):
+    receipts = load_receipts()
+    state, board = databases(tmp_path)
+    assert receipts.assess_chat_receipt(
+        profile="generalist", source=source(), user_message=carrier,
+        final_response="Completed t_ab12cd34.", messages=[action_message()],
+        session_id="source-session", settings=settings(state, board),
+    ) is None
+
+
 def test_inaction_without_action_or_needs_input_is_a_commitment_failure():
     receipts = load_receipts()
     result = receipts.assess_inaction(

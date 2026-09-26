@@ -22,8 +22,9 @@ submit no source message, tool result, card text, or Telegram text to that model
 
 `chat_receipts_enabled` applies only to `generalist` turns from the configured
 Slack channel whose source has a durable platform request ID, a current owner
-card, and a matching action in the current turn. Markerless actionable relays
-qualify. Archive/status/internal sources are excluded. Cancelled, superseded,
+card, a matching action in the current turn, and no later source turn. Markerless
+actionable relays qualify. Archive/status/completion/closure/result/release/
+follow-up and internal sources are excluded. Cancelled, superseded,
 closed-channel and quiet-hours states are accepted only from transport-authored
 source metadata bound to the exact request ID; incidental source words never
 bypass the check. A quiet-hours deferral is pending only while its source-bound
@@ -40,7 +41,9 @@ exact persisted Slack source row, verifies the source-turn card action and fixed
 configured destination, then calls the same native helper as `hermes send`.
 It records the source identity, card, destination/session, message hash, provider
 message ID and mirror disposition in the gate database; terminal stdout is never
-evidence. A reservation written before transport makes retries at-most-once.
+evidence. Dedupe is bound to profile + source channel + source request ID; mutable
+session/timestamp metadata cannot authorize a second transport. A reservation
+written before transport makes retries at-most-once.
 Transport-only retries invoke the native mirror helper only; ambiguous/unavailable
 transport remains reconciliation/no-resend. The before-turn checker preserves those
 no-resend dispositions and revalidates the exact source row/channel, same-source-turn

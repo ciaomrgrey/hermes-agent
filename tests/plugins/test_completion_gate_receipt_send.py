@@ -297,6 +297,19 @@ def test_later_turn_action_cannot_authorize_the_source_receipt(tmp_path, monkeyp
     assert calls == []
 
 
+def test_stale_source_with_a_completed_same_turn_action_cannot_send(tmp_path, monkeypatch):
+    _loaded, _manager, cli, parser, _state, _board, _gate = _plugin(
+        tmp_path, monkeypatch, later_action=True)
+    message_file = tmp_path / "message.txt"
+    message_file.write_text(f"Applied {CARD} for source {SOURCE_ID}.")
+    calls = []
+    import tools.send_message_tool as native
+    monkeypatch.setattr(native, "send_message_tool", lambda args: calls.append(args))
+    with pytest.raises(ValueError, match="source_not_current"):
+        cli["handler_fn"](_args(parser, message_file))
+    assert calls == []
+
+
 @pytest.mark.parametrize("message,error", [
     (f"Applied {CARD} for source 1789000000.999999.", "message_source_mismatch"),
     (f"Applied t_ffffffff for source {SOURCE_ID}.", "message_card_mismatch"),
@@ -367,6 +380,29 @@ def test_changed_message_for_same_source_is_reconciliation_not_a_second_send(tmp
     message_file.write_text(f"Different text for {CARD}, source {SOURCE_ID}.")
     assert cli["handler_fn"](_args(parser, message_file))["status"] == "reconciliation"
     assert len(sends) == 1
+
+
+def test_source_identity_dedupes_timestamp_drift_without_a_second_send(tmp_path, monkeypatch):
+    _loaded, _manager, cli, parser, state, _board, gate = _plugin(tmp_path, monkeypatch)
+    message_file = tmp_path / "message.txt"
+    message_file.write_text(f"Applied {CARD} for source {SOURCE_ID}.")
+    sends = []
+    import tools.send_message_tool as native
+    monkeypatch.setattr(native, "send_message_tool", lambda args: sends.append(args) or json.dumps({
+        "success": True, "platform": "telegram", "chat_id": "123456789",
+        "message_id": "4884", "mirrored": False,
+    }))
+
+    assert cli["handler_fn"](_args(parser, message_file))["status"] == "transport_only"
+    with sqlite3.connect(state) as db:
+        db.execute(
+            "UPDATE messages SET timestamp=? WHERE role='user' AND platform_message_id=?",
+            (SOURCE_TS + 10, SOURCE_ID),
+        )
+
+    assert cli["handler_fn"](_args(parser, message_file))["status"] == "reconciliation"
+    assert len(sends) == 1
+    assert [row[-1] for row in _receipt_rows(gate)] == ["reserved", "transport_only"]
 
 
 def test_transport_only_with_existing_exact_mirror_appends_mirrored_receipt(tmp_path, monkeypatch):
