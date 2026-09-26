@@ -30,16 +30,22 @@ bypass the check. A quiet-hours deferral is pending only while its source-bound
 owner card and configured destination remain current. A consultation with no
 action is excluded.
 
-After an action, the same bounded gate requires one native `send_message` result
-to the configured Telegram destination. The message must bind the exact source
-request ID and a current card named by the source/answer. Provider success with
-a positive message ID must be persisted in the source session, and exact content
-must independently exist in the configured destination session. Transport-only
-repairs the mirror only and explicitly forbids a resend; ambiguous transport or
-unavailable evidence requires reconciliation before any resend. Mirror-only,
-wrong source/card/destination/profile and invented IDs fail. A reproduced binding
-is stored by source identity and survives restart/compaction/replay; the checker
-never sends or resends anything.
+After an action, the same bounded gate requires one gate-owned durable receipt for
+the configured Telegram destination. Create it only with:
+
+`hermes completion-gate receipt-send --source-request-id <id> --card <t_id> --message-file <absolute-path>`
+
+The command derives profile/session/current card from native scope, resolves one
+exact persisted Slack source row, verifies the source-turn card action and fixed
+configured destination, then calls the same native helper as `hermes send`.
+It records the source identity, card, destination/session, message hash, provider
+message ID and mirror disposition in the gate database; terminal stdout is never
+evidence. A reservation written before transport makes retries at-most-once.
+Transport-only retries invoke the native mirror helper only; ambiguous/unavailable
+transport remains reconciliation/no-resend. The before-turn checker revalidates
+the current card, configured destination/session and exact destination mirror.
+Legacy in-memory/persisted `send_message` evidence remains accepted for migration
+coverage, but the unrestricted model tool stays unregistered.
 
 `inaction_enabled` treats explicit “did/could/will not act” finals as an uncarded
 commitment unless the current turn records a successful corrective lifecycle
@@ -218,7 +224,7 @@ SHA. Preserve gate.db: deleting it would erase persistent safety counters.
 
 Run from the candidate/shared repository with a qualified Python environment:
 
-    HERMES_PYTHON=/path/to/python scripts/run_tests.sh tests/plugins/test_completion_gate.py tests/plugins/test_completion_gate_chat_receipts.py tests/plugins/test_completion_gate_checks.py tests/plugins/test_completion_gate_integration.py tests/plugins/test_completion_gate_reliability.py tests/plugins/test_completion_gate_health.py tests/plugins/test_completion_gate_portability.py tests/agent/test_turn_end_hook.py tests/agent/test_completion_gate_loop.py
+    HERMES_PYTHON=/path/to/python scripts/run_tests.sh tests/plugins/test_completion_gate.py tests/plugins/test_completion_gate_chat_receipts.py tests/plugins/test_completion_gate_checks.py tests/plugins/test_completion_gate_integration.py tests/plugins/test_completion_gate_reliability.py tests/plugins/test_completion_gate_health.py tests/plugins/test_completion_gate_portability.py tests/plugins/test_completion_gate_receipt_send.py tests/agent/test_turn_end_hook.py tests/agent/test_completion_gate_loop.py tests/gateway/test_turn_source_identity.py tests/gateway/test_completion_gate_source_state_clones.py
 
 Tests use real temporary files, SQLite, local HTTP/socket servers, native plugin
 discovery, native router against a local provider, native live-owner queue receipt,

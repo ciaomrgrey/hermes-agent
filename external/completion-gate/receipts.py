@@ -6,9 +6,12 @@ session and an independently persisted destination-session mirror.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import sqlite3
+import time
 from pathlib import Path
 
 _CARD = re.compile(r"\bt_[0-9a-f]{8}\b", re.I)
@@ -65,12 +68,16 @@ def _card_exists(path, card_id):
         return None
 
 
-def binding_current(settings, binding):
+def binding_current(settings, binding, *, source_identity=None, session_id=""):
     """A durable receipt remains usable only for its configured live owner card."""
-    return (isinstance(binding, dict)
-            and binding.get("destination") == str(settings.get("telegram_destination") or "")
-            and isinstance(binding.get("card_id"), str)
-            and _card_exists(settings.get("kanban_db_path"), binding["card_id"]) is True)
+    current = (isinstance(binding, dict)
+               and binding.get("destination") == str(settings.get("telegram_destination") or "")
+               and isinstance(binding.get("card_id"), str)
+               and _card_exists(settings.get("kanban_db_path"), binding["card_id"]) is True)
+    if not current or binding.get("receipt_kind") != "gate_owned":
+        return current
+    refreshed = durable_receipt_binding(settings, source_identity, session_id)
+    return refreshed is not None and refreshed == binding
 
 
 def _persisted_tool_result(path, session_id, call_id, content, source_timestamp):
@@ -110,6 +117,259 @@ def _mirror_exists(path, destination_session, message, source_timestamp):
         return row is not None
     except Exception:
         return None
+
+
+def _message_hash(message):
+    return hashlib.sha256(message.encode("utf-8")).hexdigest()
+
+
+def _mirror_hash_exists(path, destination_session, message_hash, source_timestamp):
+    """Verify an exact destination-session message without storing its body in the gate DB."""
+    try:
+        with _open_readonly(path) as db:
+            rows = db.execute(
+                "SELECT content FROM messages WHERE session_id=? AND role='assistant' "
+                "AND timestamp>=? ORDER BY id",
+                (destination_session, float(source_timestamp or 0)),
+            ).fetchall()
+        return any(isinstance(row[0], str) and _message_hash(row[0]) == message_hash for row in rows)
+    except Exception:
+        return None
+
+
+def _receipt_connect(path):
+    path = Path(path or "")
+    if not path.is_absolute():
+        raise ValueError("receipt_database_unavailable")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    db = sqlite3.connect(path, timeout=1)
+    path.chmod(0o600)
+    db.row_factory = sqlite3.Row
+    db.execute("""CREATE TABLE IF NOT EXISTS completion_receipts (
+        id INTEGER PRIMARY KEY, created REAL NOT NULL, profile TEXT NOT NULL,
+        session_id TEXT NOT NULL, source_channel TEXT NOT NULL,
+        source_request_id TEXT NOT NULL, source_timestamp REAL NOT NULL,
+        source_row_id INTEGER NOT NULL, card_id TEXT NOT NULL,
+        destination TEXT NOT NULL, destination_session_id TEXT NOT NULL,
+        message_hash TEXT NOT NULL, provider_message_id TEXT NOT NULL DEFAULT '',
+        mirror_disposition TEXT NOT NULL
+    )""")
+    db.execute("""CREATE INDEX IF NOT EXISTS completion_receipts_source
+        ON completion_receipts(profile,session_id,source_channel,source_request_id,source_timestamp)""")
+    db.commit()
+    return db
+
+
+def _receipt_key(row):
+    return tuple(row[key] for key in (
+        "profile", "session_id", "source_channel", "source_request_id", "source_timestamp",
+        "source_row_id", "card_id", "destination", "destination_session_id", "message_hash",
+    ))
+
+
+def _append_receipt(db, record, disposition, message_id=""):
+    db.execute("""INSERT INTO completion_receipts (
+        created,profile,session_id,source_channel,source_request_id,source_timestamp,
+        source_row_id,card_id,destination,destination_session_id,message_hash,
+        provider_message_id,mirror_disposition
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+        time.time(), *_receipt_key(record), str(message_id or ""), disposition,
+    ))
+
+
+def _latest_source_receipt(db, record):
+    return db.execute("""SELECT * FROM completion_receipts
+        WHERE profile=? AND session_id=? AND source_channel=? AND source_request_id=?
+        AND source_timestamp=? ORDER BY id DESC LIMIT 1""", (
+        record["profile"], record["session_id"], record["source_channel"],
+        record["source_request_id"], record["source_timestamp"],
+    )).fetchone()
+
+
+def _unique_source_row(path, session_id, request_id, source_channel):
+    try:
+        with _open_readonly(path) as db:
+            rows = db.execute(
+                "SELECT m.id,m.timestamp,m.session_id,s.source,s.chat_id FROM messages m "
+                "JOIN sessions s ON s.id=m.session_id WHERE m.role='user' "
+                "AND m.platform_message_id=? ORDER BY m.id LIMIT 2",
+                (request_id,),
+            ).fetchall()
+    except Exception as exc:
+        raise ValueError("source_database_unavailable") from exc
+    if not rows:
+        raise ValueError("source_row_missing")
+    if len(rows) != 1:
+        raise ValueError("source_row_ambiguous")
+    row = rows[0]
+    if row[2] != session_id or row[3] != "slack" or str(row[4] or "") != source_channel:
+        raise ValueError("source_session_mismatch")
+    return row[0], row[1]
+
+
+def _receipt_configuration(settings):
+    channel = str(settings.get("chat_source_channel") or "")
+    destination = str(settings.get("telegram_destination") or "")
+    destination_session = str(settings.get("telegram_session_id") or "")
+    platform, separator, chat_id = destination.partition(":")
+    if not channel:
+        raise ValueError("source_channel_configuration_missing")
+    if separator != ":" or platform != "telegram" or not chat_id:
+        raise ValueError("destination_configuration_unavailable")
+    if not destination_session:
+        raise ValueError("destination_session_configuration_missing")
+    return channel, destination, destination_session, platform, chat_id
+
+
+def receipt_send(settings, *, source_request_id, card_id, message_file):
+    """Send once through the supported native helper and persist source-bound gate evidence."""
+    profile = str(os.environ.get("HERMES_PROFILE") or "")
+    session_id = str(os.environ.get("HERMES_SESSION_ID") or "")
+    current_card = str(os.environ.get("HERMES_KANBAN_TASK") or "")
+    if profile != "generalist":
+        raise ValueError("profile_scope_mismatch")
+    if not session_id:
+        raise ValueError("session_scope_missing")
+    if current_card != card_id:
+        raise ValueError("current_card_mismatch")
+    if not _CARD.fullmatch(str(card_id or "")):
+        raise ValueError("invalid_card")
+    path = Path(message_file)
+    if not path.is_absolute():
+        raise ValueError("message_file_must_be_absolute")
+    try:
+        message = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("message_file_unavailable") from exc
+    if not message.strip():
+        raise ValueError("message_file_empty")
+    if (re.search(r"MEDIA:\s*(?:~/|/|[A-Za-z]:[/\\])", message)
+            or "[[as_document]]" in message or "[[audio_as_voice]]" in message):
+        raise ValueError("message_controls_forbidden")
+    if not _message_binds_source(message, source_request_id):
+        raise ValueError("message_source_mismatch")
+    if card_id not in set(_CARD.findall(message)):
+        raise ValueError("message_card_mismatch")
+
+    channel, destination, destination_session, platform, chat_id = _receipt_configuration(settings)
+    if _card_exists(settings.get("kanban_db_path"), card_id) is not True:
+        raise ValueError("card_not_current")
+    source_row_id, source_timestamp = _unique_source_row(
+        settings.get("state_db_path"), session_id, source_request_id, channel)
+    action = _persisted_action_cards(
+        settings.get("state_db_path"), session_id, source_request_id, source_timestamp)
+    if action is None or card_id not in action["cards"]:
+        raise ValueError("source_turn_action_missing")
+
+    record = {
+        "profile": profile, "session_id": session_id, "source_channel": channel,
+        "source_request_id": source_request_id, "source_timestamp": source_timestamp,
+        "source_row_id": source_row_id, "card_id": card_id, "destination": destination,
+        "destination_session_id": destination_session, "message_hash": _message_hash(message),
+    }
+    with _receipt_connect(settings.get("db_path")) as db:
+        db.execute("BEGIN IMMEDIATE")
+        prior = _latest_source_receipt(db, record)
+        if prior is None:
+            _append_receipt(db, record, "reserved")
+            prior_disposition = None
+            message_id = ""
+        elif _receipt_key(prior) != _receipt_key(record):
+            db.commit()
+            return {"status": "reconciliation", "message_id": ""}
+        else:
+            prior_disposition = prior["mirror_disposition"]
+            message_id = prior["provider_message_id"]
+        db.commit()
+
+    if prior_disposition is not None:
+        if prior_disposition in {"transport_only", "mirrored"}:
+            mirror = _mirror_hash_exists(
+                settings.get("state_db_path"), destination_session,
+                record["message_hash"], source_timestamp)
+            if mirror is True:
+                if prior_disposition == "transport_only":
+                    with _receipt_connect(settings.get("db_path")) as db:
+                        _append_receipt(db, record, "mirrored", message_id)
+                        db.commit()
+                return {"status": "mirrored", "message_id": str(message_id)}
+            try:
+                from gateway.mirror import mirror_to_session
+                mirrored = bool(mirror_to_session(
+                    platform, chat_id, message, source_label="completion-gate",
+                    session_id=destination_session))
+            except Exception:
+                mirrored = False
+            if mirrored and _mirror_hash_exists(
+                    settings.get("state_db_path"), destination_session,
+                    record["message_hash"], source_timestamp) is True:
+                with _receipt_connect(settings.get("db_path")) as db:
+                    _append_receipt(db, record, "mirrored", message_id)
+                    db.commit()
+                return {"status": "mirrored", "message_id": str(message_id)}
+            if prior_disposition == "mirrored":
+                with _receipt_connect(settings.get("db_path")) as db:
+                    _append_receipt(db, record, "transport_only", message_id)
+                    db.commit()
+                prior_disposition = "transport_only"
+        status = prior_disposition if prior_disposition in {"mirrored", "transport_only"} else "reconciliation"
+        return {"status": status,
+                "message_id": str(message_id or "")}
+
+    try:
+        from hermes_cli.send_cmd import _load_hermes_env
+        _load_hermes_env()
+        from tools.send_message_tool import send_message_tool
+        raw_result = send_message_tool({"action": "send", "target": destination, "message": message})
+        result = json.loads(raw_result) if isinstance(raw_result, str) else raw_result
+        if not isinstance(result, dict):
+            result = {}
+    except Exception:
+        result = {}
+    message_id = result.get("message_id")
+    transport_ok = (
+        result.get("success") is True and result.get("platform") == platform
+        and str(result.get("chat_id") or "") == chat_id and _valid_message_id(message_id)
+    )
+    disposition = "reconciliation"
+    if transport_ok:
+        mirror = _mirror_hash_exists(
+            settings.get("state_db_path"), destination_session,
+            record["message_hash"], source_timestamp)
+        disposition = "mirrored" if result.get("mirrored") is True and mirror is True else "transport_only"
+    with _receipt_connect(settings.get("db_path")) as db:
+        _append_receipt(db, record, disposition, message_id if transport_ok else "")
+        db.commit()
+    return {"status": disposition, "message_id": str(message_id or "") if transport_ok else ""}
+
+
+def durable_receipt_binding(settings, source_identity, session_id):
+    """Return a currently valid CLI-owned mirrored receipt for an exact source identity."""
+    if not isinstance(source_identity, dict):
+        return None
+    try:
+        with _open_readonly(settings.get("db_path")) as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute("""SELECT * FROM completion_receipts
+                WHERE profile=? AND session_id=? AND source_channel=? AND source_request_id=?
+                AND source_timestamp=? AND mirror_disposition='mirrored' ORDER BY id DESC""", (
+                source_identity.get("profile"), session_id, source_identity.get("channel"),
+                source_identity.get("request_id"), source_identity.get("timestamp"),
+            )).fetchall()
+    except Exception:
+        return None
+    for row in rows:
+        if (row["destination"] != str(settings.get("telegram_destination") or "")
+                or row["destination_session_id"] != str(settings.get("telegram_session_id") or "")
+                or _card_exists(settings.get("kanban_db_path"), row["card_id"]) is not True):
+            continue
+        mirror = _mirror_hash_exists(
+            settings.get("state_db_path"), row["destination_session_id"],
+            row["message_hash"], row["source_timestamp"])
+        if mirror is True:
+            return {"destination": row["destination"], "message_id": row["provider_message_id"],
+                    "card_id": row["card_id"], "receipt_kind": "gate_owned"}
+    return None
 
 
 def _send_attempts(messages):
@@ -354,6 +614,12 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
     board_path = settings.get("kanban_db_path")
     if not action_cards:
         return _assessment(identity, "action_unverified")
+    durable = durable_receipt_binding(settings, identity, session_id)
+    if durable and durable.get("card_id") in action_cards & source_cards:
+        return {
+            "verdict": "reproduced", "mismatch": "", "subtype": "missing_chat_telegram_receipt",
+            "source_identity": identity, "receipt": durable,
+        }
     calls, results = _send_attempts(messages)
     persisted_attempts = _persisted_send_attempts(state_path, session_id, source.get("timestamp"))
     if persisted_attempts is None and not calls:

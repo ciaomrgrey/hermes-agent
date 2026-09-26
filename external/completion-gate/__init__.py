@@ -47,7 +47,8 @@ def register(ctx):
                 if assessment:
                     identity = assessment["source_identity"]
                     prior = Gate(settings, extract=lambda _: []).receipt_binding(identity)
-                    if receipts.binding_current(settings, prior):
+                    if receipts.binding_current(
+                            settings, prior, source_identity=identity, session_id=session_id):
                         assessment = {**assessment, "verdict": "reproduced", "mismatch": "", "receipt": prior}
                     assessments.append(({
                         "claim": assessment.get("repair", "Chat decision Telegram receipt"),
