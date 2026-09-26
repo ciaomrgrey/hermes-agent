@@ -2,6 +2,8 @@
 import json
 import sqlite3
 
+import pytest
+
 
 def load_receipts():
     from tests.completion_gate_support import module
@@ -81,6 +83,16 @@ def persist_call(state, transcript, *, include_result=True):
         )
         if not include_result:
             db.execute("DELETE FROM messages WHERE tool_call_id='send-1'")
+
+
+def persist_action(state, action=None):
+    action = action or action_message()
+    with sqlite3.connect(state) as db:
+        db.execute(
+            "INSERT INTO messages(session_id,role,content,tool_name,timestamp) VALUES(?,?,?,?,?)",
+            ("source-session", "tool", action["content"], action["tool_name"],
+             source()["timestamp"] + 0.1),
+        )
 
 
 def settings(state, board):
@@ -360,6 +372,28 @@ def test_markerless_action_qualifies_and_incidental_superseded_word_does_not_byp
     assert result["verdict"] == "failed"
     assert result["mismatch"] == "uncarded_commitment:missing_chat_telegram_receipt"
 
+    with sqlite3.connect(state) as db:
+        db.execute(
+            "INSERT INTO messages(session_id,role,content,platform_message_id,timestamp) "
+            "VALUES(?,?,?,?,?)",
+            ("source-session", "user", "later source", None, 1788999999.0),
+        )
+        later_action = action_message()
+        db.execute(
+            "INSERT INTO messages(session_id,role,content,tool_name,timestamp) VALUES(?,?,?,?,?)",
+            ("source-session", "tool", later_action["content"], later_action["tool_name"], 1789000002.1),
+        )
+    assert receipts.assess_chat_receipt(
+        profile="generalist", source=source(), user_message="Should we change the plan?",
+        final_response="Consultation only.", messages=[], session_id="source-session",
+        settings=settings(state, board),
+    ) is None
+    assert receipts.assess_chat_receipt(
+        profile="generalist", source=source(), user_message="Should we change the plan?",
+        final_response="Consultation only.", messages=[later_action], session_id="source-session",
+        settings=settings(state, board),
+    ) is None
+
 
 def test_inaction_without_action_or_needs_input_is_a_commitment_failure():
     receipts = load_receipts()
@@ -418,6 +452,14 @@ def test_unavailable_evidence_is_unverified_and_never_instructs_resend(tmp_path,
     assert result["mismatch"].endswith("evidence_unavailable")
     assert "do not resend" in result["repair"].lower()
 
+    compacted = receipts.assess_chat_receipt(
+        profile="generalist", source=source(), user_message="Apply t_ab12cd34 now.",
+        final_response="All set.", messages=[], session_id="source-session", settings=cfg,
+    )
+    assert compacted["verdict"] == "unverified"
+    assert compacted["mismatch"].endswith("evidence_unavailable")
+    assert "do not resend" in compacted["repair"].lower()
+
     monkeypatch.setattr(receipts, "_open_readonly",
                         lambda _: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")))
     locked = receipts.assess_chat_receipt(
@@ -470,10 +512,13 @@ def test_plugin_routes_receipt_failure_through_existing_block_and_replay_dedupes
     assert "action_unverified" in stale[0]["message"]
 
 
-def test_plugin_recovers_persisted_receipt_before_first_verdict(tmp_path, monkeypatch):
+@pytest.mark.parametrize("final_response", ["Applied t_ab12cd34.", "All set."])
+def test_plugin_recovers_fully_compacted_receipt_before_first_verdict(
+        tmp_path, monkeypatch, final_response):
     from hermes_cli import plugins
     state, board = databases(tmp_path)
     transcript = messages()
+    persist_action(state)
     persist_call(state, transcript)
     cfg = {"plugins": {"enabled": ["completion-gate"], "entries": {"completion-gate": {"settings": {
         "enabled": True, "chat_receipts_enabled": True, "db_path": str(tmp_path / "gate.db"),
@@ -491,9 +536,9 @@ def test_plugin_recovers_persisted_receipt_before_first_verdict(tmp_path, monkey
     monkeypatch.setattr(loaded, "bounded_extract", lambda *a, **k: [])
 
     result = manager.invoke_hook(
-        "before_turn_end", final_response="Applied t_ab12cd34.", session_id="source-session",
+        "before_turn_end", final_response=final_response, session_id="source-session",
         task_id="task", turn_id="first", source_identity=source(),
-        user_message="Lars decided: apply the approved change now.", messages=[action_message()],
+        user_message="Lars decided: apply the approved change now.", messages=[],
     )
     assert result == []
     events = loaded.Gate(
@@ -502,10 +547,13 @@ def test_plugin_recovers_persisted_receipt_before_first_verdict(tmp_path, monkey
     assert events[-1]["claims"][0]["receipt"]["message_id"] == "4884"
 
 
-def test_plugin_reconciles_persisted_ambiguous_send_without_resend(tmp_path, monkeypatch):
+@pytest.mark.parametrize("final_response", ["Applied t_ab12cd34.", "All set."])
+def test_plugin_reconciles_persisted_ambiguous_send_without_resend(
+        tmp_path, monkeypatch, final_response):
     from hermes_cli import plugins
     state, board = databases(tmp_path)
     transcript = messages()
+    persist_action(state)
     persist_call(state, transcript, include_result=False)
     cfg = {"plugins": {"enabled": ["completion-gate"], "entries": {"completion-gate": {"settings": {
         "enabled": True, "chat_receipts_enabled": True, "db_path": str(tmp_path / "gate.db"),
@@ -523,9 +571,9 @@ def test_plugin_reconciles_persisted_ambiguous_send_without_resend(tmp_path, mon
     monkeypatch.setattr(loaded, "bounded_extract", lambda *a, **k: [])
 
     result = manager.invoke_hook(
-        "before_turn_end", final_response="Applied t_ab12cd34.", session_id="source-session",
+        "before_turn_end", final_response=final_response, session_id="source-session",
         task_id="task", turn_id="first", source_identity=source(),
-        user_message="Lars decided: apply the approved change now.", messages=[action_message()],
+        user_message="Lars decided: apply the approved change now.", messages=[],
     )
     assert result[0]["action"] == "block"
     assert "reconcile the transport attempt" in result[0]["message"].lower()

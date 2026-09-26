@@ -172,6 +172,49 @@ def _persisted_send_attempts(path, session_id, source_timestamp):
     return calls, results
 
 
+def _persisted_action_cards(path, session_id, request_id, source_timestamp):
+    """Recover successful owner actions from the exact persisted source turn."""
+    try:
+        with _open_readonly(path) as db:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
+            if not {"id", "platform_message_id"} <= columns:
+                return None
+            source_rows = db.execute(
+                "SELECT id FROM messages WHERE session_id=? AND role='user' "
+                "AND platform_message_id=? AND timestamp=? ORDER BY id LIMIT 2",
+                (session_id, request_id, source_timestamp),
+            ).fetchall()
+            if len(source_rows) != 1:
+                return None
+            source_row = source_rows[0]
+            next_user = db.execute(
+                "SELECT MIN(id) FROM messages WHERE session_id=? AND role='user' AND id>?",
+                (session_id, source_row[0]),
+            ).fetchone()
+            sql = (
+                "SELECT tool_name, content FROM messages WHERE session_id=? AND role='tool' "
+                "AND id>?"
+            )
+            params = [session_id, source_row[0]]
+            if next_user and next_user[0] is not None:
+                sql += " AND id<?"
+                params.append(next_user[0])
+            rows = db.execute(sql + " ORDER BY id", params).fetchall()
+    except Exception:
+        return None
+    cards = set()
+    for tool_name, content in rows:
+        if str(tool_name or "") not in _ACTION_TOOLS:
+            continue
+        result = _json(content)
+        if _succeeded(result):
+            cards.update(_CARD.findall(json.dumps(result, sort_keys=True)))
+    return {
+        "cards": cards,
+        "source_is_current": not next_user or next_user[0] is None,
+    }
+
+
 def _message_binds_source(message, request_id):
     """Require an exact ``source <request-id>`` token, not a substring collision."""
     if not isinstance(message, str) or not request_id:
@@ -273,7 +316,26 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
             "mismatch": "uncarded_commitment:chat_telegram_receipt_pending_quiet_hours",
             "subtype": "missing_chat_telegram_receipt", "source_identity": identity,
         }
+    state_path = settings.get("state_db_path")
+    source_evidence = _source_persisted(
+        state_path, session_id, request_id, source.get("timestamp"))
+    if source_evidence is None:
+        return _reconcile(identity)
+    if source_evidence is not True:
+        return _assessment(identity, "source_not_persisted")
     acted, verified_action_cards = _action_status(final_response, messages)
+    persisted_action = _persisted_action_cards(
+        state_path, session_id, request_id, source.get("timestamp"))
+    if persisted_action is None:
+        return _reconcile(identity, "action_evidence_unavailable")
+    persisted_action_cards = persisted_action["cards"]
+    if persisted_action["source_is_current"]:
+        if persisted_action_cards:
+            acted = True
+            verified_action_cards.update(persisted_action_cards)
+    else:
+        acted = bool(persisted_action_cards)
+        verified_action_cards = set(persisted_action_cards)
     if not acted:
         return None
     if source_cards:
@@ -288,12 +350,6 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
     expected_platform, separator, expected_chat_id = expected_target.partition(":")
     if separator != ":" or expected_platform != "telegram" or not expected_chat_id:
         return _reconcile(identity, "destination_configuration_unavailable")
-    state_path = settings.get("state_db_path")
-    source_evidence = _source_persisted(state_path, session_id, request_id, source.get("timestamp"))
-    if source_evidence is None:
-        return _reconcile(identity)
-    if source_evidence is not True:
-        return _assessment(identity, "source_not_persisted")
     destination_session = str(settings.get("telegram_session_id") or "")
     board_path = settings.get("kanban_db_path")
     if not action_cards:
