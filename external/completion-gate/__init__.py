@@ -56,7 +56,7 @@ def register(ctx):
                     }, assessment))
             if settings["inaction_enabled"] is True:
                 assessment = receipts.assess_inaction(
-                    final_response, messages or (), user_message=user_message or "")
+                    final_response, messages or (), user_message=user_message or "", settings=settings)
                 if assessment:
                     assessments.append(({
                         "claim": assessment["repair"], "artefact_kind": "inaction_followthrough",

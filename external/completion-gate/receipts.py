@@ -838,7 +838,7 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
     return _assessment(identity)
 
 
-def assess_inaction(final_response, messages, *, user_message=""):
+def assess_inaction(final_response, messages, *, user_message="", settings=None):
     """Reject self-reported inaction unless this turn acted or opened needs_input."""
     if not isinstance(final_response, str) or not _INACTION.search(final_response):
         return None
@@ -851,6 +851,16 @@ def assess_inaction(final_response, messages, *, user_message=""):
             "repair": "Take the action or escalate to Lars — no third state.",
         }
     resolved_cards = set()
+    current_card = str(os.environ.get("HERMES_KANBAN_TASK") or "")
+    if current_card in obligation_cards:
+        from agent.kanban_stop import review_handoff_ended
+
+        if review_handoff_ended(
+            db_path=(settings or {}).get("kanban_db_path"),
+            task_id=current_card,
+            run_id=os.environ.get("HERMES_KANBAN_RUN_ID"),
+        ):
+            resolved_cards.add(current_card)
     for item in messages or ():
         if not isinstance(item, dict) or item.get("role") != "tool":
             continue

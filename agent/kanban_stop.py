@@ -7,6 +7,9 @@ Policy-only: return a bounded synthetic nudge so the loop continues instead of e
 from __future__ import annotations
 
 import os
+import sqlite3
+from contextlib import closing
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from agent.delegation_context import owned_kanban_task
@@ -48,6 +51,49 @@ def session_called_kanban_terminal(messages: Iterable[dict] | None) -> bool:
     return False
 
 
+def review_handoff_ended(
+    *,
+    db_path: os.PathLike[str] | str | None = None,
+    task_id: Optional[str] = None,
+    run_id: int | str | None = None,
+) -> bool:
+    """Whether this worker's exact run durably ended in a review handoff.
+
+    The task may now be awaiting review, claimed by a reviewer, or completed by
+    one. In every case the implementer's ``review_requested`` run is terminal;
+    its stale process must not be told to complete or block the successor's work.
+    Unknown or malformed state returns ``False`` so ordinary enforcement stays on.
+    """
+    path = Path(db_path or os.environ.get("HERMES_KANBAN_DB") or "")
+    tid = (task_id or owned_kanban_task()).strip()
+    raw_run_id = run_id if run_id is not None else os.environ.get("HERMES_KANBAN_RUN_ID")
+    if raw_run_id is None:
+        return False
+    try:
+        exact_run_id = int(raw_run_id)
+    except (TypeError, ValueError):
+        return False
+    if not path.is_absolute() or not path.is_file() or not tid:
+        return False
+    try:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
+            db.execute("PRAGMA query_only=ON")
+            row = db.execute(
+                "SELECT r.status, r.outcome, r.ended_at "
+                "FROM tasks t JOIN task_runs r ON r.task_id = t.id "
+                "WHERE t.id = ? AND r.id = ?",
+                (tid, exact_run_id),
+            ).fetchone()
+    except (OSError, sqlite3.Error):
+        return False
+    return bool(
+        row
+        and row[0] == "review"
+        and row[1] == "review_requested"
+        and row[2] is not None
+    )
+
+
 def build_kanban_stop_nudge(
     *,
     messages: Iterable[dict] | None = None,
@@ -61,6 +107,7 @@ def build_kanban_stop_nudge(
         not kanban_stop_nudge_enabled()
         or attempts >= max_attempts
         or session_called_kanban_terminal(messages)
+        or review_handoff_ended(task_id=task_id)
     ):
         return None
 
@@ -80,4 +127,9 @@ def build_kanban_stop_nudge(
     )
 
 
-__all__ = ["build_kanban_stop_nudge", "kanban_stop_nudge_enabled", "session_called_kanban_terminal"]
+__all__ = [
+    "build_kanban_stop_nudge",
+    "kanban_stop_nudge_enabled",
+    "review_handoff_ended",
+    "session_called_kanban_terminal",
+]

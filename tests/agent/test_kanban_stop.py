@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from hermes_cli import kanban_db as kb
+from hermes_cli import kanban_db_connect as kbc
+
 from agent.kanban_stop import (
     build_kanban_stop_nudge,
     kanban_stop_nudge_enabled,
@@ -13,7 +16,12 @@ from agent.kanban_stop import (
 
 @pytest.fixture
 def clear_kanban_env(monkeypatch):
-    for var in ("HERMES_KANBAN_TASK", "HERMES_KANBAN_STOP_NUDGE"):
+    for var in (
+        "HERMES_KANBAN_TASK",
+        "HERMES_KANBAN_RUN_ID",
+        "HERMES_KANBAN_DB",
+        "HERMES_KANBAN_STOP_NUDGE",
+    ):
         monkeypatch.delenv(var, raising=False)
     return monkeypatch
 
@@ -76,6 +84,56 @@ def test_nudge_when_no_terminal_tool(clear_kanban_env):
     assert "kanban_block" in nudge
     assert "t_46be8aa5" in nudge
     assert "protocol violation" in nudge.lower() or "protocol" in nudge.lower()
+
+
+@pytest.mark.parametrize(
+    ("board_state", "expect_nudge"),
+    [
+        ("review_requested", False),
+        ("reviewer_claimed", False),
+        ("reviewer_completed", False),
+        ("worker_still_running", True),
+    ],
+)
+def test_nudge_uses_owning_run_state_after_review_handoff(
+    tmp_path,
+    clear_kanban_env,
+    board_state,
+    expect_nudge,
+):
+    """A successor reviewer must not make the ended implementer corrupt lifecycle state."""
+    board = tmp_path / "kanban.db"
+    with kbc.connect(board) as db:
+        task_id = kb.create_task(db, title="Safe review handoff", assignee="builder")
+        implementation = kb.claim_task(db, task_id, claimer="builder:test")
+        assert implementation is not None
+        implementation_run_id = implementation.current_run_id
+        if not expect_nudge:
+            assert kb.request_review(
+                db,
+                task_id,
+                reviewer="reviewer",
+                summary="ready",
+                expected_run_id=implementation_run_id,
+            )
+        if board_state in {"reviewer_claimed", "reviewer_completed"}:
+            review = kb.claim_review_task(db, task_id, claimer="reviewer:test")
+            assert review is not None
+            if board_state == "reviewer_completed":
+                assert kb.complete_task(
+                    db,
+                    task_id,
+                    summary="approved",
+                    expected_run_id=review.current_run_id,
+                )
+
+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", task_id)
+    clear_kanban_env.setenv("HERMES_KANBAN_RUN_ID", str(implementation_run_id))
+    clear_kanban_env.setenv("HERMES_KANBAN_DB", str(board))
+
+    nudge = build_kanban_stop_nudge(messages=[])
+
+    assert (nudge is not None) is expect_nudge
 
 
 def test_no_nudge_after_kanban_complete(clear_kanban_env):

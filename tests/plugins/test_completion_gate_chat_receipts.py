@@ -4,6 +4,9 @@ import sqlite3
 
 import pytest
 
+from hermes_cli import kanban_db as kb
+from hermes_cli import kanban_db_connect as kbc
+
 
 def load_receipts():
     from tests.completion_gate_support import module
@@ -436,6 +439,55 @@ def test_inaction_without_action_or_needs_input_is_a_commitment_failure():
         "I cannot act on t_ab12cd34.", action_on_other_card,
         user_message="Act on t_ab12cd34 and t_bbbbbbbb",
     )["verdict"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("board_state", "expected"),
+    [
+        ("review_requested", None),
+        ("reviewer_claimed", None),
+        ("reviewer_completed", None),
+        ("worker_still_running", "failed"),
+    ],
+)
+def test_inaction_preserves_newer_review_state(
+    tmp_path, monkeypatch, board_state, expected,
+):
+    receipts = load_receipts()
+    board = tmp_path / "kanban.db"
+    with kbc.connect(board) as db:
+        task_id = kb.create_task(db, title="Safe inaction handoff", assignee="builder")
+        implementation = kb.claim_task(db, task_id, claimer="builder:test")
+        assert implementation is not None
+        implementation_run_id = implementation.current_run_id
+        if expected is None:
+            assert kb.request_review(
+                db,
+                task_id,
+                reviewer="reviewer",
+                summary="ready",
+                expected_run_id=implementation_run_id,
+            )
+        if board_state in {"reviewer_claimed", "reviewer_completed"}:
+            review = kb.claim_review_task(db, task_id, claimer="reviewer:test")
+            assert review is not None
+            if board_state == "reviewer_completed":
+                assert kb.complete_task(
+                    db,
+                    task_id,
+                    summary="approved",
+                    expected_run_id=review.current_run_id,
+                )
+
+    monkeypatch.setenv("HERMES_KANBAN_TASK", task_id)
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(implementation_run_id))
+    result = receipts.assess_inaction(
+        f"I cannot issue another terminal transition for {task_id}; preserving review state.",
+        [],
+        settings={"kanban_db_path": str(board)},
+    )
+
+    assert (result or {}).get("verdict") == expected
 
 
 def test_unavailable_evidence_is_unverified_and_never_instructs_resend(tmp_path, monkeypatch):
