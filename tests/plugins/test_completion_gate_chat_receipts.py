@@ -739,6 +739,10 @@ def test_contradictory_mirror_evidence_requires_reconciliation(tmp_path):
     ("Lars decided: keep t_ab12cd34 silent; do not send me a receipt.", False),
     ("Lars decided: apply t_ab12cd34 now.", False),
     ("Lars decided: apply t_ab12cd34 now; don't tell me.", False),
+    ("Lars decided: apply t_ab12cd34 now. Do not, under any circumstances, send me a receipt.", False),
+    ("Lars decided: apply t_ab12cd34 now; don\u2019t send me a receipt.", False),
+    ('DECISION-20260926-01: t_ab12cd34 is done. The earlier wording was "send me a receipt"; '
+     "that request is withdrawn.", False),
     ("Lars decided: apply t_ab12cd34 now; confirm to me on Telegram.", True),
 ])
 def test_assessment_and_sender_share_solicited_decision_admission(tmp_path, text, eligible):

@@ -13,22 +13,35 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 from pathlib import Path
 
 _CARD = re.compile(r"\bt_[0-9a-f]{8}\b", re.I)
-# A decision carrier is necessary provenance, never notification authority.
-_AUTHORIZED_DECISION = re.compile(r"^\s*(?:Lars\s+decided\s*:|DECISION-[A-Z0-9_-]+\s*:)", re.I)
 # Latest estate policy: unsolicited receipts stay silent.  Authority to notify
-# exists only when the owner's own source clause affirmatively asks to be told.
-_RECEIPT_REQUEST = re.compile(
-    r"\b(?:(?:send|give)\s+(?:me|lars)\s+(?:a\s+|the\s+)?(?:receipt|confirmation)"
-    r"|(?:confirm|report)\s+(?:back\s+)?to\s+(?:me|lars)"
-    r"|(?:notify|tell|ping|message|text)\s+(?:me|lars)"
-    r"|let\s+(?:me|lars)\s+know)\b", re.I)
-_CLAUSE_NEGATION = re.compile(r"\b(?:no|not|never|without|skip|nor|unless)\b|n't\b|\bdont\b", re.I)
-_SILENCE_VETO = re.compile(
-    r"\b(?:silent(?:ly)?|quiet(?:ly)?|status\s+only|no\s+(?:decision|action|receipt|"
-    r"confirmation|update|notification|message)s?\b)", re.I)
+# exists only when the WHOLE current request has one closed, conservative shape:
+#   <carrier>: <plain decision>; <bare solicitation>.
+# The solicitation must be the entire final clause (so a prefix such as "do not,
+# under any circumstances," cannot be split off), and the request as a whole must
+# carry no quotation, negation, withdrawal, condition or silence wording.  Anything
+# else -- including legitimate but unusual phrasing -- fails closed (no receipt).
+_SOLICITATION = (
+    r"(?:please\s+)?"
+    r"(?:(?:send|give)\s+me\s+(?:a|the)\s+(?:receipt|confirmation)"
+    r"|confirm\s+(?:back\s+)?to\s+me|report\s+back\s+to\s+me"
+    r"|notify\s+me|tell\s+me|ping\s+me|message\s+me|let\s+me\s+know)"
+    r"(?:\s+on\s+telegram)?"
+    r"(?:\s+(?:when|once)\s+(?:it\s+is\s+|it's\s+)?(?:done|applied|complete))?")
+_SOLICITED_DECISION = re.compile(
+    r"^(?:Lars\s+decided|DECISION-[A-Z0-9_-]+)\s*:\s*"
+    r"(?P<decision>[A-Za-z0-9_][A-Za-z0-9_ ,/-]*?)\s*[.;]\s*"
+    r"(?P<ask>" + _SOLICITATION + r")\s*\.?$", re.I)
+_REQUEST_VETO = re.compile(
+    r"\b(?:no|not|never|none|nor|without|skip|stop|cancel\w*|withdr[ae]wn?|withdraw\w*|"
+    r"revok\w*|retract\w*|rescind\w*|disregard|ignore|unless|except|if|earlier|previous\w*|"
+    r"instead|silent\w*|quiet\w*|status|dont|don|won|can|shouldn|mustn)\b|n't\b", re.I)
+_QUOTE_OR_APOSTROPHE_VARIANTS = str.maketrans({
+    "\u2018": "'", "\u2019": "'", "\u02bc": "'", "\u2032": "'", "\uff07": "'",
+    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u00ab": '"', "\u00bb": '"', "\uff02": '"'})
 _MAX_RECEIPT_SOURCE_AGE_SECONDS = 15 * 60
 _INACTION = re.compile(
     r"\b(?:did not|could not|cannot|can't|will not|won't|nothing I can do|no(?:thing)?\s*[-—:]?\s*not between messages|"
@@ -63,25 +76,32 @@ def _source_identity(profile, source):
     }
 
 
+def _normalized_request(text):
+    return unicodedata.normalize("NFKC", text).translate(_QUOTE_OR_APOSTROPHE_VARIANTS).strip()
+
+
 def _receipt_requested(text):
-    """True only when an un-negated source clause affirmatively solicits a receipt."""
-    if _SILENCE_VETO.search(text):
+    """True only when the whole request is a bare decision plus one bare solicitation.
+
+    Authority is attached to the complete current request: quoted wording,
+    negation, withdrawal, conditions or silence anywhere in it void authority.
+    """
+    request = _normalized_request(text)
+    if any(ch in request for ch in "\"`?") or "\n" in request:
         return False
-    for clause in re.split(r"[.;:!,\n]+|\bbut\b", text, flags=re.I):
-        if _RECEIPT_REQUEST.search(clause) and not _CLAUSE_NEGATION.search(clause):
-            return True
-    return False
+    if _REQUEST_VETO.search(request):
+        return False
+    return _SOLICITED_DECISION.fullmatch(request) is not None
 
 
 def _source_is_actionable(text):
     """Admit only a Lars-owned decision that explicitly asks for a receipt.
 
     Carrier labels (``Lars decided:``, ``DECISION-*:``) prove provenance but grant
-    no permission to notify; routine, status-only and silent sources, and any
-    source whose authorization is unproven, fail closed.
+    no permission to notify; routine, status-only, silent, negated, quoted or
+    withdrawn sources, and any source whose authorization is unproven, fail closed.
     """
-    return (isinstance(text, str) and _AUTHORIZED_DECISION.search(text) is not None
-            and "?" not in text and _receipt_requested(text))
+    return isinstance(text, str) and _receipt_requested(text)
 
 
 def _source_is_current(source_timestamp):

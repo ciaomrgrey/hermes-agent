@@ -22,9 +22,12 @@ submit no source message, tool result, card text, or Telegram text to that model
 
 `chat_receipts_enabled` applies only to `generalist` turns from the configured
 Slack channel whose source has a durable platform request ID, is no more than 15
-minutes old, carries a non-question `Lars decided:` or `DECISION-*:` instruction
-that itself affirmatively asks for a receipt in an un-negated clause (e.g. "confirm
-to me", "let me know", "notify me"), with no silent/status-only/no-action veto, has a current owner card, a matching action in
+minutes old, and whose whole text has exactly the conservative shape
+`<Lars decided:|DECISION-*:> <plain decision>; <bare solicitation>` (e.g. "confirm
+to me on Telegram", "let me know when it is done"). Authority attaches to the
+complete request: any question, quotation, negation (including typographic
+apostrophes, normalized via NFKC), withdrawal, condition or silence wording anywhere
+voids it, and unusual phrasing fails closed. It also needs a current owner card, a matching action in
 the current turn, and no later source turn. Markerless and routine completion,
 closure, status, result, release, follow-up, wrap-up and internal sources are
 excluded; a carrier label is provenance only, never notification authority, and an

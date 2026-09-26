@@ -800,6 +800,18 @@ def test_cli_uses_real_native_helper_and_mirror_with_only_transport_stubbed(tmp_
     (f"DECISION-20260926-02: apply {CARD}, no need to notify me.", 0),
     # Routine carrier with solicitation words still lacks decision provenance.
     (f"SESSION-WRAPUP-20260926-02: {CARD} done; let me know.", 0),
+    # Authority attaches to the whole request: punctuation, typographic
+    # apostrophes, quotation and withdrawal cannot detach a prohibition.
+    (f"Lars decided: apply {CARD} now. Do not, under any circumstances, send me a receipt.", 0),
+    (f"Lars decided: apply {CARD} now; don\u2019t send me a receipt.", 0),
+    (f"Lars decided: apply {CARD} now; don\u02bct send me a receipt.", 0),
+    (f'DECISION-20260926-01: {CARD} is done. The earlier wording was "send me a receipt"; '
+     "that request is withdrawn.", 0),
+    (f"DECISION-20260926-01: {CARD} is done. The earlier wording was \u201csend me a receipt\u201d.", 0),
+    (f"Lars decided: apply {CARD} now; send me a receipt. Actually, never mind.", 0),
+    (f"Lars decided: apply {CARD} now; send me a receipt unless it fails.", 0),
+    (f"Lars decided: apply {CARD} now; send me a receipt. Scratch that, stay silent.", 0),
+    (f"Lars decided: send me a receipt; apply {CARD}.", 0),
     # Genuine current positive: owner decision that explicitly asks for a receipt.
     (f"Lars decided: apply {CARD} now; confirm to me on Telegram.", 1),
     (f"DECISION-20260926-03: apply {CARD}. Let me know when it is done.", 1),
