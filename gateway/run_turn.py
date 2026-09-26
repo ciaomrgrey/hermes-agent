@@ -3707,6 +3707,7 @@ class GatewayTurnMixin:
         # distinct from the reply anchor above (None in forum topics). Carry it or two chained
         # topic turns with the same text would collide on one obligation id (queued-final-ledger).
         next_inbound_id = None
+        next_persist_user_timestamp = None
         next_display_kind = display_kind_for_event(pending_event)
         # See #60671.
         if pending_event is not None:
@@ -3733,6 +3734,10 @@ class GatewayTurnMixin:
                 return result
             next_message_id = self._reply_anchor_for_event(pending_event)
             next_inbound_id = str(pending_event.message_id) if getattr(pending_event, "message_id", None) else None
+            from gateway.message_timestamps import coerce_message_timestamp
+            next_persist_user_timestamp = coerce_message_timestamp(
+                getattr(pending_event, "timestamp", None)
+            )
             next_channel_prompt = getattr(pending_event, "channel_prompt", None)
             next_message_type = getattr(pending_event, "message_type", None)
 
@@ -3782,6 +3787,7 @@ class GatewayTurnMixin:
                 inbound_internal=bool(getattr(pending_event, "internal", False)),
                 inbound_source_state=completion_gate_source_state(
                     getattr(pending_event, "metadata", None)),
+                persist_user_timestamp=next_persist_user_timestamp,
                 channel_prompt=next_channel_prompt, message_type=next_message_type,
                 persist_user_display_kind=next_display_kind,
                 persist_user_display_metadata=diagnostic_metadata(pending_event) or None,

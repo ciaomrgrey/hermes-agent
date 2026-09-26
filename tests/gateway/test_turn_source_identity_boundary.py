@@ -167,11 +167,13 @@ async def test_handle_message_reaches_agent_with_exact_source_identity(
 
 
 @pytest.mark.asyncio
-async def test_proxy_stays_compatible_and_queued_followup_rebinds_source_metadata(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("internal", [False, True])
+async def test_proxy_stays_compatible_and_queued_followup_rebinds_exact_source_identity(
+    monkeypatch, tmp_path, internal
 ):
     runner = _runner(monkeypatch, tmp_path)
     source = _source()
+    timestamp = datetime(2026, 9, 26, 16, 30, 1, tzinfo=timezone.utc)
     source_state = {"request_id": "1789000001.654321", "status": "closed"}
 
     runner._get_proxy_url = lambda: "http://proxy.invalid"
@@ -187,8 +189,9 @@ async def test_proxy_stays_compatible_and_queued_followup_rebinds_source_metadat
         text="queued turn",
         source=source,
         message_id="1789000001.654321",
-        internal=True,
+        internal=internal,
         metadata={"completion_gate_source_state": source_state},
+        timestamp=timestamp,
     )
     adapter = SimpleNamespace(
         _active_sessions={"agent:main:slack:channel:C0BTEFMAAJX": __import__("asyncio").Event()},
@@ -208,16 +211,36 @@ async def test_proxy_stays_compatible_and_queued_followup_rebinds_source_metadat
     runner._is_goal_continuation_event = lambda event: False
     runner._session_key_for_source = lambda next_source: ctx.session_key
     runner._prepare_profile_scoped_inbound_message_text = AsyncMock(return_value="queued turn")
-    runner._adapter_for_source = lambda next_source: adapter
+    runner._adapter_for_source = lambda source: None
     runner._refresh_agent_cache_message_count = AsyncMock()
-    runner._run_agent = AsyncMock(return_value={"final_response": "queued done", "messages": []})
+    _CAPTURED_SOURCES.clear()
 
     result = await runner._run_agent_queued_followup(
         ctx, adapter, "queued turn", pending_event,
         "discarded", {"interrupted": True, "messages": []}, None,
     )
 
-    assert result["final_response"] == "queued done"
-    queued_kwargs = runner._run_agent.await_args.kwargs
-    assert queued_kwargs["inbound_internal"] is True
-    assert queued_kwargs["inbound_source_state"] == source_state
+    assert result["final_response"] == "done"
+    assert _CAPTURED_SOURCES == [{
+        "platform": "slack",
+        "channel_id": "C0BTEFMAAJX",
+        "request_id": "1789000001.654321",
+        "timestamp": timestamp.timestamp(),
+        "internal": internal,
+        "source_state": source_state,
+    }]
+
+    _CAPTURED_SOURCES.clear()
+    result = await runner._run_agent_queued_followup(
+        ctx, adapter, "interrupt fallback", None,
+        "discarded", {"interrupted": True, "messages": []}, None,
+    )
+    assert result["final_response"] == "done"
+    assert _CAPTURED_SOURCES == [{
+        "platform": "slack",
+        "channel_id": "C0BTEFMAAJX",
+        "request_id": "",
+        "timestamp": None,
+        "internal": False,
+        "source_state": None,
+    }]
