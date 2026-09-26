@@ -16,8 +16,19 @@ import time
 from pathlib import Path
 
 _CARD = re.compile(r"\bt_[0-9a-f]{8}\b", re.I)
-_AUTHORIZED_DECISION = re.compile(
-    r"^\s*(?:Lars\s+decided\s*:|(?:DECISION|SESSION-WRAPUP)-[A-Z0-9_-]+\s*:)", re.I)
+# A decision carrier is necessary provenance, never notification authority.
+_AUTHORIZED_DECISION = re.compile(r"^\s*(?:Lars\s+decided\s*:|DECISION-[A-Z0-9_-]+\s*:)", re.I)
+# Latest estate policy: unsolicited receipts stay silent.  Authority to notify
+# exists only when the owner's own source clause affirmatively asks to be told.
+_RECEIPT_REQUEST = re.compile(
+    r"\b(?:(?:send|give)\s+(?:me|lars)\s+(?:a\s+|the\s+)?(?:receipt|confirmation)"
+    r"|(?:confirm|report)\s+(?:back\s+)?to\s+(?:me|lars)"
+    r"|(?:notify|tell|ping|message|text)\s+(?:me|lars)"
+    r"|let\s+(?:me|lars)\s+know)\b", re.I)
+_CLAUSE_NEGATION = re.compile(r"\b(?:no|not|never|without|skip|nor|unless)\b|n't\b|\bdont\b", re.I)
+_SILENCE_VETO = re.compile(
+    r"\b(?:silent(?:ly)?|quiet(?:ly)?|status\s+only|no\s+(?:decision|action|receipt|"
+    r"confirmation|update|notification|message)s?\b)", re.I)
 _MAX_RECEIPT_SOURCE_AGE_SECONDS = 15 * 60
 _INACTION = re.compile(
     r"\b(?:did not|could not|cannot|can't|will not|won't|nothing I can do|no(?:thing)?\s*[-—:]?\s*not between messages|"
@@ -52,10 +63,25 @@ def _source_identity(profile, source):
     }
 
 
+def _receipt_requested(text):
+    """True only when an un-negated source clause affirmatively solicits a receipt."""
+    if _SILENCE_VETO.search(text):
+        return False
+    for clause in re.split(r"[.;:!,\n]+|\bbut\b", text, flags=re.I):
+        if _RECEIPT_REQUEST.search(clause) and not _CLAUSE_NEGATION.search(clause):
+            return True
+    return False
+
+
 def _source_is_actionable(text):
-    """Admit only an explicit Lars-owned decision, never routine completion prose."""
+    """Admit only a Lars-owned decision that explicitly asks for a receipt.
+
+    Carrier labels (``Lars decided:``, ``DECISION-*:``) prove provenance but grant
+    no permission to notify; routine, status-only and silent sources, and any
+    source whose authorization is unproven, fail closed.
+    """
     return (isinstance(text, str) and _AUTHORIZED_DECISION.search(text) is not None
-            and "?" not in text)
+            and "?" not in text and _receipt_requested(text))
 
 
 def _source_is_current(source_timestamp):

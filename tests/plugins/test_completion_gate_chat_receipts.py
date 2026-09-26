@@ -28,7 +28,7 @@ def databases(tmp_path, *, source_id="1789000000.123456", card="t_ab12cd34"):
         native["mirrored"] = True
         result = json.dumps(native)
         db.execute("INSERT INTO messages(session_id,role,content,timestamp) VALUES(?,?,?,?)",
-                   ("source-session", "user", f"Lars decided: apply {card} now.",
+                   ("source-session", "user", f"Lars decided: apply {card} now; confirm to me on Telegram.",
                     1789000000.123456))
         db.execute("ALTER TABLE messages ADD COLUMN platform_message_id TEXT")
         db.execute("UPDATE messages SET platform_message_id=? WHERE role='user'", (source_id,))
@@ -113,7 +113,7 @@ def settings(state, board):
 def test_chat_decision_requires_matching_transport_and_mirror(tmp_path):
     receipts = load_receipts()
     state, board = databases(tmp_path)
-    decision = "SESSION-WRAPUP-20260920-17: apply t_ab12cd34."
+    decision = "DECISION-20260920-17: apply t_ab12cd34; confirm to me on Telegram."
     cfg = settings(state, board)
 
     missing = receipts.assess_chat_receipt(
@@ -140,7 +140,7 @@ def test_wrong_or_partial_receipts_fail_closed(tmp_path):
     receipts = load_receipts()
     state, board = databases(tmp_path)
     cfg = settings(state, board)
-    decision = "DECISION-20260920-17: apply t_ab12cd34."
+    decision = "DECISION-20260920-17: apply t_ab12cd34; confirm to me on Telegram."
     cases = [
         (messages(target="telegram:999"), "wrong_destination"),
         (messages(card="t_ffffffff"), "wrong_card"),
@@ -176,7 +176,7 @@ def test_native_sender_string_message_id_is_accepted(tmp_path):
     transcript = messages(message_id="4884")
     persist_result(state, transcript)
     result = receipts.assess_chat_receipt(
-        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now.",
+        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now; confirm to me on Telegram.",
         final_response="Applied t_ab12cd34.", messages=transcript,
         session_id="source-session", settings=settings(state, board),
     )
@@ -189,7 +189,7 @@ def test_native_sender_string_message_id_is_accepted(tmp_path):
     wrong_native[-1]["content"] = json.dumps(payload)
     persist_result(state, wrong_native)
     rejected = receipts.assess_chat_receipt(
-        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now.",
+        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now; confirm to me on Telegram.",
         final_response="Applied t_ab12cd34.", messages=wrong_native,
         session_id="source-session", settings=settings(state, board),
     )
@@ -201,7 +201,7 @@ def test_receipt_requires_the_exact_persisted_source_and_owner_action(tmp_path):
     receipts = load_receipts()
     state, board = databases(tmp_path)
     cfg = settings(state, board)
-    decision = "DECISION-20260920-17: apply t_ab12cd34."
+    decision = "DECISION-20260920-17: apply t_ab12cd34; confirm to me on Telegram."
 
     wrong_timestamp = receipts.assess_chat_receipt(
         profile="generalist", source=source(timestamp=1789000000.999999),
@@ -224,7 +224,7 @@ def test_receipt_rejects_non_native_tool_names_and_stale_persisted_results(tmp_p
     receipts = load_receipts()
     state, board = databases(tmp_path)
     cfg = settings(state, board)
-    decision = "DECISION-20260920-17: apply t_ab12cd34."
+    decision = "DECISION-20260920-17: apply t_ab12cd34; confirm to me on Telegram."
 
     for forged_name in ("evil.send_message", "functions.send_message"):
         transcript = messages()
@@ -278,7 +278,7 @@ def test_receipt_source_binding_rejects_prefix_collisions(tmp_path):
     persist_result(state, transcript)
     result = receipts.assess_chat_receipt(
         profile="generalist", source=source(),
-        user_message="DECISION-20260920-17: apply t_ab12cd34.",
+        user_message="DECISION-20260920-17: apply t_ab12cd34; confirm to me on Telegram.",
         final_response="Applied t_ab12cd34.", messages=transcript,
         session_id="source-session", settings=settings(state, board),
     )
@@ -305,7 +305,7 @@ def test_receipt_card_must_match_the_card_verified_by_the_action(tmp_path):
         db.execute("UPDATE messages SET content=? WHERE session_id='telegram-session'", (message,))
     result = receipts.assess_chat_receipt(
         profile="generalist", source=source(),
-        user_message="Lars decided: apply t_ab12cd34 and t_bbbbbbbb now.",
+        user_message="Lars decided: apply t_ab12cd34 and t_bbbbbbbb now; confirm to me on Telegram.",
         final_response="Applied t_ab12cd34.", messages=transcript,
         session_id="source-session", settings=settings(state, board),
     )
@@ -318,15 +318,15 @@ def test_non_obligations_and_explicit_deferrals_are_excluded(tmp_path):
     state, board = databases(tmp_path)
     cfg = settings(state, board)
     cases = [
-        (source(channel_id="OTHER"), "SESSION-WRAPUP-1: apply t_ab12cd34."),
-        (source(profile="cody"), "SESSION-WRAPUP-1: apply t_ab12cd34."),
-        (source(internal=True), "SESSION-WRAPUP-1: apply t_ab12cd34."),
+        (source(channel_id="OTHER"), "DECISION-1: apply t_ab12cd34; confirm to me on Telegram."),
+        (source(profile="cody"), "DECISION-1: apply t_ab12cd34; confirm to me on Telegram."),
+        (source(internal=True), "DECISION-1: apply t_ab12cd34; confirm to me on Telegram."),
         (source(), "SWITCHBOARD-ARCHIVE-20260920: store only."),
         (source(), "STATUS-REQUEST-20260920-01: what is the current state?"),
         (source(source_state={"request_id": source()["request_id"], "status": "cancelled"}),
-         "SESSION-WRAPUP-1: apply t_ab12cd34."),
+         "DECISION-1: apply t_ab12cd34; confirm to me on Telegram."),
         (source(source_state={"request_id": source()["request_id"], "status": "closed"}),
-         "SESSION-WRAPUP-1: apply t_ab12cd34."),
+         "DECISION-1: apply t_ab12cd34; confirm to me on Telegram."),
     ]
     for origin, text in cases:
         assert receipts.assess_chat_receipt(
@@ -344,13 +344,13 @@ def test_non_obligations_and_explicit_deferrals_are_excluded(tmp_path):
     })
     pending = receipts.assess_chat_receipt(
         profile="generalist", source=source(),
-        user_message="SESSION-WRAPUP-1: defer t_ab12cd34 until morning.",
+        user_message="DECISION-1: defer t_ab12cd34 until morning; confirm to me on Telegram.",
         final_response="Deferred on t_ab12cd34.", messages=[], session_id="source-session", settings=cfg,
     )
     assert pending is None
     pending = receipts.assess_chat_receipt(
         profile="generalist", source=pending_source,
-        user_message="SESSION-WRAPUP-1: defer t_ab12cd34 until morning.",
+        user_message="DECISION-1: defer t_ab12cd34 until morning; confirm to me on Telegram.",
         final_response="Deferred on t_ab12cd34.", messages=[], session_id="source-session", settings=cfg,
     )
     assert pending["verdict"] == "unverified"
@@ -360,7 +360,7 @@ def test_non_obligations_and_explicit_deferrals_are_excluded(tmp_path):
         db.execute("DELETE FROM tasks WHERE id='t_ab12cd34'")
     missing_owner = receipts.assess_chat_receipt(
         profile="generalist", source=pending_source,
-        user_message="SESSION-WRAPUP-1: defer t_ab12cd34 until morning.",
+        user_message="DECISION-1: defer t_ab12cd34 until morning; confirm to me on Telegram.",
         final_response="Deferred on t_ab12cd34.", messages=[], session_id="source-session", settings=cfg,
     )
     assert missing_owner["verdict"] == "failed"
@@ -465,7 +465,7 @@ def test_stale_historical_closure_is_silent_but_current_lars_decision_qualifies(
     assert receipts.assess_chat_receipt(
         profile="generalist",
         source=source(request_id=historical_id),
-        user_message=f"Lars decided: apply {historical_card} now.",
+        user_message=f"Lars decided: apply {historical_card} now; confirm to me on Telegram.",
         final_response=closure,
         messages=[action],
         session_id="source-session",
@@ -478,7 +478,7 @@ def test_stale_historical_closure_is_silent_but_current_lars_decision_qualifies(
     current_state, current_board = databases(current_dir)
     current = receipts.assess_chat_receipt(
         profile="generalist", source=source(),
-        user_message="Lars decided: apply t_ab12cd34 now.",
+        user_message="Lars decided: apply t_ab12cd34 now; confirm to me on Telegram.",
         final_response="Applied t_ab12cd34.", messages=[action_message()],
         session_id="source-session", settings=settings(current_state, current_board),
     )
@@ -550,7 +550,7 @@ def test_unavailable_evidence_is_unverified_and_never_instructs_resend(tmp_path,
     cfg = settings(state, board)
     cfg["state_db_path"] = str(tmp_path / "missing.db")
     result = receipts.assess_chat_receipt(
-        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now.",
+        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now; confirm to me on Telegram.",
         final_response="Applied t_ab12cd34.", messages=[action_message()],
         session_id="source-session", settings=cfg,
     )
@@ -559,7 +559,7 @@ def test_unavailable_evidence_is_unverified_and_never_instructs_resend(tmp_path,
     assert "do not resend" in result["repair"].lower()
 
     compacted = receipts.assess_chat_receipt(
-        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now.",
+        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now; confirm to me on Telegram.",
         final_response="All set.", messages=[], session_id="source-session", settings=cfg,
     )
     assert compacted["verdict"] == "unverified"
@@ -569,7 +569,7 @@ def test_unavailable_evidence_is_unverified_and_never_instructs_resend(tmp_path,
     monkeypatch.setattr(receipts, "_open_readonly",
                         lambda _: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")))
     locked = receipts.assess_chat_receipt(
-        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now.",
+        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now; confirm to me on Telegram.",
         final_response="Applied t_ab12cd34.", messages=[action_message()],
         session_id="source-session", settings=settings(state, board),
     )
@@ -599,7 +599,7 @@ def test_plugin_routes_receipt_failure_through_existing_block_and_replay_dedupes
     monkeypatch.setattr(loaded, "bounded_extract", lambda *a, **k: [])
     kwargs = dict(
         final_response="Applied t_ab12cd34.", session_id="source-session", task_id="task",
-        source_identity=source(), user_message="SESSION-WRAPUP-20260920-17: apply t_ab12cd34.",
+        source_identity=source(), user_message="DECISION-20260920-17: apply t_ab12cd34; confirm to me on Telegram.",
     )
     blocked = manager.invoke_hook("before_turn_end", turn_id="one", messages=[action_message()], **kwargs)
     assert blocked[0]["action"] == "block"
@@ -644,7 +644,7 @@ def test_plugin_recovers_fully_compacted_receipt_before_first_verdict(
     result = manager.invoke_hook(
         "before_turn_end", final_response=final_response, session_id="source-session",
         task_id="task", turn_id="first", source_identity=source(),
-        user_message="Lars decided: apply the approved change now.", messages=[],
+        user_message="Lars decided: apply the approved change now; confirm to me on Telegram.", messages=[],
     )
     assert result == []
     events = loaded.Gate(
@@ -679,7 +679,7 @@ def test_plugin_reconciles_persisted_ambiguous_send_without_resend(
     result = manager.invoke_hook(
         "before_turn_end", final_response=final_response, session_id="source-session",
         task_id="task", turn_id="first", source_identity=source(),
-        user_message="Lars decided: apply the approved change now.", messages=[],
+        user_message="Lars decided: apply the approved change now; confirm to me on Telegram.", messages=[],
     )
     assert result[0]["action"] == "block"
     assert "reconcile the transport attempt" in result[0]["message"].lower()
@@ -711,7 +711,7 @@ def test_plugin_repairs_mirror_only_without_resend(tmp_path, monkeypatch):
     blocked = manager.invoke_hook(
         "before_turn_end", final_response="Applied t_ab12cd34.", session_id="source-session",
         task_id="task", turn_id="mirror", source_identity=source(),
-        user_message="Lars decided: apply t_ab12cd34 now.", messages=transcript,
+        user_message="Lars decided: apply t_ab12cd34 now; confirm to me on Telegram.", messages=transcript,
     )
     assert blocked[0]["action"] == "block"
     assert "mirror only" in blocked[0]["message"].lower()
@@ -724,10 +724,33 @@ def test_contradictory_mirror_evidence_requires_reconciliation(tmp_path):
     transcript = messages(mirrored=False)
     persist_result(state, transcript)
     result = receipts.assess_chat_receipt(
-        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now.",
+        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now; confirm to me on Telegram.",
         final_response="Applied t_ab12cd34.", messages=transcript,
         session_id="source-session", settings=settings(state, board),
     )
     assert result["verdict"] == "unverified"
     assert result["mismatch"].endswith("mirror_evidence_conflict")
     assert "do not resend" in result["repair"].lower()
+
+
+@pytest.mark.parametrize("text,eligible", [
+    ("SESSION-WRAPUP-20260926-01: t_ab12cd34 is complete. No Lars action remains.", False),
+    ("DECISION-20260926-01: Status only: t_ab12cd34 is done; no decision or action needed.", False),
+    ("Lars decided: keep t_ab12cd34 silent; do not send me a receipt.", False),
+    ("Lars decided: apply t_ab12cd34 now.", False),
+    ("Lars decided: apply t_ab12cd34 now; don't tell me.", False),
+    ("Lars decided: apply t_ab12cd34 now; confirm to me on Telegram.", True),
+])
+def test_assessment_and_sender_share_solicited_decision_admission(tmp_path, text, eligible):
+    receipts = load_receipts()
+    assert receipts._source_is_actionable(text) is eligible
+    state, board = databases(tmp_path)
+    with sqlite3.connect(state) as db:
+        db.execute("UPDATE messages SET content=? WHERE role='user'", (text,))
+    result = receipts.assess_chat_receipt(
+        profile="generalist", source=source(), user_message=text,
+        final_response="Applied t_ab12cd34.", messages=[], session_id="source-session",
+        settings={"chat_source_channel": "C0BTEFMAAJX", "telegram_destination": "telegram:123456789",
+                  "state_db_path": str(state), "kanban_db_path": str(board),
+                  "db_path": str(tmp_path / "gate.db"), "destination_session_id": "telegram-session"})
+    assert (result is None) is (not eligible)

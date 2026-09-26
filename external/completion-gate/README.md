@@ -22,10 +22,13 @@ submit no source message, tool result, card text, or Telegram text to that model
 
 `chat_receipts_enabled` applies only to `generalist` turns from the configured
 Slack channel whose source has a durable platform request ID, is no more than 15
-minutes old, explicitly carries a non-question `Lars decided:`, `DECISION-*:` or
-`SESSION-WRAPUP-*:` instruction, has a current owner card, a matching action in
+minutes old, carries a non-question `Lars decided:` or `DECISION-*:` instruction
+that itself affirmatively asks for a receipt in an un-negated clause (e.g. "confirm
+to me", "let me know", "notify me"), with no silent/status-only/no-action veto, has a current owner card, a matching action in
 the current turn, and no later source turn. Markerless and routine completion,
-closure, status, result, release, follow-up and internal sources are excluded. Cancelled, superseded,
+closure, status, result, release, follow-up, wrap-up and internal sources are
+excluded; a carrier label is provenance only, never notification authority, and an
+unsolicited decision stays silent under the no-chatter policy. Cancelled, superseded,
 closed-channel and quiet-hours states are accepted only from transport-authored
 source metadata bound to the exact request ID; incidental source words never
 bypass the check. A quiet-hours deferral is pending only while its source-bound
