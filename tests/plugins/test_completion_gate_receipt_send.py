@@ -812,6 +812,14 @@ def test_cli_uses_real_native_helper_and_mirror_with_only_transport_stubbed(tmp_
     (f"Lars decided: apply {CARD} now; send me a receipt unless it fails.", 0),
     (f"Lars decided: apply {CARD} now; send me a receipt. Scratch that, stay silent.", 0),
     (f"Lars decided: send me a receipt; apply {CARD}.", 0),
+    # The decision side must be a closed imperative: reported, hypothetical or
+    # rejected request wording is not current decision authority.
+    (f"DECISION-20260926-01: For {CARD} the archived instruction was; send me a receipt.", 0),
+    (f"DECISION-20260926-01: For {CARD} the hypothetical instruction is; send me a receipt.", 0),
+    (f"DECISION-20260926-01: For {CARD} the rejected request was; send me a receipt.", 0),
+    (f"Lars decided: we might apply {CARD} later; send me a receipt.", 0),
+    (f"Lars decided: Lars said apply {CARD}; send me a receipt.", 0),
+    (f"Lars decided: apply {CARD} and its follow-up; send me a receipt.", 0),
     # Genuine current positive: owner decision that explicitly asks for a receipt.
     (f"Lars decided: apply {CARD} now; confirm to me on Telegram.", 1),
     (f"DECISION-20260926-03: apply {CARD}. Let me know when it is done.", 1),

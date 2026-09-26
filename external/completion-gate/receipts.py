@@ -19,7 +19,7 @@ from pathlib import Path
 _CARD = re.compile(r"\bt_[0-9a-f]{8}\b", re.I)
 # Latest estate policy: unsolicited receipts stay silent.  Authority to notify
 # exists only when the WHOLE current request has one closed, conservative shape:
-#   <carrier>: <plain decision>; <bare solicitation>.
+#   <carrier>: <imperative decision>; <bare solicitation>.
 # The solicitation must be the entire final clause (so a prefix such as "do not,
 # under any circumstances," cannot be split off), and the request as a whole must
 # carry no quotation, negation, withdrawal, condition or silence wording.  Anything
@@ -31,9 +31,19 @@ _SOLICITATION = (
     r"|notify\s+me|tell\s+me|ping\s+me|message\s+me|let\s+me\s+know)"
     r"(?:\s+on\s+telegram)?"
     r"(?:\s+(?:when|once)\s+(?:it\s+is\s+|it's\s+)?(?:done|applied|complete))?")
+# The decision side is a closed imperative, not free prose: one approved verb
+# applied to explicit card ids (or "the approved change").  Reported,
+# hypothetical, archived or rejected wording cannot match it.
+_DECISION_TARGET = (
+    r"(?:t_[0-9a-f]{8}(?:\s*(?:,\s*(?:and\s+)?|and\s+)t_[0-9a-f]{8})*"
+    r"|the\s+approved\s+change)")
+_DECISION = (
+    r"(?:(?:apply|approve|accept|merge|ship|release|deploy|unblock|"
+    r"proceed\s+with|go\s+ahead\s+with)\s+" + _DECISION_TARGET + r"(?:\s+now)?"
+    r"|defer\s+" + _DECISION_TARGET + r"(?:\s+until\s+(?:morning|tomorrow))?)")
 _SOLICITED_DECISION = re.compile(
     r"^(?:Lars\s+decided|DECISION-[A-Z0-9_-]+)\s*:\s*"
-    r"(?P<decision>[A-Za-z0-9_][A-Za-z0-9_ ,/-]*?)\s*[.;]\s*"
+    r"(?P<decision>" + _DECISION + r")\s*[.;]\s*"
     r"(?P<ask>" + _SOLICITATION + r")\s*\.?$", re.I)
 _REQUEST_VETO = re.compile(
     r"\b(?:no|not|never|none|nor|without|skip|stop|cancel\w*|withdr[ae]wn?|withdraw\w*|"
