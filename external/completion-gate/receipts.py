@@ -15,7 +15,9 @@ import time
 from pathlib import Path
 
 _CARD = re.compile(r"\bt_[0-9a-f]{8}\b", re.I)
-_ARCHIVE_ONLY = re.compile(r"^\s*(?:SWITCHBOARD-ARCHIVE|STATUS-REQUEST)-[A-Z0-9_-]+\b", re.I)
+_ARCHIVE_ONLY = re.compile(
+    r"^\s*(?:SWITCHBOARD-ARCHIVE|STATUS-REQUEST|BOT-WAKE)-[A-Z0-9_-]+\b", re.I)
+_CONSULTATION_ONLY = re.compile(r"^\s*DECISION-[A-Z0-9_-]+\s*:.*\?\s*$", re.I | re.S)
 _INACTION = re.compile(
     r"\b(?:did not|could not|cannot|can't|will not|won't|nothing I can do|no(?:thing)?\s*[-—:]?\s*not between messages|"
     r"board says running but no worker is executing|needs a permitted approval path)\b",
@@ -47,6 +49,11 @@ def _source_identity(profile, source):
         "request_id": str(source.get("request_id") or ""),
         "timestamp": source.get("timestamp"),
     }
+
+
+def _source_is_actionable(text):
+    return (isinstance(text, str) and not _ARCHIVE_ONLY.search(text)
+            and not _CONSULTATION_ONLY.search(text))
 
 
 def _open_readonly(path):
@@ -190,7 +197,7 @@ def _unique_source_row(path, session_id, request_id, source_channel):
     try:
         with _open_readonly(path) as db:
             rows = db.execute(
-                "SELECT m.id,m.timestamp,m.session_id,s.source,s.chat_id FROM messages m "
+                "SELECT m.id,m.timestamp,m.session_id,s.source,s.chat_id,m.content FROM messages m "
                 "JOIN sessions s ON s.id=m.session_id WHERE m.role='user' "
                 "AND m.platform_message_id=? ORDER BY m.id LIMIT 2",
                 (request_id,),
@@ -204,7 +211,39 @@ def _unique_source_row(path, session_id, request_id, source_channel):
     row = rows[0]
     if row[2] != session_id or row[3] != "slack" or str(row[4] or "") != source_channel:
         raise ValueError("source_session_mismatch")
-    return row[0], row[1]
+    return row
+
+
+def _assessment_source_row(path, session_id, request_id, source_channel):
+    """Read the exact source row; validate channel provenance when the native session table exists."""
+    try:
+        with _open_readonly(path) as db:
+            rows = db.execute(
+                "SELECT id,timestamp,session_id,content FROM messages WHERE role='user' "
+                "AND platform_message_id=? ORDER BY id LIMIT 2",
+                (request_id,),
+            ).fetchall()
+            has_sessions = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'",
+            ).fetchone() is not None
+            session_row = None
+            if has_sessions and len(rows) == 1:
+                session_row = db.execute(
+                    "SELECT source,chat_id FROM sessions WHERE id=?", (rows[0][2],),
+                ).fetchone()
+    except Exception as exc:
+        raise ValueError("source_database_unavailable") from exc
+    if not rows:
+        raise ValueError("source_row_missing")
+    if len(rows) != 1:
+        raise ValueError("source_row_ambiguous")
+    row = rows[0]
+    if row[2] != session_id:
+        raise ValueError("source_session_mismatch")
+    if has_sessions and (session_row is None or session_row[0] != "slack"
+                         or str(session_row[1] or "") != source_channel):
+        raise ValueError("source_session_mismatch")
+    return row
 
 
 def _receipt_configuration(settings):
@@ -254,8 +293,11 @@ def receipt_send(settings, *, source_request_id, card_id, message_file):
     channel, destination, destination_session, platform, chat_id = _receipt_configuration(settings)
     if _card_exists(settings.get("kanban_db_path"), card_id) is not True:
         raise ValueError("card_not_current")
-    source_row_id, source_timestamp = _unique_source_row(
+    source_row = _unique_source_row(
         settings.get("state_db_path"), session_id, source_request_id, channel)
+    source_row_id, source_timestamp, source_text = source_row[0], source_row[1], source_row[5]
+    if not _source_is_actionable(source_text):
+        raise ValueError("source_not_actionable")
     action = _persisted_action_cards(
         settings.get("state_db_path"), session_id, source_request_id, source_timestamp)
     if action is None or card_id not in action["cards"]:
@@ -343,33 +385,74 @@ def receipt_send(settings, *, source_request_id, card_id, message_file):
     return {"status": disposition, "message_id": str(message_id or "") if transport_ok else ""}
 
 
-def durable_receipt_binding(settings, source_identity, session_id):
-    """Return a currently valid CLI-owned mirrored receipt for an exact source identity."""
+def _durable_receipt_state(settings, source_identity, session_id):
+    """Revalidate the latest gate receipt against its exact live source and destination."""
     if not isinstance(source_identity, dict):
         return None
     try:
         with _open_readonly(settings.get("db_path")) as db:
             db.row_factory = sqlite3.Row
-            rows = db.execute("""SELECT * FROM completion_receipts
+            row = db.execute("""SELECT * FROM completion_receipts
                 WHERE profile=? AND session_id=? AND source_channel=? AND source_request_id=?
-                AND source_timestamp=? AND mirror_disposition='mirrored' ORDER BY id DESC""", (
+                AND source_timestamp=? ORDER BY id DESC LIMIT 1""", (
                 source_identity.get("profile"), session_id, source_identity.get("channel"),
                 source_identity.get("request_id"), source_identity.get("timestamp"),
-            )).fetchall()
+            )).fetchone()
     except Exception:
         return None
-    for row in rows:
-        if (row["destination"] != str(settings.get("telegram_destination") or "")
-                or row["destination_session_id"] != str(settings.get("telegram_session_id") or "")
-                or _card_exists(settings.get("kanban_db_path"), row["card_id"]) is not True):
-            continue
+    if row is None:
+        return None
+    try:
+        source_row = _unique_source_row(
+            settings.get("state_db_path"), session_id, row["source_request_id"],
+            row["source_channel"])
+    except ValueError:
+        return None
+    if (source_row[0] != row["source_row_id"]
+            or source_row[1] != row["source_timestamp"]
+            or not _source_is_actionable(source_row[5])):
+        return None
+    action = _persisted_action_cards(
+        settings.get("state_db_path"), session_id,
+        row["source_request_id"], row["source_timestamp"])
+    if action is None or row["card_id"] not in action["cards"]:
+        return None
+    if (row["destination"] != str(settings.get("telegram_destination") or "")
+            or row["destination_session_id"] != str(settings.get("telegram_session_id") or "")
+            or _card_exists(settings.get("kanban_db_path"), row["card_id"]) is not True):
+        return None
+
+    disposition = row["mirror_disposition"]
+    if disposition in {"transport_only", "mirrored"}:
+        if not _valid_message_id(row["provider_message_id"]):
+            return None
         mirror = _mirror_hash_exists(
             settings.get("state_db_path"), row["destination_session_id"],
             row["message_hash"], row["source_timestamp"])
-        if mirror is True:
-            return {"destination": row["destination"], "message_id": row["provider_message_id"],
-                    "card_id": row["card_id"], "receipt_kind": "gate_owned"}
-    return None
+        if mirror is None:
+            disposition = "reconciliation"
+        elif mirror is True:
+            disposition = "mirrored"
+        else:
+            disposition = "transport_only"
+    elif disposition == "reserved":
+        disposition = "reconciliation"
+    return {
+        "disposition": disposition,
+        "destination": row["destination"],
+        "message_id": row["provider_message_id"],
+        "card_id": row["card_id"],
+        "receipt_kind": "gate_owned",
+    }
+
+
+def durable_receipt_binding(settings, source_identity, session_id):
+    """Return a currently valid CLI-owned mirrored receipt for an exact source identity."""
+    state = _durable_receipt_state(settings, source_identity, session_id)
+    if state is None or state["disposition"] != "mirrored":
+        return None
+    return {key: state[key] for key in (
+        "destination", "message_id", "card_id", "receipt_kind")}
 
 
 def _send_attempts(messages):
@@ -553,7 +636,7 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
             or not request_id or source.get("internal") is True):
         return None
     text = user_message if isinstance(user_message, str) else ""
-    if _ARCHIVE_ONLY.search(text):
+    if not _source_is_actionable(text):
         return None
     identity = _source_identity(profile, source)
     state = _source_state(source, request_id)
@@ -577,12 +660,19 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
             "subtype": "missing_chat_telegram_receipt", "source_identity": identity,
         }
     state_path = settings.get("state_db_path")
-    source_evidence = _source_persisted(
-        state_path, session_id, request_id, source.get("timestamp"))
-    if source_evidence is None:
-        return _reconcile(identity)
-    if source_evidence is not True:
+    try:
+        persisted_source = _assessment_source_row(state_path, session_id, request_id, channel)
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "source_database_unavailable":
+            return _reconcile(identity)
+        if reason == "source_row_missing":
+            return _assessment(identity, "source_not_persisted")
+        return _assessment(identity, reason)
+    if persisted_source[1] != source.get("timestamp"):
         return _assessment(identity, "source_not_persisted")
+    if not _source_is_actionable(persisted_source[3]):
+        return None
     acted, verified_action_cards = _action_status(final_response, messages)
     persisted_action = _persisted_action_cards(
         state_path, session_id, request_id, source.get("timestamp"))
@@ -614,12 +704,26 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
     board_path = settings.get("kanban_db_path")
     if not action_cards:
         return _assessment(identity, "action_unverified")
-    durable = durable_receipt_binding(settings, identity, session_id)
-    if durable and durable.get("card_id") in action_cards & source_cards:
+    durable_state = _durable_receipt_state(settings, identity, session_id)
+    if (durable_state and durable_state.get("card_id") in action_cards & source_cards
+            and durable_state["disposition"] == "mirrored"):
+        durable = {key: durable_state[key] for key in (
+            "destination", "message_id", "card_id", "receipt_kind")}
         return {
             "verdict": "reproduced", "mismatch": "", "subtype": "missing_chat_telegram_receipt",
             "source_identity": identity, "receipt": durable,
         }
+    if durable_state and durable_state.get("card_id") in action_cards & source_cards:
+        if durable_state["disposition"] == "transport_only":
+            return _assessment(
+                identity, "mirror_missing",
+                repair="Repair the destination-session mirror only; transport succeeded, so do not resend.",
+            )
+        if durable_state["disposition"] == "reconciliation":
+            return _assessment(
+                identity, "transport_reconciliation_no_resend",
+                repair="Reconcile the persisted transport and mirror evidence; do not resend until absence is proven.",
+            )
     calls, results = _send_attempts(messages)
     persisted_attempts = _persisted_send_attempts(state_path, session_id, source.get("timestamp"))
     if persisted_attempts is None and not calls:

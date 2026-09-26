@@ -42,8 +42,9 @@ It records the source identity, card, destination/session, message hash, provide
 message ID and mirror disposition in the gate database; terminal stdout is never
 evidence. A reservation written before transport makes retries at-most-once.
 Transport-only retries invoke the native mirror helper only; ambiguous/unavailable
-transport remains reconciliation/no-resend. The before-turn checker revalidates
-the current card, configured destination/session and exact destination mirror.
+transport remains reconciliation/no-resend. The before-turn checker preserves those
+no-resend dispositions and revalidates the exact source row/channel, same-source-turn
+action, current card, configured destination/session and exact destination mirror.
 Legacy in-memory/persisted `send_message` evidence remains accepted for migration
 coverage, but the unrestricted model tool stays unregistered.
 
