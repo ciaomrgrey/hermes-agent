@@ -131,6 +131,47 @@ def _send_attempts(messages):
     return calls, results
 
 
+def _persisted_send_attempts(path, session_id, source_timestamp):
+    """Recover native send calls/results after transcript compaction."""
+    try:
+        with _open_readonly(path) as db:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
+            if "tool_calls" not in columns:
+                return None
+            assistant_rows = db.execute(
+                "SELECT tool_calls FROM messages WHERE session_id=? AND role='assistant' "
+                "AND timestamp>=? AND tool_calls IS NOT NULL ORDER BY id",
+                (session_id, float(source_timestamp or 0)),
+            ).fetchall()
+            result_rows = db.execute(
+                "SELECT tool_call_id, content FROM messages WHERE session_id=? AND role='tool' "
+                "AND tool_name='send_message' AND timestamp>=? ORDER BY id",
+                (session_id, float(source_timestamp or 0)),
+            ).fetchall()
+    except Exception:
+        return None
+    calls = {}
+    for (raw_calls,) in assistant_rows:
+        try:
+            parsed = json.loads(raw_calls) if isinstance(raw_calls, str) else raw_calls
+        except (TypeError, ValueError):
+            continue
+        for call in parsed if isinstance(parsed, list) else ():
+            if not isinstance(call, dict):
+                continue
+            fn = call.get("function") or {}
+            if str(fn.get("name") or "") == "send_message":
+                calls[str(call.get("id") or "")] = _json(fn.get("arguments"))
+    results = {
+        str(call_id or ""): {
+            "role": "tool", "tool_name": "send_message",
+            "tool_call_id": str(call_id or ""), "content": content,
+        }
+        for call_id, content in result_rows
+    }
+    return calls, results
+
+
 def _message_binds_source(message, request_id):
     """Require an exact ``source <request-id>`` token, not a substring collision."""
     if not isinstance(message, str) or not request_id:
@@ -146,7 +187,7 @@ def _succeeded(result):
     return result.get("ok") is True or result.get("success") is True
 
 
-def _action_status(final_response, messages, source_cards):
+def _action_status(final_response, messages):
     """Return ``(claimed, verified_cards)`` for source-owned actions."""
     claimed = bool(isinstance(final_response, str)
                    and _ACTION_RESULT.search(final_response) and _CARD.search(final_response))
@@ -161,7 +202,7 @@ def _action_status(final_response, messages, source_cards):
         if name in _ACTION_TOOLS:
             claimed = True
             result_cards = set(_CARD.findall(json.dumps(result, sort_keys=True)))
-            verified_cards.update(result_cards & source_cards)
+            verified_cards.update(result_cards)
     return claimed, verified_cards
 
 
@@ -232,11 +273,16 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
             "mismatch": "uncarded_commitment:chat_telegram_receipt_pending_quiet_hours",
             "subtype": "missing_chat_telegram_receipt", "source_identity": identity,
         }
-    if not source_cards:
-        return None
-    acted, action_cards = _action_status(final_response, messages, source_cards)
+    acted, verified_action_cards = _action_status(final_response, messages)
     if not acted:
         return None
+    if source_cards:
+        action_cards = verified_action_cards & source_cards
+    else:
+        source_cards = set(verified_action_cards)
+        action_cards = set(verified_action_cards)
+    if not source_cards:
+        return _reconcile(identity, "owner_card_unresolved")
 
     expected_target = str(settings.get("telegram_destination") or "")
     expected_platform, separator, expected_chat_id = expected_target.partition(":")
@@ -253,6 +299,13 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
     if not action_cards:
         return _assessment(identity, "action_unverified")
     calls, results = _send_attempts(messages)
+    persisted_attempts = _persisted_send_attempts(state_path, session_id, source.get("timestamp"))
+    if persisted_attempts is None and not calls:
+        return _reconcile(identity)
+    if persisted_attempts:
+        persisted_calls, persisted_results = persisted_attempts
+        calls = {**calls, **persisted_calls}
+        results = {**results, **persisted_results}
     saw_target = saw_source = saw_card = saw_transport = saw_mirror = evidence_unknown = False
     for call_id, args in calls.items():
         if str(args.get("target") or "") != expected_target:

@@ -13,7 +13,7 @@ def databases(tmp_path, *, source_id="1789000000.123456", card="t_ab12cd34"):
     with sqlite3.connect(state) as db:
         db.execute("""CREATE TABLE messages (
             id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT,
-            tool_call_id TEXT, tool_name TEXT, timestamp REAL
+            tool_call_id TEXT, tool_name TEXT, tool_calls TEXT, timestamp REAL
         )""")
         from tools.send_message_senders import _success
         native = _success("telegram", "123456789", message_id="4884")
@@ -67,6 +67,20 @@ def action_message(*, task_id="t_ab12cd34", tool_name="kanban_comment"):
 def persist_result(state, transcript):
     with sqlite3.connect(state) as db:
         db.execute("UPDATE messages SET content=? WHERE tool_call_id='send-1'", (transcript[-1]["content"],))
+
+
+def persist_call(state, transcript, *, include_result=True):
+    with sqlite3.connect(state) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
+        if "tool_calls" not in columns:
+            db.execute("ALTER TABLE messages ADD COLUMN tool_calls TEXT")
+        db.execute(
+            "INSERT INTO messages(session_id,role,content,tool_calls,timestamp) VALUES(?,?,?,?,?)",
+            ("source-session", "assistant", "", json.dumps(transcript[1]["tool_calls"]),
+             source()["timestamp"] + 0.5),
+        )
+        if not include_result:
+            db.execute("DELETE FROM messages WHERE tool_call_id='send-1'")
 
 
 def settings(state, board):
@@ -454,6 +468,69 @@ def test_plugin_routes_receipt_failure_through_existing_block_and_replay_dedupes
     stale = manager.invoke_hook("before_turn_end", turn_id="four", messages=[], **kwargs)
     assert stale[0]["action"] == "block"
     assert "action_unverified" in stale[0]["message"]
+
+
+def test_plugin_recovers_persisted_receipt_before_first_verdict(tmp_path, monkeypatch):
+    from hermes_cli import plugins
+    state, board = databases(tmp_path)
+    transcript = messages()
+    persist_call(state, transcript)
+    cfg = {"plugins": {"enabled": ["completion-gate"], "entries": {"completion-gate": {"settings": {
+        "enabled": True, "chat_receipts_enabled": True, "db_path": str(tmp_path / "gate.db"),
+        **settings(state, board),
+    }}}}}
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(json.dumps(cfg))
+    from tests.completion_gate_support import install
+    install(tmp_path)
+    manager = plugins.PluginManager()
+    manager.discover_and_load()
+    loaded = manager._plugins["completion-gate"].module
+    import hermes_constants
+    monkeypatch.setattr(hermes_constants, "profile_name_for_home", lambda _: "generalist")
+    monkeypatch.setattr(loaded, "bounded_extract", lambda *a, **k: [])
+
+    result = manager.invoke_hook(
+        "before_turn_end", final_response="Applied t_ab12cd34.", session_id="source-session",
+        task_id="task", turn_id="first", source_identity=source(),
+        user_message="Lars decided: apply the approved change now.", messages=[action_message()],
+    )
+    assert result == []
+    events = loaded.Gate(
+        {"enabled": True, "db_path": str(tmp_path / "gate.db")}, extract=lambda _: [],
+    ).events()
+    assert events[-1]["claims"][0]["receipt"]["message_id"] == "4884"
+
+
+def test_plugin_reconciles_persisted_ambiguous_send_without_resend(tmp_path, monkeypatch):
+    from hermes_cli import plugins
+    state, board = databases(tmp_path)
+    transcript = messages()
+    persist_call(state, transcript, include_result=False)
+    cfg = {"plugins": {"enabled": ["completion-gate"], "entries": {"completion-gate": {"settings": {
+        "enabled": True, "chat_receipts_enabled": True, "db_path": str(tmp_path / "gate.db"),
+        **settings(state, board),
+    }}}}}
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(json.dumps(cfg))
+    from tests.completion_gate_support import install
+    install(tmp_path)
+    manager = plugins.PluginManager()
+    manager.discover_and_load()
+    loaded = manager._plugins["completion-gate"].module
+    import hermes_constants
+    monkeypatch.setattr(hermes_constants, "profile_name_for_home", lambda _: "generalist")
+    monkeypatch.setattr(loaded, "bounded_extract", lambda *a, **k: [])
+
+    result = manager.invoke_hook(
+        "before_turn_end", final_response="Applied t_ab12cd34.", session_id="source-session",
+        task_id="task", turn_id="first", source_identity=source(),
+        user_message="Lars decided: apply the approved change now.", messages=[action_message()],
+    )
+    assert result[0]["action"] == "block"
+    assert "reconcile the transport attempt" in result[0]["message"].lower()
+    assert "do not resend" in result[0]["message"].lower()
+    assert "send the missing authorized line" not in result[0]["message"].lower()
 
 
 def test_plugin_repairs_mirror_only_without_resend(tmp_path, monkeypatch):
