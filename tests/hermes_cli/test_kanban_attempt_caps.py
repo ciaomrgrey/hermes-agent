@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 from hermes_cli import kanban as kc
 from hermes_cli import kanban_db as kb
 from hermes_cli import kanban_db_connect as kbc
+from hermes_cli import kanban_db_dispatch as kbd
 from tools import kanban_tools
 
 
@@ -161,3 +163,97 @@ def test_tool_show_reads_back_attempt_cap(conn, monkeypatch, tmp_path: Path) -> 
     payload = __import__("json").loads(kanban_tools._handle_show({"task_id": task_id}))
 
     assert payload["task"]["max_attempts"] == 2
+
+
+@pytest.mark.parametrize("outcome", ["timed_out", "crashed", "protocol_violation"])
+def test_failed_worker_runs_charge_attempt_cap(conn, outcome: str) -> None:
+    task_id = kb.create_task(conn, title=outcome, assignee="builder", max_attempts=1)
+    assert kb.claim_task(conn, task_id, claimer="builder:first") is not None
+    assert not kbd._record_task_failure(
+        conn,
+        task_id,
+        outcome,
+        outcome=outcome,
+        failure_limit=3,
+        release_claim=True,
+        end_run=True,
+    )
+
+    assert kb.claim_task(conn, task_id, claimer="builder:second") is None
+    task = kb.get_task(conn, task_id)
+    assert task is not None
+    assert task.status == "blocked"
+
+
+def test_infrastructure_spawn_failure_does_not_charge_attempt_cap(conn) -> None:
+    task_id = kb.create_task(conn, title="spawn refusal", assignee="builder", max_attempts=1)
+    assert kb.claim_task(conn, task_id, claimer="dispatcher:first") is not None
+    assert not kbd._record_task_failure(
+        conn,
+        task_id,
+        "profile cannot be spawned",
+        outcome="spawn_failed",
+        failure_limit=3,
+        release_claim=True,
+        end_run=True,
+    )
+
+    assert kb.claim_task(conn, task_id, claimer="dispatcher:second") is not None
+    assert len(kb.list_runs(conn, task_id)) == 2
+
+
+def test_manual_unblock_cannot_renew_an_exhausted_attempt(conn) -> None:
+    task_id = kb.create_task(conn, title="no renewal", assignee="builder", max_attempts=1)
+    assert kb.claim_task(conn, task_id) is not None
+    assert kb.reclaim_task(conn, task_id, reason="worker crashed", signal_fn=lambda *_: None)
+    assert kb.claim_task(conn, task_id) is None
+    assert kb.unblock_task(conn, task_id)
+
+    assert kb.claim_task(conn, task_id) is None
+    task = kb.get_task(conn, task_id)
+    assert task is not None
+    assert task.status == "blocked"
+    assert len(kb.list_runs(conn, task_id)) == 1
+
+
+def test_reassigning_a_to_b_to_a_does_not_reset_attempt_history(conn) -> None:
+    task_id = kb.create_task(conn, title="profile round trip", assignee="a", max_attempts=1)
+    assert kb.claim_task(conn, task_id) is not None
+    assert kb.reclaim_task(conn, task_id, reason="handoff", signal_fn=lambda *_: None)
+    assert kb.assign_task(conn, task_id, "b")
+    assert kb.claim_task(conn, task_id) is not None
+    assert kb.reclaim_task(conn, task_id, reason="handoff back", signal_fn=lambda *_: None)
+    assert kb.assign_task(conn, task_id, "a")
+
+    assert kb.claim_task(conn, task_id) is None
+    assert [(run.profile, run.outcome) for run in kb.list_runs(conn, task_id)] == [
+        ("a", "reclaimed"),
+        ("b", "reclaimed"),
+    ]
+
+
+def test_legacy_schema_migrates_attempt_cap_as_unlimited(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.db"
+    initialized = kbc.connect(db_path)
+    task_id = kb.create_task(initialized, title="old task", assignee="builder")
+    initialized.close()
+    legacy = sqlite3.connect(db_path)
+    legacy.row_factory = sqlite3.Row
+    legacy.execute("ALTER TABLE tasks DROP COLUMN max_attempts")
+    legacy.commit()
+    kbc._migrate_add_optional_columns(legacy)
+    legacy.commit()
+    kbc._migrate_add_optional_columns(legacy)
+    legacy.commit()
+    legacy.close()
+
+    migrated = sqlite3.connect(db_path)
+    migrated.row_factory = sqlite3.Row
+    try:
+        columns = {row[1] for row in migrated.execute("PRAGMA table_info(tasks)")}
+        assert "max_attempts" in columns
+        task = kb.get_task(migrated, task_id)
+        assert task is not None
+        assert task.max_attempts is None
+    finally:
+        migrated.close()
