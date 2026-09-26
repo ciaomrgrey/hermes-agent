@@ -84,6 +84,10 @@ class Gate:
         rows = self.events()
         claims = [c for r in rows for c in r["claims"]]
         unverified = sum(c["verdict"] == "unverified" for c in claims)
+        subtypes = {}
+        for claim in claims:
+            if subtype := claim.get("subtype"):
+                subtypes[subtype] = subtypes.get(subtype, 0) + 1
         per_profile = {}
         for profile in sorted({r["profile"] for r in rows}):
             scoped = [r for r in rows if r["profile"] == profile]
@@ -96,7 +100,18 @@ class Gate:
         return {"claims": len(claims), "unverified": unverified, "per_profile": per_profile,
                 "unverified_rate": unverified / len(claims) if claims else 0.0,
                 "blocks": sum(r["action"] == "block" for r in rows),
-                "escalations": sum(bool(r["escalation"]) for r in rows)}
+                "escalations": sum(bool(r["escalation"]) for r in rows), "subtypes": subtypes}
+
+    def receipt_binding(self, source_identity):
+        """Return a prior reproduced exact-source receipt, if one survived replay/restart."""
+        for row in reversed(self.events()):
+            for claim in row["claims"]:
+                if (claim.get("verdict") == "reproduced"
+                        and claim.get("subtype") == "missing_chat_telegram_receipt"
+                        and claim.get("source_identity") == source_identity
+                        and isinstance(claim.get("receipt"), dict)):
+                    return claim["receipt"]
+        return None
 
     def _append(self, db, profile, task, turn, action, claims, count, hashes=(), escalation=None, diagnostics=None):
         cursor = db.execute("""INSERT INTO events
@@ -145,12 +160,16 @@ class Gate:
         # No database lock is held during extraction or I/O.
         results, failures = [], []
         for claim in self.extract(answer):
-            verdict, mismatch = self.check(claim)
+            checked = self.check(claim)
+            verdict, mismatch = checked[:2]
+            evidence = checked[2] if len(checked) > 2 and isinstance(checked[2], dict) else {}
             reason = digest([normalized(claim["claim"]), claim["artefact_kind"], claim["artefact_ref"], normalized(mismatch)])
             from .checks import CHECKERS
-            kind = claim["artefact_kind"] if claim["artefact_kind"] in CHECKERS else "unknown"
+            internal_kinds = {"chat_telegram_receipt", "inaction_followthrough"}
+            kind = claim["artefact_kind"] if claim["artefact_kind"] in CHECKERS or claim["artefact_kind"] in internal_kinds else "unknown"
             results.append({"claim_hash": digest(claim), "artefact_kind": kind,
-                            "verdict": verdict, "mismatch": mismatch, "reason_hash": reason})
+                            "verdict": verdict, "mismatch": mismatch, "reason_hash": reason,
+                            **evidence})
             if verdict == "failed":
                 failures.append((reason, claim, mismatch))
         with self.connect() as db:

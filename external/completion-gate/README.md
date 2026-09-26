@@ -15,6 +15,32 @@ Only the written candidate answer is submitted to native `auxiliary.completion_g
 via `agent.auxiliary_client.call_llm`. A bounded child process prevents provider
 fallback/retry from exceeding the extraction deadline. Strict JSON is mandatory;
 malformed output, duplicate keys, unknown evidence, and exceptions fail open.
+The optional Chat-receipt and actionable-inaction classes are deterministic and
+submit no source message, tool result, card text, or Telegram text to that model.
+
+### Chat decision receipts and actionable inaction (default off)
+
+`chat_receipts_enabled` applies only to `generalist` turns from the configured
+Slack channel whose source has a durable platform request ID and an explicit
+`SESSION-WRAPUP-*` or `DECISION-*` marker. Archive/status/internal/cancelled,
+superseded and closed-channel sources are excluded. A quiet-hours deferral is
+logged as pending, not delivered. A consultation with no action is excluded.
+
+After an action, the same bounded gate requires one native `send_message` result
+to the configured Telegram destination. The message must bind the exact source
+request ID and a current card named by the source/answer. Provider success with
+a positive message ID must be persisted in the source session, and exact content
+must independently exist in the configured destination session. Transport-only
+repairs the mirror only; mirror-only, wrong source/card/destination/profile and
+invented IDs fail. A reproduced binding is stored by source identity and survives
+restart/compaction/replay; the checker never sends or resends anything.
+
+`inaction_enabled` treats explicit “did/could/will not act” finals as an uncarded
+commitment unless the same turn records a successful corrective lifecycle action
+or a `needs_input` escalation. Its repair is: “Take the action or escalate to
+Lars — no third state.” Both classes reuse the existing reentrancy, reason dedup,
+single repair bound and escalation ceiling. Metrics add subtype counts without
+changing the existing claims/error denominators.
 
 ### Bounded failure diagnostics and recovery
 
@@ -76,6 +102,13 @@ Defaults under `plugins.entries.completion-gate.settings`:
 | max_claims | 20 |
 | max_answer_chars | 32000 |
 | db_path | default Hermes root / state/completion-gate/gate.db |
+| chat_receipts_enabled | false |
+| inaction_enabled | false |
+| chat_source_channel | C0BTEFMAAJX |
+| telegram_destination | empty (required before receipt enablement) |
+| telegram_session_id | empty (required before receipt enablement) |
+| state_db_path | empty (required before receipt enablement) |
+| kanban_db_path | empty (required before receipt enablement) |
 
 The estate default resolves to `/Users/claudia/hermes/home/state/completion-gate/gate.db`.
 Keep `plugins.hook_callback_timeout` at its native 30-second default (or greater
@@ -91,7 +124,9 @@ passed through, not independently certified. A later turn can reproduce the fix.
 Concurrent callbacks cannot exceed the ceiling. Recursive calls bypass extraction.
 
 SQLite stores claim hashes, whitelisted artefact kinds, deterministic mismatch
-codes, verdicts, reason hashes, block counts and routing/advice markers. Raw
+codes, verdicts, reason hashes, block counts and routing/advice markers. Receipt
+rows additionally store the non-content source identity, configured destination,
+native provider message ID and owner-card ID. Raw
 answers, references, config values and exception messages are not stored; the
 hash permits correlation without persisting potentially secret claim text.
 Mismatch details exist only in the transient model repair request. Both rejected
@@ -176,7 +211,7 @@ SHA. Preserve gate.db: deleting it would erase persistent safety counters.
 
 Run from the candidate/shared repository with a qualified Python environment:
 
-    HERMES_PYTHON=/path/to/python scripts/run_tests.sh tests/plugins/test_completion_gate.py tests/plugins/test_completion_gate_checks.py tests/plugins/test_completion_gate_integration.py tests/plugins/test_completion_gate_reliability.py tests/plugins/test_completion_gate_health.py tests/plugins/test_completion_gate_portability.py tests/agent/test_turn_end_hook.py tests/agent/test_completion_gate_loop.py
+    HERMES_PYTHON=/path/to/python scripts/run_tests.sh tests/plugins/test_completion_gate.py tests/plugins/test_completion_gate_chat_receipts.py tests/plugins/test_completion_gate_checks.py tests/plugins/test_completion_gate_integration.py tests/plugins/test_completion_gate_reliability.py tests/plugins/test_completion_gate_health.py tests/plugins/test_completion_gate_portability.py tests/agent/test_turn_end_hook.py tests/agent/test_completion_gate_loop.py
 
 Tests use real temporary files, SQLite, local HTTP/socket servers, native plugin
 discovery, native router against a local provider, native live-owner queue receipt,

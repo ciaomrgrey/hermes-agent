@@ -69,6 +69,20 @@ def test_deferred_text_never_reaches_stream_or_interim(monkeypatch):
     a.interim_assistant_callback.assert_not_called()
 
 
+def test_hook_receives_current_source_identity_and_turn_messages(monkeypatch):
+    from agent.turn_end_hooks import before_turn_end
+    manager = plugins.PluginManager()
+    monkeypatch.setattr(plugins, "get_plugin_manager", lambda: manager)
+    captured = {}
+    manager._hooks["before_turn_end"] = [lambda **kwargs: captured.update(kwargs)]
+    a = agent()
+    a._current_source_identity = {"platform": "slack", "channel_id": "C123", "request_id": "1.2"}
+    messages = [{"role": "user", "content": "decision"}, {"role": "tool", "content": "receipt"}]
+    assert before_turn_end(a, "done", {}, messages, user_message="decision", can_continue=True) is False
+    assert captured["source_identity"] == a._current_source_identity
+    assert captured["messages"] is messages
+
+
 def test_interrupt_budget_and_hook_crash_never_force_continuation(monkeypatch):
     from agent.turn_end_hooks import before_turn_end
     manager = plugins.PluginManager()

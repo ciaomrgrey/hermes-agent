@@ -57,6 +57,17 @@ def test_unknown_claim_passes_and_unverified_rate_is_first_class(tmp_path):
     assert g.metrics()["unverified_rate"] == 1.0
 
 
+def test_metrics_count_additive_commitment_subtypes(tmp_path):
+    gate = load_gate()
+    claim = {"claim": "receipt", "artefact_kind": "chat_telegram_receipt", "artefact_ref": {"request_id": "1"}}
+    evidence = {"subtype": "missing_chat_telegram_receipt", "source_identity": {
+        "profile": "generalist", "channel": "C1", "request_id": "1"}}
+    g = gate.Gate({"enabled": True, "db_path": str(tmp_path / "gate.db")}, extract=lambda _: [claim],
+                  check=lambda _: ("failed", "uncarded_commitment:missing_chat_telegram_receipt", evidence))
+    assert g.evaluate("answer", profile="generalist", task_id="task", turn_id="one")["action"] == "block"
+    assert g.metrics()["subtypes"] == {"missing_chat_telegram_receipt": 1}
+
+
 def test_advice_cycle_escalates_only_to_gurney_and_dedupes(tmp_path):
     gate = load_gate()
     settings = {"enabled": True, "db_path": str(tmp_path / "gate.db"), "max_blocks": 0}

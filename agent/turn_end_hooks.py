@@ -49,7 +49,8 @@ def before_turn_end(agent, final_response, final_msg, messages, *, user_message,
             task_id=getattr(agent, "_current_task_id", "") or "", turn_id=turn_id,
             platform=getattr(agent, "platform", "cli"),
             already_blocked=already_blocked, can_continue=can_continue,
-            user_message=user_message)
+            user_message=user_message, messages=messages,
+            source_identity=getattr(agent, "_current_source_identity", None))
         if already_blocked or not can_continue:
             return False
         for result in results:

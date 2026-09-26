@@ -8,18 +8,23 @@ from .checks import bounded_check
 from .extraction import bounded_extract
 from .escalation import send, message
 from .diagnostics import failure
+from . import receipts
 
 logger = logging.getLogger(__name__)
 DEFAULTS = {"enabled": False, "max_blocks": 2, "check_timeout": 10,
             "extract_timeout": 10, "total_timeout": 20, "max_claims": 20,
-            "max_answer_chars": 32000}
+            "max_answer_chars": 32000, "chat_receipts_enabled": False,
+            "inaction_enabled": False, "chat_source_channel": "C0BTEFMAAJX",
+            "telegram_destination": "", "telegram_session_id": "",
+            "state_db_path": "", "kanban_db_path": ""}
 
 
 def register(ctx):
     from .cli import register_cli
     register_cli(ctx)
     def before_turn_end(final_response, session_id="", task_id="", turn_id="",
-                        already_blocked=False, can_continue=True, user_message=None, **kwargs):
+                        already_blocked=False, can_continue=True, user_message=None,
+                        messages=None, source_identity=None, **kwargs):
         from hermes_constants import get_hermes_home, get_default_hermes_root, profile_name_for_home
         try:
             # Never cache the switch: CLI/gateway live config readback must take effect next call.
@@ -32,14 +37,43 @@ def register(ctx):
             if not chain or not turn_id:
                 raise ValueError("missing_stable_identity")
             deadline = time.monotonic() + float(settings["total_timeout"])
+            assessments = []
+            if settings["chat_receipts_enabled"] is True:
+                assessment = receipts.assess_chat_receipt(
+                    profile=profile, source=source_identity or {}, user_message=user_message,
+                    final_response=final_response, messages=messages or (), session_id=session_id,
+                    settings=settings,
+                )
+                if assessment:
+                    identity = assessment["source_identity"]
+                    prior = Gate(settings, extract=lambda _: []).receipt_binding(identity)
+                    if receipts.binding_current(settings, prior):
+                        assessment = {**assessment, "verdict": "reproduced", "mismatch": "", "receipt": prior}
+                    assessments.append(({
+                        "claim": assessment.get("repair", "Chat decision Telegram receipt"),
+                        "artefact_kind": "chat_telegram_receipt", "artefact_ref": identity,
+                    }, assessment))
+            if settings["inaction_enabled"] is True:
+                assessment = receipts.assess_inaction(final_response, messages or ())
+                if assessment:
+                    assessments.append(({
+                        "claim": assessment["repair"], "artefact_kind": "inaction_followthrough",
+                        "artefact_ref": {"turn_id": turn_id},
+                    }, assessment))
+            assessment_by_kind = {claim["artefact_kind"]: assessment for claim, assessment in assessments}
             def extract(answer):
                 if len(answer) > int(settings["max_answer_chars"]):
                     raise ValueError("answer_limit")
-                return bounded_extract(answer, timeout=min(float(settings["extract_timeout"]), remaining()),
-                                       max_claims=int(settings["max_claims"]), deadline=deadline)
+                claims = bounded_extract(answer, timeout=min(float(settings["extract_timeout"]), remaining()),
+                                         max_claims=int(settings["max_claims"]), deadline=deadline)
+                return claims + [claim for claim, _ in assessments]
             def remaining():
                 return max(0.001, deadline - time.monotonic())
             def check(claim):
+                if claim["artefact_kind"] in assessment_by_kind:
+                    assessment = assessment_by_kind[claim["artefact_kind"]]
+                    evidence = {k: assessment[k] for k in ("subtype", "source_identity", "receipt") if k in assessment}
+                    return assessment["verdict"], assessment["mismatch"], evidence
                 if time.monotonic() >= deadline:
                     return "unverified", "gate_deadline"
                 return bounded_check(claim, timeout=min(float(settings["check_timeout"]), remaining()))
