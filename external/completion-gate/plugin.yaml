@@ -1,0 +1,5 @@
+name: completion-gate
+version: "0.1.0"
+description: "Bounded, fail-open completion-claim reproduction before answer delivery. Opt-in."
+hooks:
+  - before_turn_end
