@@ -515,6 +515,57 @@ def test_interrupted_reservation_tells_actual_hook_to_reconcile_without_resend(t
     assert blocked and "do not resend" in blocked[0]["message"].lower()
 
 
+@pytest.mark.parametrize("disposition", ["reserved", "transport_only", "reconciliation", "mirrored"])
+@pytest.mark.parametrize("mutation", ["source", "action"])
+def test_durable_attempt_remains_no_resend_after_completion_evidence_loss(
+        tmp_path, monkeypatch, disposition, mutation):
+    loaded, manager, cli, parser, state, _board, gate = _plugin(tmp_path, monkeypatch)
+    message = f"Applied {CARD} for source {SOURCE_ID}."
+    message_file = tmp_path / "message.txt"
+    message_file.write_text(message)
+    sends = []
+    import tools.send_message_tool as native
+
+    def send(args):
+        sends.append(args)
+        if disposition == "reserved":
+            raise KeyboardInterrupt()
+        if disposition == "reconciliation":
+            return json.dumps({"error": "timeout"})
+        if disposition == "mirrored":
+            _mirror(state, message)
+        return json.dumps({
+            "success": True, "platform": "telegram", "chat_id": "123456789",
+            "message_id": "4884", "mirrored": disposition == "mirrored",
+        })
+
+    monkeypatch.setattr(native, "send_message_tool", send)
+    if disposition == "reserved":
+        with pytest.raises(KeyboardInterrupt):
+            cli["handler_fn"](_args(parser, message_file))
+    else:
+        assert cli["handler_fn"](_args(parser, message_file))["status"] == disposition
+    with sqlite3.connect(state) as db:
+        if mutation == "source":
+            db.execute("DELETE FROM messages WHERE platform_message_id=?", (SOURCE_ID,))
+        else:
+            db.execute("DELETE FROM messages WHERE tool_name='kanban_comment'")
+
+    blocked = _enable_hook(loaded, manager, state, gate, monkeypatch)(f"lost-{mutation}-{disposition}")
+    assert blocked and "do not resend" in blocked[0]["message"].lower()
+    assert "send the missing authorized line" not in blocked[0]["message"].lower()
+    assert len(sends) == 1
+
+
+def test_never_attempted_source_loss_retains_fresh_send_repair(tmp_path, monkeypatch):
+    loaded, manager, _cli, _parser, state, _board, gate = _plugin(tmp_path, monkeypatch)
+    with sqlite3.connect(state) as db:
+        db.execute("DELETE FROM messages WHERE platform_message_id=?", (SOURCE_ID,))
+
+    blocked = _enable_hook(loaded, manager, state, gate, monkeypatch)("never-attempted")
+    assert blocked and "send the missing authorized line" in blocked[0]["message"].lower()
+
+
 @pytest.mark.parametrize("mutation", ["missing", "duplicate", "channel", "action"])
 def test_cached_receipt_revalidates_exact_source_and_action(tmp_path, monkeypatch, mutation):
     loaded, manager, cli, parser, state, _board, gate = _plugin(tmp_path, monkeypatch)

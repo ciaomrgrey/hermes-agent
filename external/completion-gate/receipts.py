@@ -385,8 +385,8 @@ def receipt_send(settings, *, source_request_id, card_id, message_file):
     return {"status": disposition, "message_id": str(message_id or "") if transport_ok else ""}
 
 
-def _durable_receipt_state(settings, source_identity, session_id):
-    """Revalidate the latest gate receipt against its exact live source and destination."""
+def _durable_receipt_row(settings, source_identity, session_id):
+    """Return the latest gate-owned row for one exact persisted source identity."""
     if not isinstance(source_identity, dict):
         return None
     try:
@@ -400,6 +400,27 @@ def _durable_receipt_state(settings, source_identity, session_id):
             )).fetchone()
     except Exception:
         return None
+    return row
+
+
+def _durable_receipt_attempt(settings, source_identity, session_id):
+    """Return durable evidence that native transport may already have been attempted."""
+    row = _durable_receipt_row(settings, source_identity, session_id)
+    if row is None or row["mirror_disposition"] not in {
+            "reserved", "transport_only", "reconciliation", "mirrored"}:
+        return None
+    return {
+        "disposition": row["mirror_disposition"],
+        "destination": row["destination"],
+        "message_id": row["provider_message_id"],
+        "card_id": row["card_id"],
+        "receipt_kind": "gate_owned",
+    }
+
+
+def _durable_receipt_state(settings, source_identity, session_id):
+    """Revalidate the latest gate receipt against its exact live source and destination."""
+    row = _durable_receipt_row(settings, source_identity, session_id)
     if row is None:
         return None
     try:
@@ -610,6 +631,13 @@ def _reconcile(identity, suffix="evidence_unavailable"):
     )
 
 
+def _invalid_after_attempt(identity):
+    return _assessment(
+        identity, "completion_evidence_invalid_after_transport_attempt",
+        repair="Reconcile the invalid completion evidence and persisted transport attempt; do not resend.",
+    )
+
+
 def _source_state(source, request_id):
     state = source.get("source_state")
     if not isinstance(state, dict) or str(state.get("request_id") or "") != request_id:
@@ -635,10 +663,11 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
             or channel != str(settings.get("chat_source_channel") or "")
             or not request_id or source.get("internal") is True):
         return None
+    identity = _source_identity(profile, source)
+    durable_attempt = _durable_receipt_attempt(settings, identity, session_id)
     text = user_message if isinstance(user_message, str) else ""
     if not _source_is_actionable(text):
-        return None
-    identity = _source_identity(profile, source)
+        return _invalid_after_attempt(identity) if durable_attempt else None
     state = _source_state(source, request_id)
     if state.get("status") in {"closed", "cancelled", "superseded"}:
         return None
@@ -665,19 +694,22 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
     except ValueError as exc:
         reason = str(exc)
         if reason == "source_database_unavailable":
-            return _reconcile(identity)
+            return _invalid_after_attempt(identity) if durable_attempt else _reconcile(identity)
         if reason == "source_row_missing":
-            return _assessment(identity, "source_not_persisted")
-        return _assessment(identity, reason)
+            return (_invalid_after_attempt(identity) if durable_attempt
+                    else _assessment(identity, "source_not_persisted"))
+        return _invalid_after_attempt(identity) if durable_attempt else _assessment(identity, reason)
     if persisted_source[1] != source.get("timestamp"):
-        return _assessment(identity, "source_not_persisted")
+        return (_invalid_after_attempt(identity) if durable_attempt
+                else _assessment(identity, "source_not_persisted"))
     if not _source_is_actionable(persisted_source[3]):
-        return None
+        return _invalid_after_attempt(identity) if durable_attempt else None
     acted, verified_action_cards = _action_status(final_response, messages)
     persisted_action = _persisted_action_cards(
         state_path, session_id, request_id, source.get("timestamp"))
     if persisted_action is None:
-        return _reconcile(identity, "action_evidence_unavailable")
+        return (_invalid_after_attempt(identity) if durable_attempt
+                else _reconcile(identity, "action_evidence_unavailable"))
     persisted_action_cards = persisted_action["cards"]
     if persisted_action["source_is_current"]:
         if persisted_action_cards:
@@ -687,23 +719,26 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
         acted = bool(persisted_action_cards)
         verified_action_cards = set(persisted_action_cards)
     if not acted:
-        return None
+        return _invalid_after_attempt(identity) if durable_attempt else None
     if source_cards:
         action_cards = verified_action_cards & source_cards
     else:
         source_cards = set(verified_action_cards)
         action_cards = set(verified_action_cards)
     if not source_cards:
-        return _reconcile(identity, "owner_card_unresolved")
+        return (_invalid_after_attempt(identity) if durable_attempt
+                else _reconcile(identity, "owner_card_unresolved"))
 
     expected_target = str(settings.get("telegram_destination") or "")
     expected_platform, separator, expected_chat_id = expected_target.partition(":")
     if separator != ":" or expected_platform != "telegram" or not expected_chat_id:
-        return _reconcile(identity, "destination_configuration_unavailable")
+        return (_invalid_after_attempt(identity) if durable_attempt
+                else _reconcile(identity, "destination_configuration_unavailable"))
     destination_session = str(settings.get("telegram_session_id") or "")
     board_path = settings.get("kanban_db_path")
     if not action_cards:
-        return _assessment(identity, "action_unverified")
+        return (_invalid_after_attempt(identity) if durable_attempt
+                else _assessment(identity, "action_unverified"))
     durable_state = _durable_receipt_state(settings, identity, session_id)
     if (durable_state and durable_state.get("card_id") in action_cards & source_cards
             and durable_state["disposition"] == "mirrored"):
@@ -724,6 +759,8 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
                 identity, "transport_reconciliation_no_resend",
                 repair="Reconcile the persisted transport and mirror evidence; do not resend until absence is proven.",
             )
+    if durable_attempt:
+        return _invalid_after_attempt(identity)
     calls, results = _send_attempts(messages)
     persisted_attempts = _persisted_send_attempts(state_path, session_id, source.get("timestamp"))
     if persisted_attempts is None and not calls:
