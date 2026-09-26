@@ -1675,6 +1675,7 @@ class TurnRunner:
                 "request_id": str(ctx.inbound_message_id or ""),
                 "timestamp": ctx.persist_user_timestamp,
                 "internal": bool(ctx.inbound_internal),
+                "source_state": ctx.inbound_source_state,
             }
             api_message = _wrap_current_message_with_observed_context(self._native_image_run_message(), observed_group_context)
             kwargs = {"conversation_history": agent_history, "task_id": ctx.session_id}

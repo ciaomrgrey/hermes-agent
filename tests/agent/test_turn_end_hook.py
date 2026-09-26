@@ -77,10 +77,63 @@ def test_hook_receives_current_source_identity_and_turn_messages(monkeypatch):
     manager._hooks["before_turn_end"] = [lambda **kwargs: captured.update(kwargs)]
     a = agent()
     a._current_source_identity = {"platform": "slack", "channel_id": "C123", "request_id": "1.2"}
-    messages = [{"role": "user", "content": "decision"}, {"role": "tool", "content": "receipt"}]
+    messages = [
+        {"role": "user", "content": "old"},
+        {"role": "tool", "content": "old receipt"},
+        {"role": "user", "content": "decision"},
+        {"role": "tool", "content": "receipt"},
+    ]
     assert before_turn_end(a, "done", {}, messages, user_message="decision", can_continue=True) is False
     assert captured["source_identity"] == a._current_source_identity
-    assert captured["messages"] is messages
+    assert captured["messages"] == messages[3:]
+
+
+def test_hook_keeps_same_turn_actions_across_its_synthetic_repair(monkeypatch):
+    from agent.turn_end_hooks import before_turn_end
+    manager = plugins.PluginManager()
+    monkeypatch.setattr(plugins, "get_plugin_manager", lambda: manager)
+    captured = {}
+    manager._hooks["before_turn_end"] = [lambda **kwargs: captured.update(kwargs)]
+    a = agent()
+    messages = [
+        {"role": "user", "content": "decision"},
+        {"role": "tool", "content": "action"},
+        {"role": "assistant", "content": "rejected", "_turn_end_synthetic": True},
+        {"role": "user", "content": "repair", "_turn_end_synthetic": True},
+        {"role": "tool", "content": "receipt"},
+    ]
+    assert before_turn_end(a, "done", {}, messages, user_message="decision", can_continue=True) is False
+    assert captured["messages"] == messages[1:]
+
+
+def test_hook_keeps_same_turn_evidence_across_all_runtime_user_scaffolding(monkeypatch):
+    from agent.turn_end_hooks import before_turn_end
+    from agent.prompt_builder import format_steer_marker
+    manager = plugins.PluginManager()
+    monkeypatch.setattr(plugins, "get_plugin_manager", lambda: manager)
+    captured = {}
+    manager._hooks["before_turn_end"] = [lambda **kwargs: captured.update(kwargs)]
+    a = agent()
+    scaffolds = [
+        {"role": "user", "content": "todo", "_todo_snapshot_synthetic": True},
+        {"role": "user", "content": "recover", "_empty_recovery_synthetic": True},
+        {"role": "user", "content": "verify stop", "_verification_stop_synthetic": True},
+        {"role": "user", "content": "pre-verify", "_pre_verify_synthetic": True},
+        {"role": "user", "content": "repair", "_turn_end_synthetic": True},
+        {"role": "user", "content": "retry tool", "_dropped_toolcall_nudge": True},
+        {"role": "user", "content": "[System: Your previous tool call did not complete. Retry it.]"},
+        {"role": "user", "content": format_steer_marker("change course")},
+    ]
+    for scaffold in scaffolds:
+        messages = [
+            {"role": "user", "content": "decision"},
+            {"role": "tool", "content": "action and receipt"},
+            scaffold,
+            {"role": "assistant", "content": "continued"},
+        ]
+        captured.clear()
+        assert before_turn_end(a, "done", {}, messages, user_message="decision", can_continue=True) is False
+        assert captured["messages"] == messages[1:]
 
 
 def test_interrupt_budget_and_hook_crash_never_force_continuation(monkeypatch):

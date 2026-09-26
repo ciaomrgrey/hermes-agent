@@ -30,7 +30,7 @@ from gateway.session import (
     build_session_context,
 )
 from gateway.session_transcript import TranscriptReadError
-from gateway.turn_context import TurnContext
+from gateway.turn_context import TurnContext, completion_gate_source_state
 from gateway.turn_lease import DEFAULT_LEASE_WAIT, TurnLeaseTimeoutError
 from hermes_constants import get_hermes_home_override
 from pathlib import Path
@@ -2105,6 +2105,7 @@ class GatewayTurnMixin:
                 run_generation=run_generation, event_message_id=self._reply_anchor_for_event(event),
                 inbound_message_id=str(event.message_id) if event.message_id else None,
                 inbound_internal=bool(event.internal),
+                inbound_source_state=completion_gate_source_state(event.metadata),
                 channel_prompt=event.channel_prompt, moa_config=getattr(event, "_moa_config", None),
                 persist_user_message=prepared.persist_user_message,
                 persist_user_timestamp=prepared.persist_user_timestamp,

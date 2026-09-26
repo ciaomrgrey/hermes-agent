@@ -21,23 +21,30 @@ submit no source message, tool result, card text, or Telegram text to that model
 ### Chat decision receipts and actionable inaction (default off)
 
 `chat_receipts_enabled` applies only to `generalist` turns from the configured
-Slack channel whose source has a durable platform request ID and an explicit
-`SESSION-WRAPUP-*` or `DECISION-*` marker. Archive/status/internal/cancelled,
-superseded and closed-channel sources are excluded. A quiet-hours deferral is
-logged as pending, not delivered. A consultation with no action is excluded.
+Slack channel whose source has a durable platform request ID, a current owner
+card, and a matching action in the current turn. Markerless actionable relays
+qualify. Archive/status/internal sources are excluded. Cancelled, superseded,
+closed-channel and quiet-hours states are accepted only from transport-authored
+source metadata bound to the exact request ID; incidental source words never
+bypass the check. A quiet-hours deferral is pending only while its source-bound
+owner card and configured destination remain current. A consultation with no
+action is excluded.
 
 After an action, the same bounded gate requires one native `send_message` result
 to the configured Telegram destination. The message must bind the exact source
 request ID and a current card named by the source/answer. Provider success with
 a positive message ID must be persisted in the source session, and exact content
 must independently exist in the configured destination session. Transport-only
-repairs the mirror only; mirror-only, wrong source/card/destination/profile and
-invented IDs fail. A reproduced binding is stored by source identity and survives
-restart/compaction/replay; the checker never sends or resends anything.
+repairs the mirror only and explicitly forbids a resend; ambiguous transport or
+unavailable evidence requires reconciliation before any resend. Mirror-only,
+wrong source/card/destination/profile and invented IDs fail. A reproduced binding
+is stored by source identity and survives restart/compaction/replay; the checker
+never sends or resends anything.
 
 `inaction_enabled` treats explicit “did/could/will not act” finals as an uncarded
-commitment unless the same turn records a successful corrective lifecycle action
-or a `needs_input` escalation. Its repair is: “Take the action or escalate to
+commitment unless the current turn records a successful corrective lifecycle
+action bound to the named obligation, or a `needs_input` escalation. Its repair is:
+“Take the action or escalate to
 Lars — no third state.” Both classes reuse the existing reentrancy, reason dedup,
 single repair bound and escalation ceiling. Metrics add subtype counts without
 changing the existing claims/error denominators.

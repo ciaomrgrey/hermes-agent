@@ -6,6 +6,16 @@ from agent.message_metadata import append_message
 logger = logging.getLogger(__name__)
 
 
+def _current_turn_messages(messages):
+    """Exclude prior turns while retaining this hook's synthetic repair round."""
+    from agent.conversation_compression import _is_real_user_message, _message_contains_busy_steer
+    for index in range(len(messages or ()) - 1, -1, -1):
+        item = messages[index]
+        if _is_real_user_message(item) and not _message_contains_busy_steer(item):
+            return messages[index + 1:]
+    return []
+
+
 def defers_text_delivery():
     try:
         from hermes_cli.lifecycle import has_hook
@@ -49,7 +59,7 @@ def before_turn_end(agent, final_response, final_msg, messages, *, user_message,
             task_id=getattr(agent, "_current_task_id", "") or "", turn_id=turn_id,
             platform=getattr(agent, "platform", "cli"),
             already_blocked=already_blocked, can_continue=can_continue,
-            user_message=user_message, messages=messages,
+            user_message=user_message, messages=_current_turn_messages(messages),
             source_identity=getattr(agent, "_current_source_identity", None))
         if already_blocked or not can_continue:
             return False

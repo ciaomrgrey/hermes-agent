@@ -1,7 +1,7 @@
 """Source-bound Chat→Telegram receipts and actionable-inaction claims.
 
 The checker is read-only: it never sends, mirrors, changes cards, or manufactures
-permission.  It accepts only native tool results already persisted in the source
+permission. It accepts only native tool results already persisted in the source
 session and an independently persisted destination-session mirror.
 """
 from __future__ import annotations
@@ -12,9 +12,7 @@ import sqlite3
 from pathlib import Path
 
 _CARD = re.compile(r"\bt_[0-9a-f]{8}\b", re.I)
-_DECISION = re.compile(r"\b(?:SESSION-WRAPUP|DECISION)-[A-Z0-9_-]+", re.I)
-_EXCLUDED = re.compile(r"\b(?:SWITCHBOARD-ARCHIVE|STATUS-REQUEST|CANCELLED|SUPERSEDED)\b", re.I)
-_QUIET_PENDING = re.compile(r"\bQUIET-NIGHT-DEFERRED\b", re.I)
+_ARCHIVE_ONLY = re.compile(r"^\s*(?:SWITCHBOARD-ARCHIVE|STATUS-REQUEST)-[A-Z0-9_-]+\b", re.I)
 _INACTION = re.compile(
     r"\b(?:did not|could not|cannot|can't|will not|won't|nothing I can do|no(?:thing)?\s*[-—:]?\s*not between messages|"
     r"board says running but no worker is executing|needs a permitted approval path)\b",
@@ -58,12 +56,13 @@ def _open_readonly(path):
 
 
 def _card_exists(path, card_id):
+    """Return True/False for a completed lookup, None when evidence is unavailable."""
     try:
         with _open_readonly(path) as db:
             row = db.execute("SELECT status FROM tasks WHERE id=?", (card_id,)).fetchone()
         return row is not None and row[0] not in {"archived", "cancelled"}
     except Exception:
-        return False
+        return None
 
 
 def binding_current(settings, binding):
@@ -71,19 +70,20 @@ def binding_current(settings, binding):
     return (isinstance(binding, dict)
             and binding.get("destination") == str(settings.get("telegram_destination") or "")
             and isinstance(binding.get("card_id"), str)
-            and _card_exists(settings.get("kanban_db_path"), binding["card_id"]))
+            and _card_exists(settings.get("kanban_db_path"), binding["card_id"]) is True)
 
 
-def _persisted_tool_result(path, session_id, call_id, content):
+def _persisted_tool_result(path, session_id, call_id, content, source_timestamp):
     try:
         with _open_readonly(path) as db:
             row = db.execute(
-                "SELECT content FROM messages WHERE session_id=? AND role='tool' AND tool_call_id=? ",
-                (session_id, call_id),
+                "SELECT content FROM messages WHERE session_id=? AND role='tool' "
+                "AND tool_call_id=? AND tool_name='send_message' AND timestamp>=? LIMIT 1",
+                (session_id, call_id, float(source_timestamp or 0)),
             ).fetchone()
         return row is not None and row[0] == content
     except Exception:
-        return False
+        return None
 
 
 def _source_persisted(path, session_id, request_id, timestamp):
@@ -96,7 +96,7 @@ def _source_persisted(path, session_id, request_id, timestamp):
             ).fetchone()
         return row is not None
     except Exception:
-        return False
+        return None
 
 
 def _mirror_exists(path, destination_session, message, source_timestamp):
@@ -109,7 +109,7 @@ def _mirror_exists(path, destination_session, message, source_timestamp):
             ).fetchone()
         return row is not None
     except Exception:
-        return False
+        return None
 
 
 def _send_attempts(messages):
@@ -123,13 +123,23 @@ def _send_attempts(messages):
                 if not isinstance(call, dict):
                     continue
                 fn = call.get("function") or {}
-                if str(fn.get("name") or "").rsplit(".", 1)[-1] != "send_message":
+                if str(fn.get("name") or "") != "send_message":
                     continue
-                args = _json(fn.get("arguments"))
-                calls[str(call.get("id") or "")] = args
-        elif item.get("role") == "tool" and str(item.get("tool_name") or "").rsplit(".", 1)[-1] == "send_message":
+                calls[str(call.get("id") or "")] = _json(fn.get("arguments"))
+        elif item.get("role") == "tool" and str(item.get("tool_name") or "") == "send_message":
             results[str(item.get("tool_call_id") or "")] = item
     return calls, results
+
+
+def _message_binds_source(message, request_id):
+    """Require an exact ``source <request-id>`` token, not a substring collision."""
+    if not isinstance(message, str) or not request_id:
+        return False
+    pattern = (
+        r"(?i)(?<![A-Za-z0-9_.-])source\s+" + re.escape(request_id)
+        + r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9])"
+    )
+    return re.search(pattern, message) is not None
 
 
 def _succeeded(result):
@@ -137,35 +147,55 @@ def _succeeded(result):
 
 
 def _action_status(final_response, messages, source_cards):
-    """Return ``(claimed, verified)`` for this source-owned action."""
+    """Return ``(claimed, verified_cards)`` for source-owned actions."""
     claimed = bool(isinstance(final_response, str)
                    and _ACTION_RESULT.search(final_response) and _CARD.search(final_response))
+    verified_cards = set()
     for item in messages or ():
         if not isinstance(item, dict) or item.get("role") != "tool":
             continue
-        name = str(item.get("tool_name") or "").rsplit(".", 1)[-1]
+        name = str(item.get("tool_name") or "")
         result = _json(item.get("content"))
         if not _succeeded(result):
             continue
-        if name in {"patch", "write_file"} and source_cards:
-            return True, True
         if name in _ACTION_TOOLS:
             claimed = True
             result_cards = set(_CARD.findall(json.dumps(result, sort_keys=True)))
-            if result_cards & source_cards:
-                return True, True
-    return claimed, False
+            verified_cards.update(result_cards & source_cards)
+    return claimed, verified_cards
 
 
-def _failure(identity, suffix=""):
+def _assessment(identity, suffix="", *, verdict="failed", repair=None):
     mismatch = "uncarded_commitment:missing_chat_telegram_receipt"
     if suffix:
         mismatch += ":" + suffix
     return {
-        "verdict": "failed", "mismatch": mismatch,
+        "verdict": verdict, "mismatch": mismatch,
         "subtype": "missing_chat_telegram_receipt", "source_identity": identity,
-        "repair": "Send the missing authorized line or retain the exact boundary on the existing owner card.",
+        "repair": repair or "Send the missing authorized line or retain the exact boundary on the existing owner card.",
     }
+
+
+def _reconcile(identity, suffix="evidence_unavailable"):
+    return _assessment(
+        identity, suffix, verdict="unverified",
+        repair="Reconcile the persisted transport and mirror evidence; do not resend until absence is proven.",
+    )
+
+
+def _source_state(source, request_id):
+    state = source.get("source_state")
+    if not isinstance(state, dict) or str(state.get("request_id") or "") != request_id:
+        return {}
+    return state
+
+
+def _valid_message_id(value):
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value > 0
+    return isinstance(value, str) and value.isascii() and value.isdigit() and int(value) > 0
 
 
 def assess_chat_receipt(*, profile, source, user_message, final_response, messages, session_id, settings):
@@ -176,57 +206,91 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
     request_id = str(source.get("request_id") or "")
     if (str(source.get("platform") or "") != "slack"
             or channel != str(settings.get("chat_source_channel") or "")
-            or not request_id or source.get("internal") is True or source.get("closed_channel") is True):
+            or not request_id or source.get("internal") is True):
         return None
     text = user_message if isinstance(user_message, str) else ""
-    if not _DECISION.search(text) or _EXCLUDED.search(text):
+    if _ARCHIVE_ONLY.search(text):
         return None
     identity = _source_identity(profile, source)
-    if _QUIET_PENDING.search(text):
+    state = _source_state(source, request_id)
+    if state.get("status") in {"closed", "cancelled", "superseded"}:
+        return None
+    source_cards = set(_CARD.findall(text))
+    if state.get("status") == "deferred_quiet_hours":
+        source_evidence = _source_persisted(
+            settings.get("state_db_path"), session_id, request_id, source.get("timestamp"))
+        owner = str(state.get("card_id") or "")
+        owner_state = _card_exists(settings.get("kanban_db_path"), owner) if owner in source_cards else False
+        if source_evidence is None or owner_state is None:
+            return _reconcile(identity)
+        if (source_evidence is not True or owner_state is not True
+                or state.get("destination") != str(settings.get("telegram_destination") or "")):
+            return _assessment(identity, "quiet_hours_owner_missing",
+                               repair="Retain the exact deferred boundary on the source-bound owner card.")
         return {
             "verdict": "unverified",
             "mismatch": "uncarded_commitment:chat_telegram_receipt_pending_quiet_hours",
             "subtype": "missing_chat_telegram_receipt", "source_identity": identity,
         }
-    source_cards = set(_CARD.findall(text))
-    acted, action_verified = _action_status(final_response, messages, source_cards)
+    if not source_cards:
+        return None
+    acted, action_cards = _action_status(final_response, messages, source_cards)
     if not acted:
         return None
 
     expected_target = str(settings.get("telegram_destination") or "")
+    expected_platform, separator, expected_chat_id = expected_target.partition(":")
+    if separator != ":" or expected_platform != "telegram" or not expected_chat_id:
+        return _reconcile(identity, "destination_configuration_unavailable")
     state_path = settings.get("state_db_path")
-    if not _source_persisted(state_path, session_id, request_id, source.get("timestamp")):
-        return _failure(identity, "source_not_persisted")
+    source_evidence = _source_persisted(state_path, session_id, request_id, source.get("timestamp"))
+    if source_evidence is None:
+        return _reconcile(identity)
+    if source_evidence is not True:
+        return _assessment(identity, "source_not_persisted")
     destination_session = str(settings.get("telegram_session_id") or "")
     board_path = settings.get("kanban_db_path")
-    if not action_verified:
-        return _failure(identity, "action_unverified")
+    if not action_cards:
+        return _assessment(identity, "action_unverified")
     calls, results = _send_attempts(messages)
-    saw_target = saw_source = saw_card = saw_transport = saw_mirror = False
+    saw_target = saw_source = saw_card = saw_transport = saw_mirror = evidence_unknown = False
     for call_id, args in calls.items():
         if str(args.get("target") or "") != expected_target:
             continue
         saw_target = True
         message = args.get("message")
-        if not isinstance(message, str) or request_id not in message:
+        if not _message_binds_source(message, request_id):
             continue
         saw_source = True
-        cards = set(_CARD.findall(message)) & source_cards
-        cards = {card for card in cards if _card_exists(board_path, card)}
+        candidate_cards = set(_CARD.findall(message)) & source_cards & action_cards
+        card_states = {card: _card_exists(board_path, card) for card in candidate_cards}
+        if any(card_state is None for card_state in card_states.values()):
+            evidence_unknown = True
+        cards = {card for card, card_state in card_states.items() if card_state is True}
         if not cards:
             continue
         saw_card = True
         item = results.get(call_id)
         content = item.get("content") if item else None
         result = _json(content)
+        persisted = _persisted_tool_result(
+            state_path, session_id, call_id, content, source.get("timestamp"))
+        if persisted is None:
+            evidence_unknown = True
+            continue
         message_id = result.get("message_id")
-        if (result.get("success") is not True or isinstance(message_id, bool)
-                or not isinstance(message_id, int) or message_id <= 0
-                or not _persisted_tool_result(state_path, session_id, call_id, content)):
+        if (result.get("success") is not True or result.get("platform") != expected_platform
+                or str(result.get("chat_id") or "") != expected_chat_id
+                or not _valid_message_id(message_id) or persisted is not True):
             continue
         saw_transport = True
-        if result.get("mirrored") is not True or not _mirror_exists(
-                state_path, destination_session, message, source.get("timestamp")):
+        mirror = _mirror_exists(state_path, destination_session, message, source.get("timestamp"))
+        if mirror is None:
+            evidence_unknown = True
+            continue
+        if result.get("mirrored") is not True and mirror is True:
+            return _reconcile(identity, "mirror_evidence_conflict")
+        if result.get("mirrored") is not True or mirror is not True:
             continue
         saw_mirror = True
         return {
@@ -236,31 +300,56 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
                         "card_id": sorted(cards)[0]},
         }
     if saw_transport and not saw_mirror:
-        return _failure(identity, "mirror_missing")
+        if evidence_unknown:
+            return _reconcile(identity)
+        return _assessment(
+            identity, "mirror_missing",
+            repair="Repair the destination-session mirror only; transport succeeded, so do not resend.",
+        )
+    if evidence_unknown:
+        return _reconcile(identity)
     if saw_card and not saw_transport:
-        return _failure(identity, "transport_missing")
+        return _assessment(
+            identity, "transport_missing",
+            repair="Reconcile the transport attempt; do not resend until absence is proven.",
+        )
     if saw_source and not saw_card:
-        return _failure(identity, "wrong_card")
+        return _assessment(identity, "wrong_card")
     if saw_target and not saw_source:
-        return _failure(identity, "wrong_source")
+        return _assessment(identity, "wrong_source")
     if calls and not saw_target:
-        return _failure(identity, "wrong_destination")
-    return _failure(identity)
+        return _assessment(identity, "wrong_destination")
+    return _assessment(identity)
 
 
-def assess_inaction(final_response, messages):
+def assess_inaction(final_response, messages, *, user_message=""):
     """Reject self-reported inaction unless this turn acted or opened needs_input."""
     if not isinstance(final_response, str) or not _INACTION.search(final_response):
         return None
+    response_cards = set(_CARD.findall(final_response))
+    obligation_cards = response_cards or set(_CARD.findall(str(user_message or "")))
+    if not obligation_cards:
+        return {
+            "verdict": "failed", "mismatch": "uncarded_commitment:unsupported_inaction",
+            "subtype": "unsupported_inaction",
+            "repair": "Take the action or escalate to Lars — no third state.",
+        }
+    resolved_cards = set()
     for item in messages or ():
         if not isinstance(item, dict) or item.get("role") != "tool":
             continue
-        name = str(item.get("tool_name") or "").rsplit(".", 1)[-1]
+        name = str(item.get("tool_name") or "")
         result = _json(item.get("content"))
         if name not in _ACTION_TOOLS or not _succeeded(result):
             continue
-        if name != "kanban_block" or result.get("kind") == "needs_input":
-            return None
+        result_cards = set(_CARD.findall(json.dumps(result, sort_keys=True)))
+        matching_cards = result_cards & obligation_cards
+        if not matching_cards:
+            continue
+        if name != "kanban_block" or result.get("block_kind") == "needs_input":
+            resolved_cards.update(matching_cards)
+    if obligation_cards <= resolved_cards:
+        return None
     return {
         "verdict": "failed", "mismatch": "uncarded_commitment:unsupported_inaction",
         "subtype": "unsupported_inaction",
