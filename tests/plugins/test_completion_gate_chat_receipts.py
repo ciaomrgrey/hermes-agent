@@ -5,6 +5,12 @@ import sqlite3
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _current_receipt_clock(monkeypatch):
+    receipts = load_receipts()
+    monkeypatch.setattr(receipts.time, "time", lambda: 1789000060.0)
+
+
 def load_receipts():
     from tests.completion_gate_support import module
     return module("receipts")
@@ -22,7 +28,8 @@ def databases(tmp_path, *, source_id="1789000000.123456", card="t_ab12cd34"):
         native["mirrored"] = True
         result = json.dumps(native)
         db.execute("INSERT INTO messages(session_id,role,content,timestamp) VALUES(?,?,?,?)",
-                   ("source-session", "user", "decision", 1789000000.123456))
+                   ("source-session", "user", f"Lars decided: apply {card} now.",
+                    1789000000.123456))
         db.execute("ALTER TABLE messages ADD COLUMN platform_message_id TEXT")
         db.execute("UPDATE messages SET platform_message_id=? WHERE role='user'", (source_id,))
         db.execute("INSERT INTO messages(session_id,role,content,tool_call_id,tool_name,timestamp) VALUES(?,?,?,?,?,?)",
@@ -182,7 +189,7 @@ def test_native_sender_string_message_id_is_accepted(tmp_path):
     wrong_native[-1]["content"] = json.dumps(payload)
     persist_result(state, wrong_native)
     rejected = receipts.assess_chat_receipt(
-        profile="generalist", source=source(), user_message="Apply t_ab12cd34 now.",
+        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now.",
         final_response="Applied t_ab12cd34.", messages=wrong_native,
         session_id="source-session", settings=settings(state, board),
     )
@@ -298,7 +305,7 @@ def test_receipt_card_must_match_the_card_verified_by_the_action(tmp_path):
         db.execute("UPDATE messages SET content=? WHERE session_id='telegram-session'", (message,))
     result = receipts.assess_chat_receipt(
         profile="generalist", source=source(),
-        user_message="Apply t_ab12cd34 and t_bbbbbbbb now.",
+        user_message="Lars decided: apply t_ab12cd34 and t_bbbbbbbb now.",
         final_response="Applied t_ab12cd34.", messages=transcript,
         session_id="source-session", settings=settings(state, board),
     )
@@ -360,7 +367,7 @@ def test_non_obligations_and_explicit_deferrals_are_excluded(tmp_path):
     assert missing_owner["mismatch"].endswith("quiet_hours_owner_missing")
 
 
-def test_markerless_action_qualifies_and_incidental_superseded_word_does_not_bypass(tmp_path):
+def test_markerless_action_is_silent_and_incidental_superseded_word_does_not_bypass(tmp_path):
     receipts = load_receipts()
     state, board = databases(tmp_path)
     result = receipts.assess_chat_receipt(
@@ -369,8 +376,7 @@ def test_markerless_action_qualifies_and_incidental_superseded_word_does_not_byp
         final_response="Applied t_ab12cd34.", messages=[action_message()],
         session_id="source-session", settings=settings(state, board),
     )
-    assert result["verdict"] == "failed"
-    assert result["mismatch"] == "uncarded_commitment:missing_chat_telegram_receipt"
+    assert result is None
 
     with sqlite3.connect(state) as db:
         db.execute(
@@ -395,8 +401,10 @@ def test_markerless_action_qualifies_and_incidental_superseded_word_does_not_byp
     ) is None
 
 
-def test_stale_historical_closure_is_silent_but_current_lars_decision_qualifies(tmp_path):
+def test_stale_historical_closure_is_silent_but_current_lars_decision_qualifies(
+        tmp_path, monkeypatch):
     receipts = load_receipts()
+    monkeypatch.setattr(receipts.time, "time", lambda: 1790447800.0)
     historical_id = "1789883785.216179"
     historical_card = "t_004ccb7b"
     state, board = databases(tmp_path, source_id=historical_id, card=historical_card)
@@ -450,6 +458,21 @@ def test_stale_historical_closure_is_silent_but_current_lars_decision_qualifies(
         settings=cfg,
     ) is None
 
+    # Session ordering is not freshness: the same six-day-old source remains
+    # silent even when it is the latest user row in a dormant session.
+    with sqlite3.connect(state) as db:
+        db.execute("DELETE FROM messages WHERE platform_message_id='1789883786.000001'")
+    assert receipts.assess_chat_receipt(
+        profile="generalist",
+        source=source(request_id=historical_id),
+        user_message=f"Lars decided: apply {historical_card} now.",
+        final_response=closure,
+        messages=[action],
+        session_id="source-session",
+        settings=cfg,
+    ) is None
+
+    monkeypatch.setattr(receipts.time, "time", lambda: 1789000060.0)
     current_dir = tmp_path / "current"
     current_dir.mkdir()
     current_state, current_board = databases(current_dir)
@@ -527,7 +550,7 @@ def test_unavailable_evidence_is_unverified_and_never_instructs_resend(tmp_path,
     cfg = settings(state, board)
     cfg["state_db_path"] = str(tmp_path / "missing.db")
     result = receipts.assess_chat_receipt(
-        profile="generalist", source=source(), user_message="Apply t_ab12cd34 now.",
+        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now.",
         final_response="Applied t_ab12cd34.", messages=[action_message()],
         session_id="source-session", settings=cfg,
     )
@@ -536,7 +559,7 @@ def test_unavailable_evidence_is_unverified_and_never_instructs_resend(tmp_path,
     assert "do not resend" in result["repair"].lower()
 
     compacted = receipts.assess_chat_receipt(
-        profile="generalist", source=source(), user_message="Apply t_ab12cd34 now.",
+        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now.",
         final_response="All set.", messages=[], session_id="source-session", settings=cfg,
     )
     assert compacted["verdict"] == "unverified"
@@ -546,7 +569,7 @@ def test_unavailable_evidence_is_unverified_and_never_instructs_resend(tmp_path,
     monkeypatch.setattr(receipts, "_open_readonly",
                         lambda _: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")))
     locked = receipts.assess_chat_receipt(
-        profile="generalist", source=source(), user_message="Apply t_ab12cd34 now.",
+        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now.",
         final_response="Applied t_ab12cd34.", messages=[action_message()],
         session_id="source-session", settings=settings(state, board),
     )
@@ -688,7 +711,7 @@ def test_plugin_repairs_mirror_only_without_resend(tmp_path, monkeypatch):
     blocked = manager.invoke_hook(
         "before_turn_end", final_response="Applied t_ab12cd34.", session_id="source-session",
         task_id="task", turn_id="mirror", source_identity=source(),
-        user_message="Apply t_ab12cd34 now.", messages=transcript,
+        user_message="Lars decided: apply t_ab12cd34 now.", messages=transcript,
     )
     assert blocked[0]["action"] == "block"
     assert "mirror only" in blocked[0]["message"].lower()
@@ -701,7 +724,7 @@ def test_contradictory_mirror_evidence_requires_reconciliation(tmp_path):
     transcript = messages(mirrored=False)
     persist_result(state, transcript)
     result = receipts.assess_chat_receipt(
-        profile="generalist", source=source(), user_message="Apply t_ab12cd34 now.",
+        profile="generalist", source=source(), user_message="Lars decided: apply t_ab12cd34 now.",
         final_response="Applied t_ab12cd34.", messages=transcript,
         session_id="source-session", settings=settings(state, board),
     )

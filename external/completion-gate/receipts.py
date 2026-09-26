@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -15,10 +16,9 @@ import time
 from pathlib import Path
 
 _CARD = re.compile(r"\bt_[0-9a-f]{8}\b", re.I)
-_ARCHIVE_ONLY = re.compile(
-    r"^\s*(?:SWITCHBOARD-ARCHIVE|STATUS-REQUEST|BOT-WAKE|COMPLETION(?:-RECEIPT)?|"
-    r"CLOSURE|RESULT|RELEASE|FOLLOW-UP)-[A-Z0-9_-]+\b", re.I)
-_CONSULTATION_ONLY = re.compile(r"^\s*DECISION-[A-Z0-9_-]+\s*:.*\?\s*$", re.I | re.S)
+_AUTHORIZED_DECISION = re.compile(
+    r"^\s*(?:Lars\s+decided\s*:|(?:DECISION|SESSION-WRAPUP)-[A-Z0-9_-]+\s*:)", re.I)
+_MAX_RECEIPT_SOURCE_AGE_SECONDS = 15 * 60
 _INACTION = re.compile(
     r"\b(?:did not|could not|cannot|can't|will not|won't|nothing I can do|no(?:thing)?\s*[-—:]?\s*not between messages|"
     r"board says running but no worker is executing|needs a permitted approval path)\b",
@@ -53,8 +53,24 @@ def _source_identity(profile, source):
 
 
 def _source_is_actionable(text):
-    return (isinstance(text, str) and not _ARCHIVE_ONLY.search(text)
-            and not _CONSULTATION_ONLY.search(text))
+    """Admit only an explicit Lars-owned decision, never routine completion prose."""
+    return (isinstance(text, str) and _AUTHORIZED_DECISION.search(text) is not None
+            and "?" not in text)
+
+
+def _source_is_current(source_timestamp):
+    """Bound receipt authority to a recent persisted source, not session ordering."""
+    if isinstance(source_timestamp, bool) or not isinstance(source_timestamp, (int, float)):
+        return False
+    value = float(source_timestamp)
+    if not math.isfinite(value):
+        return False
+    age = time.time() - value
+    return -30 <= age <= _MAX_RECEIPT_SOURCE_AGE_SECONDS
+
+
+def _source_is_receipt_eligible(text, source_timestamp):
+    return _source_is_actionable(text) and _source_is_current(source_timestamp)
 
 
 def _open_readonly(path):
@@ -304,8 +320,6 @@ def receipt_send(settings, *, source_request_id, card_id, message_file):
         settings.get("state_db_path"), session_id, source_request_id, source_timestamp)
     if action is None or card_id not in action["cards"]:
         raise ValueError("source_turn_action_missing")
-    if not action["source_is_current"]:
-        raise ValueError("source_not_current")
 
     record = {
         "profile": profile, "session_id": session_id, "source_channel": channel,
@@ -317,6 +331,8 @@ def receipt_send(settings, *, source_request_id, card_id, message_file):
         db.execute("BEGIN IMMEDIATE")
         prior = _latest_source_receipt(db, record)
         if prior is None:
+            if not _source_is_current(source_timestamp) or not action["source_is_current"]:
+                raise ValueError("source_not_current")
             _append_receipt(db, record, "reserved")
             prior_disposition = None
             message_id = ""
@@ -435,7 +451,7 @@ def _durable_receipt_state(settings, source_identity, session_id):
         return None
     if (source_row[0] != row["source_row_id"]
             or source_row[1] != row["source_timestamp"]
-            or not _source_is_actionable(source_row[5])):
+            or not _source_is_receipt_eligible(source_row[5], source_row[1])):
         return None
     action = _persisted_action_cards(
         settings.get("state_db_path"), session_id,
@@ -670,8 +686,8 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
     identity = _source_identity(profile, source)
     durable_attempt = _durable_receipt_attempt(settings, identity, session_id)
     text = user_message if isinstance(user_message, str) else ""
-    if not _source_is_actionable(text):
-        return _invalid_after_attempt(identity) if durable_attempt else None
+    if not _source_is_receipt_eligible(text, source.get("timestamp")):
+        return None
     state = _source_state(source, request_id)
     if state.get("status") in {"closed", "cancelled", "superseded"}:
         return None
@@ -706,8 +722,8 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
     if persisted_source[1] != source.get("timestamp"):
         return (_invalid_after_attempt(identity) if durable_attempt
                 else _assessment(identity, "source_not_persisted"))
-    if not _source_is_actionable(persisted_source[3]):
-        return _invalid_after_attempt(identity) if durable_attempt else None
+    if not _source_is_receipt_eligible(persisted_source[3], persisted_source[1]):
+        return None
     acted, verified_action_cards = _action_status(final_response, messages)
     persisted_action = _persisted_action_cards(
         state_path, session_id, request_id, source.get("timestamp"))

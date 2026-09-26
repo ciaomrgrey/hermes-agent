@@ -21,10 +21,11 @@ submit no source message, tool result, card text, or Telegram text to that model
 ### Chat decision receipts and actionable inaction (default off)
 
 `chat_receipts_enabled` applies only to `generalist` turns from the configured
-Slack channel whose source has a durable platform request ID, a current owner
-card, a matching action in the current turn, and no later source turn. Markerless
-actionable relays qualify. Archive/status/completion/closure/result/release/
-follow-up and internal sources are excluded. Cancelled, superseded,
+Slack channel whose source has a durable platform request ID, is no more than 15
+minutes old, explicitly carries a non-question `Lars decided:`, `DECISION-*:` or
+`SESSION-WRAPUP-*:` instruction, has a current owner card, a matching action in
+the current turn, and no later source turn. Markerless and routine completion,
+closure, status, result, release, follow-up and internal sources are excluded. Cancelled, superseded,
 closed-channel and quiet-hours states are accepted only from transport-authored
 source metadata bound to the exact request ID; incidental source words never
 bypass the check. A quiet-hours deferral is pending only while its source-bound

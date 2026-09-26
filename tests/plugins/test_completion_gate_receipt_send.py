@@ -3,14 +3,15 @@ import argparse
 import hashlib
 import json
 import sqlite3
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 
-SOURCE_ID = "1789000000.123456"
-SOURCE_TS = 1789000000.123456
+SOURCE_TS = time.time()
+SOURCE_ID = f"{SOURCE_TS:.6f}"
 CARD = "t_ab12cd34"
 DESTINATION = "telegram:123456789"
 DESTINATION_SESSION = "telegram-session"
@@ -31,7 +32,8 @@ def _state_db(path, *, source_rows=1, action_card=CARD, later_action=False,
         for _ in range(source_rows):
             db.execute(
                 "INSERT INTO messages(session_id,role,content,timestamp,platform_message_id) VALUES(?,?,?,?,?)",
-                (SOURCE_SESSION, "user", source_text or f"Apply {CARD}", SOURCE_TS, SOURCE_ID),
+                (SOURCE_SESSION, "user", source_text or f"Lars decided: apply {CARD} now.",
+                 SOURCE_TS, SOURCE_ID),
             )
         db.execute(
             "INSERT INTO messages(session_id,role,content,tool_name,timestamp) VALUES(?,?,?,?,?)",
@@ -57,7 +59,7 @@ def _native_state_db(path):
     db.create_session(SOURCE_SESSION, "slack", chat_id="C0BTEFMAAJX")
     db.create_session(DESTINATION_SESSION, "telegram", chat_id="123456789")
     db.append_message(
-        SOURCE_SESSION, "user", f"Apply {CARD}", timestamp=SOURCE_TS,
+        SOURCE_SESSION, "user", f"Lars decided: apply {CARD} now.", timestamp=SOURCE_TS,
         platform_message_id=SOURCE_ID,
     )
     db.append_message(
@@ -146,7 +148,7 @@ def _enable_hook(loaded, manager, state, gate, monkeypatch):
     def invoke(turn):
         return manager.invoke_hook(
             "before_turn_end", final_response=f"Applied {CARD}", session_id=SOURCE_SESSION,
-            task_id="task", turn_id=turn, messages=[], user_message=f"Apply {CARD}",
+            task_id="task", turn_id=turn, messages=[], user_message=f"Lars decided: apply {CARD} now.",
             source_identity={"platform": "slack", "channel_id": "C0BTEFMAAJX",
                              "request_id": SOURCE_ID, "timestamp": SOURCE_TS, "internal": False},
         )
@@ -190,7 +192,7 @@ def test_receipt_send_uses_native_helper_persists_and_satisfies_restarted_hook(t
     monkeypatch.setattr(hermes_constants, "profile_name_for_home", lambda _home: "generalist")
     assert manager.invoke_hook(
         "before_turn_end", final_response=f"Applied {CARD}", session_id=SOURCE_SESSION,
-        task_id="task", turn_id="after-restart", messages=[], user_message=f"Apply {CARD}",
+        task_id="task", turn_id="after-restart", messages=[], user_message=f"Lars decided: apply {CARD} now.",
         source_identity={"platform": "slack", "channel_id": "C0BTEFMAAJX",
                          "request_id": SOURCE_ID, "timestamp": SOURCE_TS, "internal": False},
     ) == []
@@ -205,7 +207,7 @@ def test_receipt_send_uses_native_helper_persists_and_satisfies_restarted_hook(t
         db.execute("DELETE FROM messages WHERE session_id=?", (DESTINATION_SESSION,))
     blocked = manager.invoke_hook(
         "before_turn_end", final_response=f"Applied {CARD}", session_id=SOURCE_SESSION,
-        task_id="task", turn_id="mirror-removed", messages=[], user_message=f"Apply {CARD}",
+        task_id="task", turn_id="mirror-removed", messages=[], user_message=f"Lars decided: apply {CARD} now.",
         source_identity={"platform": "slack", "channel_id": "C0BTEFMAAJX",
                          "request_id": SOURCE_ID, "timestamp": SOURCE_TS, "internal": False},
     )
@@ -308,6 +310,70 @@ def test_stale_source_with_a_completed_same_turn_action_cannot_send(tmp_path, mo
     with pytest.raises(ValueError, match="source_not_current"):
         cli["handler_fn"](_args(parser, message_file))
     assert calls == []
+
+
+@pytest.mark.parametrize("source_text", [
+    f"Chas bridge follow-up: complete. Card {CARD}. No Lars action remains.",
+    f"[COMPLETION-RECEIPT-20260926-01] {CARD} is done; no action needed.",
+])
+def test_routine_completion_prose_cannot_authorize_receipt_send(
+        tmp_path, monkeypatch, source_text):
+    _loaded, _manager, cli, parser, _state, _board, _gate = _plugin(
+        tmp_path, monkeypatch, source_text=source_text)
+    message_file = tmp_path / "message.txt"
+    message_file.write_text(f"Applied {CARD} for source {SOURCE_ID}.")
+    calls = []
+    import tools.send_message_tool as native
+    monkeypatch.setattr(native, "send_message_tool", lambda args: calls.append(args))
+    with pytest.raises(ValueError, match="source_not_actionable"):
+        cli["handler_fn"](_args(parser, message_file))
+    assert calls == []
+
+
+def test_latest_but_old_source_cannot_authorize_receipt_send(tmp_path, monkeypatch):
+    historical_id = "1789883785.216179"
+    _loaded, _manager, cli, parser, state, _board, _gate = _plugin(
+        tmp_path, monkeypatch, source_text=f"Lars decided: apply {CARD} now.")
+    with sqlite3.connect(state) as db:
+        db.execute(
+            "UPDATE messages SET platform_message_id=?,timestamp=? WHERE role='user'",
+            (historical_id, float(historical_id)),
+        )
+        db.execute(
+            "UPDATE messages SET timestamp=? WHERE role='tool'",
+            (float(historical_id) + 0.1,),
+        )
+    message_file = tmp_path / "message.txt"
+    message_file.write_text(f"Applied {CARD} for source {historical_id}.")
+    calls = []
+    import tools.send_message_tool as native
+    monkeypatch.setattr(native, "send_message_tool", lambda args: calls.append(args))
+    args = parser.parse_args([
+        "receipt-send", "--source-request-id", historical_id,
+        "--card", CARD, "--message-file", str(message_file),
+    ])
+    with pytest.raises(ValueError, match="source_not_current"):
+        cli["handler_fn"](args)
+    assert calls == []
+
+
+def test_current_lars_decision_can_authorize_receipt_send(tmp_path, monkeypatch):
+    _loaded, _manager, cli, parser, state, _board, _gate = _plugin(
+        tmp_path, monkeypatch, source_text=f"Lars decided: apply {CARD} now.")
+    now = time.time()
+    with sqlite3.connect(state) as db:
+        db.execute("UPDATE messages SET timestamp=? WHERE role='user'", (now,))
+        db.execute("UPDATE messages SET timestamp=? WHERE role='tool'", (now + 0.1,))
+    message_file = tmp_path / "message.txt"
+    message_file.write_text(f"Applied {CARD} for source {SOURCE_ID}.")
+    calls = []
+    import tools.send_message_tool as native
+    monkeypatch.setattr(native, "send_message_tool", lambda args: calls.append(args) or json.dumps({
+        "success": True, "platform": "telegram", "chat_id": "123456789",
+        "message_id": "4884", "mirrored": False,
+    }))
+    assert cli["handler_fn"](_args(parser, message_file))["status"] == "transport_only"
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("message,error", [
@@ -456,6 +522,32 @@ def test_transport_only_retry_repairs_mirror_without_resending(tmp_path, monkeyp
     assert len(sends) == 1
     assert mirror_calls == [{"source_label": "completion-gate", "session_id": DESTINATION_SESSION}]
     assert [row[-1] for row in _receipt_rows(gate)] == ["reserved", "transport_only", "mirrored"]
+
+
+def test_transport_only_retry_repairs_mirror_after_source_freshness_expires(
+        tmp_path, monkeypatch):
+    loaded, _manager, cli, parser, state, _board, _gate = _plugin(tmp_path, monkeypatch)
+    message = f"Applied {CARD} for source {SOURCE_ID}."
+    message_file = tmp_path / "message.txt"
+    message_file.write_text(message)
+    sends = []
+    import tools.send_message_tool as native
+    monkeypatch.setattr(native, "send_message_tool", lambda args: sends.append(args) or json.dumps({
+        "success": True, "platform": "telegram", "chat_id": "123456789",
+        "message_id": "4884", "mirrored": False,
+    }))
+    assert cli["handler_fn"](_args(parser, message_file))["status"] == "transport_only"
+
+    monkeypatch.setattr(loaded.receipts.time, "time", lambda: SOURCE_TS + 901)
+    import gateway.mirror as mirror
+    repairs = []
+    monkeypatch.setattr(
+        mirror, "mirror_to_session",
+        lambda *_a, **kwargs: repairs.append(kwargs) or _mirror(state, message) or True,
+    )
+    assert cli["handler_fn"](_args(parser, message_file))["status"] == "mirrored"
+    assert len(sends) == 1
+    assert repairs == [{"source_label": "completion-gate", "session_id": DESTINATION_SESSION}]
 
 
 @pytest.mark.parametrize("native_result", [
