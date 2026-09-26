@@ -553,7 +553,10 @@ def _is_mutating_call(node: ast.Call, name: str) -> bool:
 
 def _shell_tokens(line: str) -> list[str] | None:
     try:
-        return list(shlex.shlex(line, posix=True, punctuation_chars="|><;&"))
+        return [
+            "|" if token == "|&" else token
+            for token in shlex.shlex(line, posix=True, punctuation_chars="|><;&")
+        ]
     except ValueError:
         return None
 
@@ -599,18 +602,116 @@ def _python_segment(segment: list[str]) -> list[str] | None:
     return None
 
 
+def _python_short_options(token: str) -> tuple[str, str | None, bool] | None:
+    if not token.startswith("-") or token.startswith("--"):
+        return None
+    inspect = False
+    for index, option in enumerate(token[1:]):
+        if option == "V":
+            return ("version", None, inspect)
+        if option == "c":
+            return ("command", token[index + 2:] or None, inspect)
+        if option not in "bBdEhiIOPqRsSuvx":
+            return None
+        inspect = inspect or option == "i"
+    return ("options", None, inspect)
+
+
+def _python_argv(segment: list[str]) -> list[str]:
+    """Return interpreter argv with shell redirections and operands removed."""
+    argv: list[str] = []
+    index = 0
+    redirects = {"<", "<<", "<<-", "<<<", ">", ">>", "&>", "&>>", ">&"}
+    while index < len(segment):
+        token = segment[index]
+        if token in redirects:
+            index += 2
+            continue
+        if (
+            token.isdigit()
+            and index + 1 < len(segment)
+            and segment[index + 1] in redirects
+        ):
+            index += 3
+            continue
+        argv.append(token)
+        index += 1
+    return argv
+
+
 def _python_inline_source(segment: list[str]) -> str | None:
-    for index, token in enumerate(segment[1:], start=1):
+    segment = _python_argv(segment)
+    index = 1
+    while index < len(segment):
+        token = segment[index]
         if token == "-c":
             return segment[index + 1] if index + 1 < len(segment) else "def <unresolved>(:\npass"
-        clustered = re.fullmatch(r"-[bBdEhiIOPqRsSuvVx]*c(.*)", token, re.DOTALL)
-        if clustered:
-            return clustered.group(1) or (
-                segment[index + 1] if index + 1 < len(segment) else "def <unresolved>(:\npass"
-            )
+        short_options = _python_short_options(token)
+        if short_options is not None:
+            mode, source, _inspect = short_options
+            if mode == "version":
+                return None
+            if mode == "command":
+                return source or (
+                    segment[index + 1]
+                    if index + 1 < len(segment)
+                    else "def <unresolved>(:\npass"
+                )
         if token == "<<<":
             return segment[index + 1] if index + 1 < len(segment) else "def <unresolved>(:\npass"
+        if (
+            token in {"-m", "-h", "--help", "-V", "--version"}
+            or token.startswith("-m")
+            or re.fullmatch(r"-V+", token)
+        ):
+            return None
+        if token == "--":
+            return None
+        if token in {"-W", "-X", "--check-hash-based-pycs"}:
+            index += 2
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return None
     return None
+
+
+def _python_reads_stdin_source(segment: list[str]) -> bool:
+    segment = _python_argv(segment)
+    inspect = False
+    index = 1
+    while index < len(segment):
+        token = segment[index]
+        if token == "-":
+            return True
+        if token in {"-c", "-m"}:
+            return inspect
+        if token.startswith("-m"):
+            return inspect
+        if token in {"-h", "--help", "-V", "--version"} or re.fullmatch(r"-V+", token):
+            return False
+        short_options = _python_short_options(token)
+        if short_options is not None:
+            mode, _source, clustered_inspect = short_options
+            if mode == "version":
+                return False
+            inspect = inspect or clustered_inspect
+            if mode == "command":
+                return inspect
+            index += 1
+            continue
+        if token == "--":
+            index += 1
+            return index == len(segment) or segment[index] == "-" or inspect
+        if token in {"-W", "-X", "--check-hash-based-pycs"}:
+            index += 2
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return inspect
+    return True
 
 
 def _assignments_before(
@@ -823,8 +924,17 @@ def terminal_candidates(
             inline_source = _python_inline_source(segment)
             if inline_source is not None:
                 found.append(("<terminal-python>.py", inline_source, True))
-            elif body_source is not None:
-                found.append(("<terminal-python>.py", body_source, True))
+            if _python_reads_stdin_source(segment):
+                stdin_source = body_source
+                if stdin_source is None and "<<<" in segment:
+                    source_index = segment.index("<<<") + 1
+                    stdin_source = (
+                        segment[source_index]
+                        if source_index < len(segment)
+                        else "def <unresolved>(:\npass"
+                    )
+                if stdin_source is not None and stdin_source != inline_source:
+                    found.append(("<terminal-python>.py", stdin_source, True))
 
         segment_start = 0
         for segment_end in range(len(tokens) + 1):
@@ -892,6 +1002,19 @@ def terminal_candidates(
         for pipe, token in enumerate(tokens):
             if token != "|" or pipe + 1 >= len(tokens):
                 continue
+            end = pipe + 1
+            while end < len(tokens) and tokens[end] not in {"|", ";", "&&", "||"}:
+                end += 1
+            python_segment = _python_segment(tokens[pipe + 1:end])
+            if (
+                python_segment is not None
+                and _python_reads_stdin_source(python_segment)
+                and body_source is None
+            ):
+                piped_source = _pipeline_body(tokens, pipe)
+                if piped_source is None:
+                    piped_source = "def <unresolved>(:\npass"
+                found.append(("<terminal-python>.py", piped_source, True))
             if tokens[pipe + 1].rsplit("/", 1)[-1] != "tee":
                 continue
             end = pipe + 2

@@ -714,6 +714,338 @@ def test_piped_tee_trivial_probe_is_allowed(installed_policy, tmp_path):
     assert target.read_text() == "print(1)\n"
 
 
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_piped_python_stdin_authoring_is_blocked_before_mutation(
+    installed_policy, tmp_path, preexisting,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    original = b"print('safe')\n" if preexisting else None
+    if original is not None:
+        target.write_bytes(original)
+    ledger = tmp_path / "ledger.txt"
+    ledger.write_bytes(b"unchanged\n")
+    source = (
+        "from pathlib import Path; "
+        f"Path({str(target)!r}).write_text('conn.commit()\\n')"
+    )
+    command = "printf '%s\\n' " + shlex.quote(source) + " | python3"
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in (result.get("error") or ""), result
+    assert (target.read_bytes() if target.exists() else None) == original
+    assert ledger.read_bytes() == b"unchanged\n"
+
+
+def test_piped_trivial_python_stdin_dispatches_normally(installed_policy):
+    from model_tools import handle_function_call
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": "printf '%s\\n' 'print(1 + 1)' | python3"},
+        task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+    assert result.get("exit_code") == 0, result
+    assert result.get("output", "").strip() == "2"
+
+
+@pytest.mark.parametrize("pipe", ["|", "|&"])
+def test_piped_python_with_shell_syntax_is_blocked_before_dispatch(
+    installed_policy, tmp_path, pipe,
+):
+    from model_tools import handle_function_call
+
+    redirected = tmp_path / "python.out"
+    redirect = f" > {redirected}" if pipe == "|" else ""
+    result = json.loads(handle_function_call(
+        "terminal",
+        {"command": f"printf '%s\\n' 'conn.commit()' {pipe} python3{redirect}"},
+        task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in (result.get("error") or ""), result
+    assert not redirected.exists()
+
+
+@pytest.mark.parametrize("mode", ["script", "module"])
+def test_python_mode_arguments_named_c_are_not_interpreter_source(
+    installed_policy, tmp_path, mode,
+):
+    from model_tools import handle_function_call
+
+    if mode == "script":
+        script = tmp_path / "consumer.py"
+        script.write_text("print('script ran')\n")
+        command = f"python3 {shlex.quote(str(script))} -c 'conn.commit()'"
+    else:
+        command = "python3 -mjson.tool -c 'conn.commit()'"
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+
+
+@pytest.mark.parametrize("mode", ["script", "module", "version"])
+def test_python_heredoc_to_non_stdin_source_modes_is_data(
+    installed_policy, tmp_path, mode,
+):
+    from model_tools import handle_function_call
+
+    if mode == "script":
+        script = tmp_path / "consumer.py"
+        script.write_text("print('script ran')\n")
+        invocation = f"python3 {shlex.quote(str(script))}"
+    elif mode == "module":
+        invocation = "python3 -mjson.tool"
+    else:
+        invocation = "python3 -VV"
+    command = f"{invocation} <<'DATA'\nconn.commit()\nDATA"
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -VV -c 'conn.commit()'",
+        "python3 -VV <<< 'conn.commit()'",
+    ],
+    ids=["command-argument", "here-string"],
+)
+def test_python_attached_version_flag_terminates_inline_source_scanning(
+    installed_policy, command,
+):
+    from model_tools import handle_function_call
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+    assert result.get("exit_code") == 0, result
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -Vc 'conn.commit()'",
+        "python3 -VVc 'conn.commit()'",
+        "python3 -iV <<< 'conn.commit()'",
+    ],
+    ids=["single-version", "double-version", "inspect-version"],
+)
+def test_python_clustered_version_flag_terminates_source_scanning(
+    installed_policy, command,
+):
+    from model_tools import handle_function_call
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+    assert result.get("exit_code") == 0, result
+
+
+@pytest.mark.parametrize(
+    ("invocation", "blocked"),
+    [("-cpass", False), ("-Bcpass", False), ("-icpass", True)],
+    ids=["command", "command-with-flag", "inspect-command"],
+)
+def test_python_attached_command_controls_followup_stdin_classification(
+    installed_policy, tmp_path, invocation, blocked,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    source = f"from pathlib import Path; Path({str(target)!r}).write_text('conn.commit()\\n')"
+    command = "printf '%s\\n' " + shlex.quote(source) + f" | python3 {invocation}"
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert ("Cody-owned" in (result.get("error") or "")) is blocked, result
+    if not blocked:
+        assert result.get("exit_code") == 0, result
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("invocation", ["-icpass", "-i -c pass"])
+@pytest.mark.parametrize("carrier", ["here-string", "heredoc"])
+def test_python_inspect_command_classifies_redirected_stdin_source(
+    installed_policy, tmp_path, invocation, carrier,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    source = f"from pathlib import Path; Path({str(target)!r}).write_text('conn.commit()\\n')"
+    if carrier == "here-string":
+        command = f"python3 {invocation} <<< " + shlex.quote(source)
+    else:
+        command = f"python3 {invocation} <<'PY'\n{source}\nPY"
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in (result.get("error") or ""), result
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("option", ["-Wignore", "-Ximporttime"])
+def test_python_attached_option_argument_does_not_enable_inspect_mode(
+    installed_policy, tmp_path, option,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    source = f"from pathlib import Path; Path({str(target)!r}).write_text('conn.commit()\\n')"
+    command = "printf '%s\\n' " + shlex.quote(source) + f" | python3 {option} -cpass"
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+    assert result.get("exit_code") == 0, result
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_python_interspersed_output_redirect_does_not_hide_inline_source(
+    installed_policy, tmp_path, preexisting,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    original = b"print('safe')\n" if preexisting else None
+    if original is not None:
+        target.write_bytes(original)
+    output = tmp_path / "python.out"
+    ledger = tmp_path / "ledger.txt"
+    ledger.write_bytes(b"unchanged\n")
+    source = (
+        "from pathlib import Path; "
+        f"Path({str(target)!r}).write_text('conn.commit()\\n')"
+    )
+    command = f"python3 > {shlex.quote(str(output))} -c " + shlex.quote(source)
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in (result.get("error") or ""), result
+    assert (target.read_bytes() if target.exists() else None) == original
+    assert not output.exists()
+    assert ledger.read_bytes() == b"unchanged\n"
+
+
+@pytest.mark.parametrize("invocation", ["-cpass", "-VV"])
+def test_python_interspersed_output_redirect_preserves_non_stdin_modes(
+    installed_policy, tmp_path, invocation,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    output = tmp_path / "python.out"
+    source = f"from pathlib import Path; Path({str(target)!r}).write_text('conn.commit()\\n')"
+    command = (
+        "printf '%s\\n' " + shlex.quote(source)
+        + f" | python3 > {shlex.quote(str(output))} {invocation}"
+    )
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+    assert result.get("exit_code") == 0, result
+    assert not target.exists()
+    assert output.exists()
+
+
+@pytest.mark.parametrize("mode", ["script", "command", "module"])
+def test_python_inspect_mode_classifies_followup_stdin_source(
+    installed_policy, tmp_path, mode,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    source = f"from pathlib import Path; Path({str(target)!r}).write_text('conn.commit()\\n')"
+    if mode == "script":
+        script = tmp_path / "consumer.py"
+        script.write_text("print('script ran')\n")
+        invocation = f"python3 -i {shlex.quote(str(script))}"
+    elif mode == "command":
+        invocation = "python3 -i -c pass"
+    else:
+        invocation = "python3 -i -m this"
+    command = "printf '%s\\n' " + shlex.quote(source) + f" | {invocation}"
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in (result.get("error") or ""), result
+    assert not target.exists()
+
+
+def test_python_option_with_argument_preserves_stdin_source_classification(
+    installed_policy, tmp_path,
+):
+    from model_tools import handle_function_call
+
+    target = tmp_path / "worker.py"
+    source = f"from pathlib import Path; Path({str(target)!r}).write_text('conn.commit()\\n')"
+    command = (
+        "printf '%s\\n' " + shlex.quote(source)
+        + " | python3 --check-hash-based-pycs always"
+    )
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" in (result.get("error") or ""), result
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("consumer", ["script", "module", "version"])
+def test_piped_data_to_non_stdin_python_modes_dispatches_normally(
+    installed_policy, tmp_path, consumer,
+):
+    from model_tools import handle_function_call
+
+    if consumer == "script":
+        script = tmp_path / "consumer.py"
+        script.write_text("import sys\nprint(sys.stdin.read())\n")
+        command = f"printf 'ordinary domain data' | python3 {shlex.quote(str(script))}"
+    elif consumer == "module":
+        command = "printf 'ordinary domain data' | python3 -m json.tool"
+    else:
+        command = "printf 'ordinary domain data' | python3 --version"
+
+    result = json.loads(handle_function_call(
+        "terminal", {"command": command}, task_id="t_domain", session_id="s_domain",
+    ))
+
+    assert "Cody-owned" not in (result.get("error") or ""), result
+    if consumer != "module":
+        assert result.get("exit_code") == 0, result
+
+
 def test_sequential_redirects_classify_cumulative_artifact(installed_policy, tmp_path):
     from model_tools import handle_function_call
 
