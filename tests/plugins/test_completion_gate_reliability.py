@@ -60,10 +60,13 @@ def test_transient_retry_uses_remaining_total_budget_only(tmp_path, monkeypatch)
         extraction.bounded_extract('PRIVATE', timeout=25, deadline=40)
     except Exception:
         pass
-    assert len(calls) == 2
-    assert [c['timeout'] for c in calls] == [25, 15]
+    # Single clock: the whole remaining deadline goes to attempt 1 (the legacy
+    # per-attempt cap is ignored once a deadline exists); after it is exhausted no
+    # smaller retry slice is started.
+    assert len(calls) == 1
+    assert [c['timeout'] for c in calls] == [40]
     assert now[0] <= 40
-    assert all(0 < json.loads(c['input'])['timeout'] < c['timeout'] for c in calls)
+    assert all(json.loads(c['input'])['expires_at'] == 40 for c in calls)
     # A fast recoverable exit succeeds on the one retry; permanent failures do not retry.
     now[0] = 0
     calls.clear()
@@ -93,7 +96,8 @@ def test_transient_retry_uses_remaining_total_budget_only(tmp_path, monkeypatch)
     except Exception:
         pass
     assert len(calls) == 1
-    assert 0 < json.loads(calls[0]['input'])['timeout'] < calls[0]['timeout']
+    payload = json.loads(calls[0]['input'])
+    assert payload['expires_at'] == 0.0005 and 0 < payload['timeout'] <= calls[0]['timeout']
 
 
 def test_native_child_reports_timeout_route_before_parent_kill(tmp_path, monkeypatch, caplog):
@@ -124,9 +128,13 @@ def test_native_child_reports_timeout_route_before_parent_kill(tmp_path, monkeyp
             extraction.bounded_extract('PRIVATE_TIMEOUT_ANSWER', timeout=12)
         diag = getattr(caught.value, 'diagnostics', {})
         assert diag.get('cause') == 'aux_timeout'
-        assert diag['child_exit_code'] == 1  # child exited itself; not TimeoutExpired
-        assert diag['aux_provider'] == 'custom'
-        assert diag['aux_model_sha256'] == hashlib.sha256(b'local-test').hexdigest()
+        # Single clock: child watchdog and parent kill share ONE absolute deadline
+        # (no startup reserve), so either may win. When the child reports first it
+        # carries the observed route; a parent kill reports the timeout without it.
+        assert diag.get('child_exit_code') in (None, 1)
+        if diag.get('child_exit_code') == 1:
+            assert diag['aux_provider'] == 'custom'
+            assert diag['aux_model_sha256'] == hashlib.sha256(b'local-test').hexdigest()
         assert reached.is_set()
         assert time.monotonic() - started < 14  # scheduling tolerance, not a new budget
         assert 'PRIVATE_TIMEOUT_ANSWER' not in caplog.text

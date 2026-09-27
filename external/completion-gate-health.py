@@ -159,7 +159,7 @@ def check(home, state_path, *, now=None, send=send_alarm):
             from hermes_constants import get_default_hermes_root
             gate_path = settings.get('db_path', get_default_hermes_root() / 'state/completion-gate/gate.db')
             if activity_gap(home, gate_path, state_path, now=now,
-                            tolerance=float(settings.get('total_timeout', 20)) + 60):
+                            tolerance=float(settings.get('check_timeout_seconds', 60)) + 60):
                 reasons.append('liveness_gap')
     finally:
         reset_hermes_home_override(token)

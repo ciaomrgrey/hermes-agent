@@ -57,7 +57,11 @@ def test_endpoint_and_hard_deadline(tmp_path):
         assert checks.check("http", {"url": url, "status": 204})[0] == "reproduced"
         assert checks.check("socket", {"host": "127.0.0.1", "port": server.server_port})[0] == "reproduced"
         assert checks.bounded_check({"artefact_kind": "http", "artefact_ref": {"url": url, "status": 200}}, timeout=2)[0] == "failed"
-        assert checks.bounded_check({"artefact_kind": "file", "artefact_ref": str(tmp_path)}, timeout=0.001)[0] == "unverified"
+        # Single clock: expiry is the parent deadline, surfaced as TimeoutError so the
+        # gate records one gate_error/aux_timeout rather than a per-child "unverified".
+        import pytest
+        with pytest.raises(TimeoutError):
+            checks.bounded_check({"artefact_kind": "file", "artefact_ref": str(tmp_path)}, timeout=0.001)
     finally:
         server.shutdown()
         server.server_close()

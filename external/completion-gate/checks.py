@@ -9,6 +9,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import time
 from urllib.parse import urlsplit
 import urllib.error
 import urllib.request
@@ -155,15 +156,23 @@ def check(kind, ref, timeout=10):
         return "unverified", "check_unavailable"
 
 
-def bounded_check(claim, timeout=10):
+def bounded_check(claim, timeout=10, *, deadline=None):
+    deadline = deadline if deadline is not None else time.monotonic() + timeout
     try:
+        timeout = deadline - time.monotonic()
+        if timeout <= 0:
+            raise TimeoutError()
         proc = subprocess.run([sys.executable, str(Path(__file__).resolve())],
-                              input=json.dumps({"claim": claim, "timeout": timeout}), text=True,
+                              input=json.dumps({"claim": claim, "deadline": deadline}), text=True,
                               capture_output=True, timeout=timeout, check=True)
         verdict, mismatch = json.loads(proc.stdout)
+        if time.monotonic() >= deadline:
+            raise TimeoutError()
         if verdict not in {"reproduced", "failed", "unverified"} or not isinstance(mismatch, str):
             raise ValueError("invalid_checker_result")
         return verdict, mismatch
+    except (subprocess.TimeoutExpired, TimeoutError):
+        raise TimeoutError() from None
     except Exception:
         return "unverified", "checker_timeout_or_error"
 
@@ -171,4 +180,7 @@ def bounded_check(claim, timeout=10):
 if __name__ == "__main__":
     payload = json.load(sys.stdin)
     claim = payload["claim"]
-    print(json.dumps(check(claim["artefact_kind"], claim["artefact_ref"], payload["timeout"])))
+    remaining = payload['deadline'] - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError()
+    print(json.dumps(check(claim["artefact_kind"], claim["artefact_ref"], remaining)))
