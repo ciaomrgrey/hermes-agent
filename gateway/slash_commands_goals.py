@@ -100,6 +100,7 @@ class GatewayGoalCommandsMixin:
                     channel_prompt=event.channel_prompt if kickoff else None,
                     auto_skill=event.auto_skill if kickoff else None,
                     inherit_channel_pin=not kickoff,
+                    metadata=dict(event.metadata or {}) if kickoff else {},
                 )
                 self._enqueue_fifo(quick_key, turn, adapter)
         except Exception as exc:
