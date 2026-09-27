@@ -14,7 +14,10 @@ import re
 import sqlite3
 import time
 import unicodedata
+from contextlib import contextmanager
 from pathlib import Path
+
+from .gate import DeadlineConnection, _deadline
 
 _CARD = re.compile(r"\bt_[0-9a-f]{8}\b", re.I)
 # Latest estate policy: unsolicited receipts stay silent.  Authority to notify
@@ -129,13 +132,58 @@ def _source_is_receipt_eligible(text, source_timestamp):
     return _source_is_actionable(text) and _source_is_current(source_timestamp)
 
 
+# Ordinary evidence reads keep their historical 1 s lock wait; inside a gate
+# evaluation the hook's absolute deadline caps it further (never extends it).
+_EVIDENCE_BUSY_SECONDS = 1.0
+
+
+def _expired():
+    deadline = _deadline.get()
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def _check_deadline():
+    """Raise on the hook's single clock; a no-op outside gate evaluation (CLI)."""
+    if _expired():
+        raise TimeoutError()
+
+
+class _EvidenceConnection(DeadlineConnection):
+    """Evidence reads wait at most min(1 s, time left on the shared clock)."""
+    statement_budget = _EVIDENCE_BUSY_SECONDS
+
+
+@contextmanager
 def _open_readonly(path):
+    """Read-only evidence connection bound to the gate's absolute deadline.
+
+    Lock waits, statements and row traversal all stop at the deadline; expiry
+    propagates as ``TimeoutError`` and is never reported as missing evidence.
+    """
     path = Path(path)
     if not path.is_absolute() or not path.is_file():
         raise ValueError("receipt_database_unavailable")
-    db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1)
-    db.execute("PRAGMA query_only=ON")
-    return db
+    deadline = _deadline.get()
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError()
+    # Outside a gate evaluation (CLI) keep SQLite's ordinary 1 s wait; inside
+    # one the connection polls on the shared clock instead.
+    db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True,
+                         timeout=_EVIDENCE_BUSY_SECONDS if deadline is None else 0,
+                         factory=_EvidenceConnection)
+    try:
+        if deadline is not None:
+            db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        db.execute("PRAGMA query_only=ON")
+        yield db
+    except sqlite3.Error as exc:
+        # A busy wait cut at the deadline or a progress-handler interrupt is
+        # clock expiry, not unavailable evidence.
+        if _expired():
+            raise TimeoutError() from exc
+        raise
+    finally:
+        db.close()
 
 
 def _card_exists(path, card_id):
@@ -144,6 +192,8 @@ def _card_exists(path, card_id):
         with _open_readonly(path) as db:
             row = db.execute("SELECT status FROM tasks WHERE id=?", (card_id,)).fetchone()
         return row is not None and row[0] not in {"archived", "cancelled"}
+    except TimeoutError:
+        raise
     except Exception:
         return None
 
@@ -169,6 +219,8 @@ def _persisted_tool_result(path, session_id, call_id, content, source_timestamp)
                 (session_id, call_id, float(source_timestamp or 0)),
             ).fetchone()
         return row is not None and row[0] == content
+    except TimeoutError:
+        raise
     except Exception:
         return None
 
@@ -182,6 +234,8 @@ def _source_persisted(path, session_id, request_id, timestamp):
                 (session_id, request_id, timestamp),
             ).fetchone()
         return row is not None
+    except TimeoutError:
+        raise
     except Exception:
         return None
 
@@ -195,6 +249,8 @@ def _mirror_exists(path, destination_session, message, source_timestamp):
                 (destination_session, message, float(source_timestamp or 0)),
             ).fetchone()
         return row is not None
+    except TimeoutError:
+        raise
     except Exception:
         return None
 
@@ -212,7 +268,13 @@ def _mirror_hash_exists(path, destination_session, message_hash, source_timestam
                 "AND timestamp>=? ORDER BY id",
                 (destination_session, float(source_timestamp or 0)),
             ).fetchall()
-        return any(isinstance(row[0], str) and _message_hash(row[0]) == message_hash for row in rows)
+        for row in rows:
+            _check_deadline()
+            if isinstance(row[0], str) and _message_hash(row[0]) == message_hash:
+                return True
+        return False
+    except TimeoutError:
+        raise
     except Exception:
         return None
 
@@ -276,6 +338,8 @@ def _unique_source_row(path, session_id, request_id, source_channel):
                 "AND m.platform_message_id=? ORDER BY m.id LIMIT 2",
                 (request_id,),
             ).fetchall()
+    except TimeoutError:
+        raise
     except Exception as exc:
         raise ValueError("source_database_unavailable") from exc
     if not rows:
@@ -305,6 +369,8 @@ def _assessment_source_row(path, session_id, request_id, source_channel):
                 session_row = db.execute(
                     "SELECT source,chat_id FROM sessions WHERE id=?", (rows[0][2],),
                 ).fetchone()
+    except TimeoutError:
+        raise
     except Exception as exc:
         raise ValueError("source_database_unavailable") from exc
     if not rows:
@@ -474,6 +540,8 @@ def _durable_receipt_row(settings, source_identity, session_id):
                 source_identity.get("profile"), source_identity.get("channel"),
                 source_identity.get("request_id"),
             )).fetchone()
+    except TimeoutError:
+        raise
     except Exception:
         return None
     return row
@@ -556,6 +624,7 @@ def _send_attempts(messages):
     calls = {}
     results = {}
     for item in messages or ():
+        _check_deadline()
         if not isinstance(item, dict):
             continue
         if item.get("role") == "assistant":
@@ -588,10 +657,13 @@ def _persisted_send_attempts(path, session_id, source_timestamp):
                 "AND tool_name='send_message' AND timestamp>=? ORDER BY id",
                 (session_id, float(source_timestamp or 0)),
             ).fetchall()
+    except TimeoutError:
+        raise
     except Exception:
         return None
     calls = {}
     for (raw_calls,) in assistant_rows:
+        _check_deadline()
         try:
             parsed = json.loads(raw_calls) if isinstance(raw_calls, str) else raw_calls
         except (TypeError, ValueError):
@@ -640,10 +712,13 @@ def _persisted_action_cards(path, session_id, request_id, source_timestamp):
                 sql += " AND id<?"
                 params.append(next_user[0])
             rows = db.execute(sql + " ORDER BY id", params).fetchall()
+    except TimeoutError:
+        raise
     except Exception:
         return None
     cards = set()
     for tool_name, content in rows:
+        _check_deadline()
         if str(tool_name or "") not in _ACTION_TOOLS:
             continue
         result = _json(content)
@@ -676,6 +751,7 @@ def _action_status(final_response, messages):
                    and _ACTION_RESULT.search(final_response) and _CARD.search(final_response))
     verified_cards = set()
     for item in messages or ():
+        _check_deadline()
         if not isinstance(item, dict) or item.get("role") != "tool":
             continue
         name = str(item.get("tool_name") or "")
@@ -845,6 +921,7 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
         results = {**results, **persisted_results}
     saw_target = saw_source = saw_card = saw_transport = saw_mirror = evidence_unknown = False
     for call_id, args in calls.items():
+        _check_deadline()
         if str(args.get("target") or "") != expected_target:
             continue
         saw_target = True
@@ -926,6 +1003,7 @@ def assess_inaction(final_response, messages, *, user_message=""):
         }
     resolved_cards = set()
     for item in messages or ():
+        _check_deadline()
         if not isinstance(item, dict) or item.get("role") != "tool":
             continue
         name = str(item.get("tool_name") or "")
