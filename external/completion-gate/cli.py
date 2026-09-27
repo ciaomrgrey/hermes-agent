@@ -1,13 +1,32 @@
 """Owner audit commands; advice markers are explicit, never inferred from model prose."""
+import argparse
+from datetime import datetime
 import json
+import math
 
 from .gate import Gate
+
+
+def timestamp(value):
+    """Unix seconds or ISO-8601; naive dates use the process's local timezone."""
+    try:
+        try:
+            result = float(value)
+        except ValueError:
+            result = datetime.fromisoformat(value).timestamp()
+        if not math.isfinite(result):
+            raise ValueError()
+        return result
+    except (ValueError, OverflowError, OSError):
+        raise argparse.ArgumentTypeError("expected finite unix seconds or ISO-8601 time") from None
 
 
 def register_cli(ctx):
     def setup(parser):
         sub = parser.add_subparsers(dest="operation", required=True)
-        sub.add_parser("metrics", help="Aggregate counts and unverified rate, not cases")
+        metrics = sub.add_parser("metrics", help="Aggregate counts and rates, not cases")
+        metrics.add_argument("--since", type=timestamp, help="Inclusive unix seconds or ISO-8601 local time")
+        metrics.add_argument("--until", type=timestamp, help="Exclusive unix seconds or ISO-8601 local time")
         advice = sub.add_parser("advice", help="Record Gurney advice and its single attempted cycle")
         advice.add_argument("--profile", required=True)
         advice.add_argument("--task", required=True)
@@ -37,7 +56,7 @@ def register_cli(ctx):
             gate.mark_advice(profile=args.profile, task_id=args.task, marker=args.marker)
             result = {"recorded": args.marker, "profile": args.profile, "task_id": args.task}
         else:
-            result = gate.metrics()
+            result = gate.metrics(since=args.since, until=args.until)
         print(json.dumps(result, sort_keys=True))
         return result
 
