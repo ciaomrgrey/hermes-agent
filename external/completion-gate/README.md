@@ -72,18 +72,17 @@ changing the existing claims/error denominators.
 ### Bounded failure diagnostics and recovery
 
 Extraction retries at most once for classified transport/server/timeouts, only
-inside the original monotonic `total_timeout` deadline. Each subprocess is capped
-by `extract_timeout` and remaining total time. `auxiliary.transient_retries: 0`
+inside the original monotonic `check_timeout_seconds` whole-check deadline.
+Each subprocess receives only remaining time. `auxiliary.transient_retries: 0`
 disables the outer retry too; positive values are capped at one outer retry.
 Native auxiliary retries/fallbacks still run inside each child, not beside the
-budget. There is no new configuration key and no guarantee of only two HTTP
+budget. There is no guarantee of only two HTTP
 requests (the native router owns its internal recovery).
 
 The child watchdog includes native routing, queueing, retries and response parsing.
-Its SDK timeout is shorter than its watchdog, which in turn leaves up to two
-seconds inside the parent subprocess timeout for startup/reporting. A watchdog
-expiration exits the dedicated child after reporting `aux_timeout`; only a child
-that cannot report is classified `child_timeout`. Route `unknown` means routing
+Its transport timeout and watchdog enforce the SAME absolute monotonic deadline;
+there is no startup reserve or fractional allocation. Parent or child deadline
+expiration reports `aux_timeout`. Route `unknown` means routing
 had not been observed, not evidence of provider latency. OS process startup/reap
 and SQLite lock latency are not hard-real-time; no new attempt gets a fresh total
 budget. The child uses the native served-profile environment factory rather than
@@ -123,9 +122,7 @@ Defaults under `plugins.entries.completion-gate.settings`:
 |---|---|
 | enabled | false |
 | max_blocks | 2 |
-| check_timeout | 10 seconds per child |
-| extract_timeout | 10 seconds |
-| total_timeout | 20 seconds for extraction/checking |
+| check_timeout_seconds | 60 seconds for the entire check |
 | max_claims | 20 |
 | max_answer_chars | 32000 |
 | db_path | default Hermes root / state/completion-gate/gate.db |
@@ -138,9 +135,18 @@ Defaults under `plugins.entries.completion-gate.settings`:
 | kanban_db_path | empty (required before receipt enablement) |
 
 The estate default resolves to `/Users/claudia/hermes/home/state/completion-gate/gate.db`.
-Keep `plugins.hook_callback_timeout` at its native 30-second default (or greater
-than the configured evidence budget); timeout abandons the callback fail-open.
-SQLite has a one-second lock timeout. Native hook timeout also bounds routing.
+Hermes should use `plugins.hook_callback_timeout: 65` at release: five seconds
+of framework grace for process reaping and sanitized audit persistence, NOT
+additional model or verification time. The callback clock starts on entry,
+before config/identity lookup; extraction, transport, verification, event scans
+and work-phase SQLite waits share that deadline. SQL execution is interrupted
+at expiry; SQLite busy waits are refreshed from remaining time per statement.
+Diagnostic persistence retains the existing one-second SQLite busy timeout.
+If storage is unavailable, delivery remains fail-open and logs audit unavailable.
+No implementation can guarantee persistence on unavailable storage or timely
+return from an uninterruptible OS filesystem/process operation.
+Legacy extract_timeout, total_timeout and check_timeout are not read by the
+adapter; check_timeout_seconds is the only clock setting (contract-tested).
 
 A block is reserved atomically in append-only SQLite. Counters are scoped by
 profile and `HERMES_KANBAN_TASK`, falling back to session ID (then task ID), so
@@ -174,12 +180,30 @@ neither spawns an owner nor touches legacy pending-message files. Reasons are
 deduplicated durably; unavailable sends are not automatically retried. Owner
 must inspect these statuses and maintain live generalist/gurney inbound owners.
 
+Native owner discovery, receipt reads and admission execute in a dedicated child
+under the SAME absolute callback deadline. The parent kills and reaps on expiry;
+on POSIX a child alarm also exits at that absolute deadline, including while
+blocked on native active-session/mailbox locks. No detached callback worker can
+admit a stale message after return. No credentials are inherited by this child.
+The native owner/delivery APIs and at-most-once receipt format are unchanged.
+
+Before escalation I/O, an append-only `escalation_pending` row reserves the reason
+and stable event_id without counting a completed evaluation or duplicating claim
+coverage. Success/non-timeout failure then appends the ordinary `fail_open` plus
+receipt status; expiry instead appends exactly one `gate_error/aux_timeout`.
+Pending reservations retain existing dedup behavior even if a child dies; they
+never grant another block/exit. No SQL lock is held across escalation I/O.
+An admission committed before expiry is not revoked if a later receipt/audit
+step times out. This preserves native at-most-once semantics; it is not an
+atomic transaction spanning the mailbox and gate DB.
+
 Gate-authored inbound messages are exempt only when they match a durable event
 and its recipient exactly. Arbitrary magic prefixes do not disable the gate.
 
 The CLI is registered through `ctx.register_cli_command`:
 
     hermes completion-gate metrics
+    hermes completion-gate metrics --since 1789800000 --until 1789886400
     hermes completion-gate advice --profile generalist --task TASK_ID --marker advised
     hermes completion-gate advice --profile generalist --task TASK_ID --marker tried
 
@@ -187,6 +211,15 @@ Gurney/Hermes explicitly record advice then its attempted application. A further
 false result emits `advice_failed_again` to Gurney. Only Gurney's owner-managed
 monitoring may escalate that case to Lars; this plugin never sends to Lars.
 Normal reporting is aggregate counts, per-profile counts and unverified rate.
+`evaluated_turns` counts deliver, block, fail_open, reentrant_pass and gate_error;
+`gate_error_rate` uses that denominator. `action_counts` reports every audit action,
+including advice and escalation bookkeeping excluded from the denominator.
+Reentrant passes are counted gate decisions, not independently verified answers.
+Metrics use the half-open event-created interval [since, until). Bounds accept
+unix seconds or ISO-8601 (naive timestamps use local time; explicit offsets are
+supported). JSON echoes resolved bounds in `window`; null bounds mean unbounded.
+No flags means lifetime, not post-release acceptance. Claim coverage and all
+per-profile aggregates use the same selected window.
 The separate nightly recommendation cron is Hermes's deployment responsibility.
 
 ## Deployment (Hermes only, after Gurney acceptance)

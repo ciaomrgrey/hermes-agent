@@ -11,8 +11,7 @@ from .diagnostics import failure
 from . import receipts
 
 logger = logging.getLogger(__name__)
-DEFAULTS = {"enabled": False, "max_blocks": 2, "check_timeout": 10,
-            "extract_timeout": 10, "total_timeout": 20, "max_claims": 20,
+DEFAULTS = {"enabled": False, "max_blocks": 2, "check_timeout_seconds": 60, "max_claims": 20,
             "max_answer_chars": 32000, "chat_receipts_enabled": False,
             "inaction_enabled": False, "chat_source_channel": "C0BTEFMAAJX",
             "telegram_destination": "", "telegram_session_id": "",
@@ -25,6 +24,9 @@ def register(ctx):
     def before_turn_end(final_response, session_id="", task_id="", turn_id="",
                         already_blocked=False, can_continue=True, user_message=None,
                         messages=None, source_identity=None, **kwargs):
+        # One monotonic clock from hook entry covers assessment, extraction,
+        # checks, audit and escalation. check_timeout_seconds is its only knob.
+        started = time.monotonic()
         from hermes_constants import get_hermes_home, get_default_hermes_root, profile_name_for_home
         try:
             # Never cache the switch: CLI/gateway live config readback must take effect next call.
@@ -36,58 +38,71 @@ def register(ctx):
             chain = os.environ.get("HERMES_KANBAN_TASK") or session_id or task_id
             if not chain or not turn_id:
                 raise ValueError("missing_stable_identity")
-            deadline = time.monotonic() + float(settings["total_timeout"])
-            assessments = []
-            if settings["chat_receipts_enabled"] is True:
-                assessment = receipts.assess_chat_receipt(
-                    profile=profile, source=source_identity or {}, user_message=user_message,
-                    final_response=final_response, messages=messages or (), session_id=session_id,
-                    settings=settings,
-                )
-                if assessment:
-                    identity = assessment["source_identity"]
-                    prior = Gate(settings, extract=lambda _: []).receipt_binding(identity)
-                    if receipts.binding_current(
-                            settings, prior, source_identity=identity, session_id=session_id):
-                        assessment = {**assessment, "verdict": "reproduced", "mismatch": "", "receipt": prior}
-                    assessments.append(({
-                        "claim": assessment.get("repair", "Chat decision Telegram receipt"),
-                        "artefact_kind": "chat_telegram_receipt", "artefact_ref": identity,
-                    }, assessment))
-            if settings["inaction_enabled"] is True:
-                assessment = receipts.assess_inaction(
-                    final_response, messages or (), user_message=user_message or "")
-                if assessment:
-                    assessments.append(({
-                        "claim": assessment["repair"], "artefact_kind": "inaction_followthrough",
-                        "artefact_ref": {"turn_id": turn_id},
-                    }, assessment))
-            assessment_by_kind = {claim["artefact_kind"]: assessment for claim, assessment in assessments}
+            deadline = started + float(settings["check_timeout_seconds"])
+            assessment_by_kind = {}
+            def assess():
+                """Receipt/inaction assessments, run inside Gate.evaluate on the same clock."""
+                assessments = []
+                if settings["chat_receipts_enabled"] is True:
+                    remaining()
+                    assessment = receipts.assess_chat_receipt(
+                        profile=profile, source=source_identity or {}, user_message=user_message,
+                        final_response=final_response, messages=messages or (), session_id=session_id,
+                        settings=settings,
+                    )
+                    remaining()
+                    if assessment:
+                        identity = assessment["source_identity"]
+                        prior = Gate(settings, extract=lambda _: []).receipt_binding(identity)
+                        if receipts.binding_current(
+                                settings, prior, source_identity=identity, session_id=session_id):
+                            assessment = {**assessment, "verdict": "reproduced", "mismatch": "", "receipt": prior}
+                        remaining()
+                        assessments.append(({
+                            "claim": assessment.get("repair", "Chat decision Telegram receipt"),
+                            "artefact_kind": "chat_telegram_receipt", "artefact_ref": identity,
+                        }, assessment))
+                if settings["inaction_enabled"] is True:
+                    remaining()
+                    assessment = receipts.assess_inaction(
+                        final_response, messages or (), user_message=user_message or "")
+                    remaining()
+                    if assessment:
+                        assessments.append(({
+                            "claim": assessment["repair"], "artefact_kind": "inaction_followthrough",
+                            "artefact_ref": {"turn_id": turn_id},
+                        }, assessment))
+                assessment_by_kind.clear()
+                assessment_by_kind.update({claim["artefact_kind"]: a for claim, a in assessments})
+                return [claim for claim, _ in assessments]
             def extract(answer):
                 if len(answer) > int(settings["max_answer_chars"]):
                     raise ValueError("answer_limit")
-                claims = bounded_extract(answer, timeout=min(float(settings["extract_timeout"]), remaining()),
-                                         max_claims=int(settings["max_claims"]), deadline=deadline)
-                return claims + [claim for claim, _ in assessments]
+                internal = assess()
+                remaining()
+                claims = bounded_extract(answer, max_claims=int(settings["max_claims"]), deadline=deadline)
+                remaining()
+                return claims + internal
             def remaining():
-                return max(0.001, deadline - time.monotonic())
+                value = deadline - time.monotonic()
+                if value <= 0:
+                    raise TimeoutError()
+                return value
             def check(claim):
                 if claim["artefact_kind"] in assessment_by_kind:
                     assessment = assessment_by_kind[claim["artefact_kind"]]
                     evidence = {k: assessment[k] for k in ("subtype", "source_identity", "receipt") if k in assessment}
                     return assessment["verdict"], assessment["mismatch"], evidence
-                if time.monotonic() >= deadline:
-                    return "unverified", "gate_deadline"
-                return bounded_check(claim, timeout=min(float(settings["check_timeout"]), remaining()))
-            gate = Gate(settings, extract=extract, check=check, escalate=send)
+                remaining()
+                result = bounded_check(claim, deadline=deadline)
+                remaining()
+                return result
+            gate = Gate(settings, extract=extract, check=check,
+                        escalate=lambda event: send(event, deadline=deadline))
             # Suppress only a gate-authored, durably recorded inbound. A magic prefix is not enough.
-            if isinstance(user_message, str):
-                for event in gate.events():
-                    esc = event["escalation"]
-                    if esc and esc["target"] == profile and message({**esc, "event_id": event["id"]}) == user_message:
-                        return None
             return gate.evaluate(final_response, profile=profile, task_id=chain, turn_id=turn_id,
-                                 already_blocked=already_blocked, can_continue=can_continue)
+                                 already_blocked=already_blocked, can_continue=can_continue,
+                                 deadline=deadline, user_message=user_message)
         except Exception as exc:
             logger.warning("Completion gate adapter failed open %s", failure(exc))
             return None
