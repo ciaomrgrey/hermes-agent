@@ -171,6 +171,81 @@ def _is_managed_scratch_path(p: Path) -> bool:
     return _managed_scratch_path_info(p)[0]
 
 
+def _is_git_common_dir(d: Path) -> bool:
+    return (d / "HEAD").is_file() and (d / "objects").is_dir() and (d / "worktrees").is_dir()
+
+
+def _external_worktree_dependents(wp: Path) -> list[Path]:
+    """Linked git worktrees OUTSIDE *wp* whose object store lives inside it.
+
+    A worker may clone into one card's scratch dir and ``git worktree add``
+    another card's checkout elsewhere; rmtree'ing the first dir would delete
+    the only copy of the second card's commits and branches. Scans *wp*
+    without following symlinks (a link to an external repo neither pins *wp*
+    nor is reached by cleanup) for git common dirs and reads each
+    ``worktrees/<id>`` admin entry the way ``git worktree prune`` does: an
+    entry is live while its recorded ``gitdir`` still exists, or while it is
+    ``locked`` (git's marker for worktrees on offline/removable storage).
+    Worktrees inside *wp* are removed with it and never pin it. Raises
+    ``OSError`` when *wp* cannot be scanned; callers must then preserve.
+    """
+    root = wp.resolve(strict=True)
+    dependents: list[Path] = []
+
+    def _raise(err: OSError) -> None:
+        raise err
+
+    for dirpath, dirnames, _files in os.walk(root, onerror=_raise, followlinks=False):
+        here = Path(dirpath)
+        common_dirs = [here] if _is_git_common_dir(here) else []
+        for name in list(dirnames):
+            child = here / name
+            if not child.is_symlink() and _is_git_common_dir(child):
+                common_dirs.append(child)
+                dirnames.remove(name)  # never walk an object store
+        for common in common_dirs:
+            for admin in (common / "worktrees").iterdir():
+                if admin.is_symlink() or not admin.is_dir():
+                    continue
+                locked = (admin / "locked").exists()
+                target: Optional[Path] = None
+                with contextlib.suppress(OSError, UnicodeDecodeError):
+                    raw = (admin / "gitdir").read_text(encoding="utf-8").strip()
+                    if raw:
+                        # worktree.useRelativePaths stores it relative to admin.
+                        target = (admin / raw) if not Path(raw).is_absolute() else Path(raw)
+                if target is None:
+                    if locked:
+                        dependents.append(admin)
+                    continue
+                if not locked and not target.exists():
+                    continue  # stale entry — git would prune it
+                worktree = target.parent.resolve(strict=False)
+                if worktree != root and not worktree.is_relative_to(root):
+                    dependents.append(worktree)
+    return dependents
+
+
+def _scratch_removal_blocked(task_id: str, wp: Path) -> bool:
+    """True (and logged) when *wp* must be kept for an external worktree."""
+    try:
+        dependents = _external_worktree_dependents(wp)
+    except OSError as exc:
+        _kb._log.warning(
+            "Preserving scratch workspace for task %s: cannot scan %s for "
+            "shared git object stores: %s", task_id, wp, exc,
+        )
+        return True
+    if not dependents:
+        return False
+    _kb._log.warning(
+        "Preserving scratch workspace for task %s: %s holds the git object "
+        "store of linked worktree(s) outside it: %s",
+        task_id, wp, ", ".join(str(d) for d in dependents),
+    )
+    return True
+
+
 def _cleanup_workspace(conn: sqlite3.Connection, task_id: str) -> None:
     """Remove a task's scratch workspace dir and kill its stale tmux session.
     Called from :func:`complete_task` after the transaction commits; best-effort
@@ -211,17 +286,17 @@ def _cleanup_workspace(conn: sqlite3.Connection, task_id: str) -> None:
             # ``workspace_kind='scratch'`` with a user path pointing at a real
             # source tree; without this, completion would rmtree the user's data.
             # See #28818.
-            if _is_managed_scratch_path(wp):
-                release_lsp_clients(str(wp))
-                shutil.rmtree(wp, ignore_errors=True)
-                _kb._log.debug("Removed scratch workspace: %s", wp)
-            else:
+            if not _is_managed_scratch_path(wp):
                 _kb._log.warning(
                     "Refusing to remove out-of-scratch workspace for task %s: %s "
                     "(workspace_kind='scratch' but path is outside any "
                     "kanban-managed workspaces root)",
                     task_id, wp,
                 )
+            elif not _scratch_removal_blocked(task_id, wp):
+                release_lsp_clients(str(wp))
+                shutil.rmtree(wp, ignore_errors=True)
+                _kb._log.debug("Removed scratch workspace: %s", wp)
         # Kill the owning worker's tmux session if it is now dead, then let any
         # parent whose children are all done run its deferred cleanup.
         _cleanup_worker_tmux(conn, task_id)
@@ -330,7 +405,11 @@ def _try_cleanup_parent_workspaces(conn: sqlite3.Connection, task_id: str) -> No
                 _cleanup_worktree_workspace(parent_id, row["workspace_path"], row["branch_name"])
                 continue
             wp = Path(row["workspace_path"])
-            if wp.is_dir() and _is_managed_scratch_path(wp):
+            if (
+                wp.is_dir()
+                and _is_managed_scratch_path(wp)
+                and not _scratch_removal_blocked(parent_id, wp)
+            ):
                 release_lsp_clients(str(wp))
                 shutil.rmtree(wp, ignore_errors=True)
                 _kb._log.debug("Deferred cleanup: removed parent %s scratch workspace: %s", parent_id, wp)

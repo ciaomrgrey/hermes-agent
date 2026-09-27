@@ -335,6 +335,9 @@ def _cmd_gc(args: argparse.Namespace) -> int:
         # completion, and rmtree refuses a symlink (so it must not be counted).
         if not path.is_dir() or path.is_symlink() or not kbw._is_managed_scratch_path(path):
             continue
+        # Kept (not counted) while it holds another worktree's object store.
+        if kbw._scratch_removal_blocked(row["id"], path):
+            continue
         shutil.rmtree(path, ignore_errors=True)
         if not path.exists():
             removed_ws += 1
