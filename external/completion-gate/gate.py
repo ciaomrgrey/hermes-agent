@@ -20,23 +20,52 @@ _evaluating = ContextVar("completion_gate_evaluating", default=False)
 _deadline = ContextVar("completion_gate_deadline", default=None)
 
 
+_BUSY_POLL_SECONDS = 0.005
+
+
+def _is_busy(exc):
+    text = str(exc).lower()
+    return "locked" in text or "busy" in text
+
+
 class DeadlineConnection(sqlite3.Connection):
-    """Refresh SQLite's busy wait from the same clock before each statement."""
+    """Bound every lock wait by the single hook clock.
+
+    SQLite's own busy handler overshoots short waits several-fold, so inside an
+    evaluation the connection is opened with busy_timeout=0 and polls here
+    instead. Clock expiry raises ``TimeoutError``; ``statement_budget`` (if set)
+    additionally caps one statement's wait and then re-raises the busy error.
+    """
+    statement_budget = None
+
     def _remaining(self):
         deadline = _deadline.get()
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError()
-            super().execute(f'PRAGMA busy_timeout={math.ceil(remaining * 1000)}')
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError()
+
+    def _bounded(self, operation, *args, **kwargs):
+        deadline = _deadline.get()
+        if deadline is None:
+            return operation(self, *args, **kwargs)
+        budget_end = None if self.statement_budget is None else time.monotonic() + self.statement_budget
+        while True:
+            self._remaining()
+            try:
+                return operation(self, *args, **kwargs)
+            except sqlite3.OperationalError as exc:
+                now = time.monotonic()
+                if now >= deadline:
+                    raise TimeoutError() from exc
+                if not _is_busy(exc) or (budget_end is not None and now >= budget_end):
+                    raise
+                time.sleep(min(_BUSY_POLL_SECONDS, deadline - now,
+                               *(() if budget_end is None else (budget_end - now,))))
 
     def execute(self, *args, **kwargs):
-        self._remaining()
-        return super().execute(*args, **kwargs)
+        return self._bounded(sqlite3.Connection.execute, *args, **kwargs)
 
     def commit(self):
-        self._remaining()
-        return super().commit()
+        return self._bounded(sqlite3.Connection.commit)
 
 
 def digest(value):
@@ -68,7 +97,9 @@ class Gate:
         remaining = 1 if deadline is None else deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError()
-        db = sqlite3.connect(self.path, timeout=remaining, factory=DeadlineConnection)
+        # Inside an evaluation DeadlineConnection owns the wait (busy_timeout=0).
+        db = sqlite3.connect(self.path, timeout=1 if deadline is None else 0,
+                             factory=DeadlineConnection)
         if deadline is not None:
             db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
         try:
