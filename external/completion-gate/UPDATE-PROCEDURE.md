@@ -105,7 +105,7 @@ bounded JSON reasons and native delivery status. Reasons include:
   60 seconds, lacks nearby gate activity for the SAME profile. A prior cursor is
   retained across checker restarts. First run looks back ten minutes; subsequent
   checks advance only healthy intervals, in batches of at most 1000 finals. Gate
-  evidence must be between total_timeout+60 seconds before the final and two
+  evidence must be between check_timeout_seconds+60 seconds before the final and two
   seconds after it. Another profile's DB activity cannot mask silence. No turns
   means no idle-clock alarm. Old unresolved missing events remain visible.
 - `health_check_failed`: malformed/unreadable config, schema/DB or checker error.
