@@ -36,6 +36,16 @@ All reference fields must be stated in the answer, never guessed. Ambiguous, mis
 negated assertions or stronger claims than the check supports => kind unknown. Return [] only
 when there are no factual completion claims. No markdown, explanations or additional fields."""
 
+# Longer lists are rejected as invalid_claim_list, so the model must know the cap.
+CAP_RULE = """
+Return at most {max_claims} objects. To fit, merge closely related claims (same artefact or
+same outcome) into one object. Never drop a claim silently: if claims still exceed the cap,
+fold every remaining claim into a single unknown claim whose text lists them, within the cap."""
+
+
+def system_prompt(max_claims):
+    return PROMPT + CAP_RULE.format(max_claims=int(max_claims))
+
 
 def parse_claims(raw, max_claims=20):
     def unique_object(pairs):
@@ -67,7 +77,7 @@ def extract(answer, timeout=10, max_claims=20, *, route_info=None, deadline=None
         if timeout <= 0:
             raise TimeoutError()
     response = call_llm(task="completion_gate", messages=[
-        {"role": "system", "content": PROMPT}, {"role": "user", "content": answer}],
+        {"role": "system", "content": system_prompt(max_claims)}, {"role": "user", "content": answer}],
         max_tokens=2048, temperature=0, timeout=timeout, route_info=route_info)
     if (response.choices[0].message.content is None
             and getattr(response.choices[0], 'finish_reason', None) in {'content_filter', 'refusal'}):
