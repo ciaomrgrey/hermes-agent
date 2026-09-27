@@ -1222,7 +1222,7 @@ class GatewayBusySessionMixin:
                 reply_to_author_name=event.reply_to_author_name,
                 reply_to_is_own_message=event.reply_to_is_own_message, auto_skill=event.auto_skill,
                 channel_prompt=event.channel_prompt, channel_context=event.channel_context,
-                internal=event.internal, timestamp=event.timestamp,
+                internal=event.internal, metadata=dict(event.metadata or {}), timestamp=event.timestamp,
                 edit_revision=event.edit_revision,  # an edited /queue is its own input (admission id)
             )
             if await self._queue_command_turn(quick_key, event, queued, adapter, t("gateway.queue.queued")):
@@ -1248,6 +1248,7 @@ class GatewayBusySessionMixin:
                 text=steer_text, message_type=MessageType.TEXT, source=event.source,
                 message_id=event.message_id, channel_prompt=event.channel_prompt,
                 channel_context=event.channel_context, edit_revision=event.edit_revision,
+                metadata=dict(event.metadata or {}),
             ), adapter, reply):
                 return None  # its commit sends the reply
             return reply
