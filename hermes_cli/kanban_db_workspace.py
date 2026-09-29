@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import stat
 import subprocess
 import time
 import unicodedata
@@ -175,6 +176,52 @@ def _is_git_common_dir(d: Path) -> bool:
     return (d / "HEAD").is_file() and (d / "objects").is_dir() and (d / "worktrees").is_dir()
 
 
+def _lstat_or_none(p: Path) -> Optional[os.stat_result]:
+    """``lstat`` that answers "absent" only for a verified absence.
+
+    ``Path.exists()``/``is_dir()`` swallow every ``OSError`` on Python 3.13+,
+    which would turn a permission-denied probe into "not there" and let
+    cleanup delete a store it could not inspect. Here only ENOENT/ENOTDIR
+    mean absent; any other error propagates so the caller preserves.
+    """
+    try:
+        return os.lstat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+
+
+def _target_exists(p: Path) -> bool:
+    """``p`` exists (following symlinks); non-absence errors propagate."""
+    try:
+        os.stat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
+
+
+def _worktree_backlink(admin: Path) -> Optional[Path]:
+    """The checkout path recorded in ``<common>/worktrees/<id>/gitdir``.
+
+    ``None`` only when the file is verifiably absent. Anything that prevents
+    reading it (permissions, bad encoding, empty/corrupt content) raises
+    ``OSError``: an unknown backlink is not proof that no worktree uses the
+    store, so the caller must preserve.
+    """
+    try:
+        raw = (admin / "gitdir").read_bytes()
+    except FileNotFoundError:
+        return None
+    try:
+        text = raw.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise OSError(f"undecodable worktree backlink {admin / 'gitdir'}: {exc}") from exc
+    if not text or "\0" in text:
+        raise OSError(f"invalid worktree backlink {admin / 'gitdir'}")
+    # worktree.useRelativePaths stores it relative to the admin dir.
+    path = Path(text)
+    return path if path.is_absolute() else admin / path
+
+
 def _external_worktree_dependents(wp: Path) -> list[Path]:
     """Linked git worktrees OUTSIDE *wp* whose object store lives inside it.
 
@@ -187,7 +234,9 @@ def _external_worktree_dependents(wp: Path) -> list[Path]:
     entry is live while its recorded ``gitdir`` still exists, or while it is
     ``locked`` (git's marker for worktrees on offline/removable storage).
     Worktrees inside *wp* are removed with it and never pin it. Raises
-    ``OSError`` when *wp* cannot be scanned; callers must then preserve.
+    ``OSError`` when *wp* or any worktree admin entry cannot be fully read
+    (permissions, undecodable/corrupt backlink); callers must then preserve.
+    Only a verifiably absent backlink or checkout counts as stale.
     """
     root = wp.resolve(strict=True)
     dependents: list[Path] = []
@@ -205,20 +254,17 @@ def _external_worktree_dependents(wp: Path) -> list[Path]:
                 dirnames.remove(name)  # never walk an object store
         for common in common_dirs:
             for admin in (common / "worktrees").iterdir():
-                if admin.is_symlink() or not admin.is_dir():
-                    continue
-                locked = (admin / "locked").exists()
-                target: Optional[Path] = None
-                with contextlib.suppress(OSError, UnicodeDecodeError):
-                    raw = (admin / "gitdir").read_text(encoding="utf-8").strip()
-                    if raw:
-                        # worktree.useRelativePaths stores it relative to admin.
-                        target = (admin / raw) if not Path(raw).is_absolute() else Path(raw)
+                st = _lstat_or_none(admin)
+                if st is None or not stat.S_ISDIR(st.st_mode):
+                    continue  # symlinks and stray files are not admin entries
+                locked = _lstat_or_none(admin / "locked") is not None
+                target = _worktree_backlink(admin)
                 if target is None:
+                    # No gitdir file at all: git prunes the entry unless locked.
                     if locked:
                         dependents.append(admin)
                     continue
-                if not locked and not target.exists():
+                if not locked and not _target_exists(target):
                     continue  # stale entry — git would prune it
                 worktree = target.parent.resolve(strict=False)
                 if worktree != root and not worktree.is_relative_to(root):

@@ -11,6 +11,8 @@ outside worktree depends on it, normal cleanup applies.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import os
 import subprocess
 from pathlib import Path
 
@@ -149,6 +151,85 @@ def test_deferred_parent_cleanup_preserves_shared_store(kanban_home):
         assert kb.complete_task(conn, child, result="child done")
     assert (a_ws / "repo" / ".git").is_dir()
     assert _git("-C", str(b_ws / "repo"), "cat-file", "-t", sha) == "commit"
+
+
+def _admin_entry(a_ws: Path) -> Path:
+    (entry,) = (a_ws / "repo" / ".git" / "worktrees").iterdir()
+    return entry
+
+
+@pytest.fixture
+def restore_modes():
+    """chmod targets back to readable so tmp_path teardown can delete them."""
+    touched: list[Path] = []
+    yield touched
+    for p in touched:
+        with contextlib.suppress(OSError):
+            p.chmod(0o755 if p.is_dir() else 0o644)
+
+
+def _deny(p: Path, touched: list[Path]) -> None:
+    touched.append(p)
+    p.chmod(0)
+    try:
+        with open(p, "rb") if p.is_file() else os.scandir(p):
+            pass
+    except PermissionError:
+        return
+    pytest.skip("permission bits not enforced (running as root?)")
+
+
+# Reviewer counterexample (Gurney, round 1): incomplete inspection of a
+# worktree backlink must preserve the store, never read as "no dependency".
+@pytest.mark.parametrize("deny", ["gitdir-file", "admin-dir", "worktrees-dir"])
+def test_unreadable_worktree_metadata_preserves_store(kanban_home, restore_modes, deny):
+    with kbc.connect() as conn:
+        a, a_ws, b, b_ws, sha = _cross_card(conn)
+        admin = _admin_entry(a_ws)
+        target = {
+            "gitdir-file": admin / "gitdir",
+            "admin-dir": admin,
+            "worktrees-dir": admin.parent,
+        }[deny]
+        _deny(target, restore_modes)
+        assert kb.complete_task(conn, a, result="A done")
+        assert kb.get_task(conn, b).status != "done"
+    target.chmod(0o755 if target.is_dir() else 0o644)
+    assert (a_ws / "repo" / ".git").is_dir(), "shared object store was deleted"
+    assert _git("-C", str(b_ws / "repo"), "cat-file", "-t", sha) == "commit"
+
+
+def test_undecodable_gitdir_preserves_store(kanban_home):
+    with kbc.connect() as conn:
+        a, a_ws, b, b_ws, sha = _cross_card(conn)
+        (_admin_entry(a_ws) / "gitdir").write_bytes(b"\xff\xfe\x00bad\n")
+        assert kb.complete_task(conn, a, result="A done")
+    assert (a_ws / "repo" / ".git").is_dir()
+    assert _git("-C", str(b_ws / "repo"), "cat-file", "-t", sha) == "commit"
+
+
+def test_unreadable_gitdir_preserves_store_in_gc(kanban_home, restore_modes, capsys):
+    args = argparse.Namespace(event_retention_days=30, log_retention_days=30)
+    with kbc.connect() as conn:
+        a, a_ws, b, b_ws, sha = _cross_card(conn)
+        with kb.write_txn(conn):
+            conn.execute("UPDATE tasks SET status='archived' WHERE id=?", (a,))
+        gitdir = _admin_entry(a_ws) / "gitdir"
+        _deny(gitdir, restore_modes)
+    assert kanban_ops._cmd_gc(args) == 0
+    assert "GC complete: 0 workspace(s)" in capsys.readouterr().out
+    gitdir.chmod(0o644)
+    assert _git("-C", str(b_ws / "repo"), "cat-file", "-t", sha) == "commit"
+
+
+def test_admin_entry_without_gitdir_file_is_stale(kanban_home):
+    """Control: git prunes an unlocked entry whose gitdir file is absent, so a
+    genuinely missing backlink (not an unreadable one) does not pin the store."""
+    with kbc.connect() as conn:
+        a, a_ws, b, b_ws, _ = _cross_card(conn)
+        (_admin_entry(a_ws) / "gitdir").unlink()
+        assert kb.complete_task(conn, a, result="A done")
+    assert not a_ws.exists()
 
 
 def test_gc_preserves_archived_store_until_dependent_worktree_gone(kanban_home, capsys):
