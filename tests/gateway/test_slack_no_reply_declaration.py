@@ -22,7 +22,9 @@ from tests.gateway.test_slack_ignore_other_user_mentions import (  # noqa: F401 
 ARCHIVE = (
     "*SWITCHBOARD-ARCHIVE-20260930 — CHUNK 1/3*\n\n"
     "Archive backup of Chat's agent-switchboard memory file. No reply expected. No action required.\n\n"
-    "*name: agent-switchboard* — does anything here need a question mark? CONSULT vs INSTRUCT."
+    "*name: agent-switchboard* — CONSULT vs INSTRUCT.\n"
+    "> Rule quoted from the file: does anything here need a question mark?\n"
+    "```\nTrigger: \"what is open?\" -> ask the agents\n```"
 )
 WRAPUP = "*SESSION-WRAPUP-20260928 — Saxzi GTM (archive, no action required)*\n\nAgent spoken to: Sophia."
 QUESTION = "*GB-JOHN-20260930-15* Is the gateway on the pinned commit? Please confirm."
@@ -85,6 +87,14 @@ MENTIONS = [
     "Archive backup. No reply expected.\n\nOn second thought, a reply is needed today.",
     "Archive backup. No reply expected.\n\nWhich commit is pinned?",  # closes on a question
     "No reply expected.\n\nThe pinned commit is 82fb4c03e0.",  # no archive/FYI genre: not admitted
+    # Round 3: a block quote hides only its own line(s); own prose after it still counts. And the
+    # sender's own prose must read as a record: any own question or direct address is a request.
+    "Archive backup. No reply expected.\n\n> Historical note.\n\nActually, please confirm the pinned commit.",
+    "Archive backup. No reply expected.\n\n&gt; Historical note.\n\nActually, please confirm the pinned commit.",
+    "Archive backup. No reply expected.\n\n> Historical note.\nSend the pinned commit to me.",
+    "Archive backup. No reply expected.\n\nWhich commit is pinned?\nThanks.",
+    "Archive backup. No reply expected.\n\nWhich commit is pinned? Thanks, much appreciated.",
+    "Archive backup. No reply expected.\n\nWe still need the pinned commit hash from you today.",
 ]
 
 
@@ -93,7 +103,9 @@ MENTIONS = [
                                                 "unclosed-fence", "withdrawn-inline", "withdrawn-later",
                                                 "inline-code", "actually-please-later", "correction-required-later",
                                                 "can-you-far-below", "second-thought-needed", "closing-question",
-                                                "no-genre"])
+                                                "no-genre", "request-after-blockquote",
+                                                "request-after-escaped-blockquote", "address-after-blockquote",
+                                                "question-with-signoff", "question-mid-line", "direct-address"])
 async def test_quoted_or_withdrawn_declaration_keeps_the_notice(adapter, monkeypatch, tmp_path, text):
     msg_event = await _admit(adapter, text, "1790787600.000001")
     assert msg_event.reply_expected is None
@@ -112,9 +124,11 @@ async def test_declaration_outranks_a_mention_but_not_a_command(adapter):
 @pytest.mark.parametrize("text, declared", [
     (ARCHIVE, True),
     (WRAPUP, True),
-    # An archive body may hold questions and "no ack" rules of its own; only the closing line and
-    # current-request phrasing decide.
-    ("Archive backup. No reply expected.\n\n• Rule: ask 'why?' first? Always.\n• ONLY REAL ANSWERS. No acks.", True),
+    # An archive body may carry archived questions and "no ack" rules, provided the questions are quoted
+    # or fenced (someone else's words); an unquoted own question is indistinguishable from a current ask.
+    ("Archive backup. No reply expected.\n\n• Rule: ask 'why?' first. Always.\n• ONLY REAL ANSWERS. No acks.", True),
+    ("Archive backup. No reply expected.\n\n> Is this still open?\n&gt; Who owns it?\n\nRouting table follows.", True),
+    ("Archive backup. No reply expected.\n\n• Rule: ask why first? Always.", False),
     ("Archive backup · No action needed, nothing expected back.", True),
     ("FYI: deploy finished. No response needed.", True),
     ("NO REPLY REQUIRED — archive only", True),

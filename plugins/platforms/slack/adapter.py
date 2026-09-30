@@ -98,7 +98,10 @@ _MODEL_PICKER_ACTION_IDS = (
 #   "actually", "correction", "a response is required", ...) takes it back. Real archive posts carry
 #   none, so a message that does is treated as a request and keeps the fallback;
 # - admission is bounded to the genres this exists for: the header must name itself an archive, backup,
-#   wrap-up, digest or FYI, and the message must not close on a question.
+#   wrap-up, digest or FYI;
+# - the sender's own prose must read as an impersonal record, not an exchange: it asks nothing (no "?"
+#   anywhere outside quotes/code) and addresses nobody (no I/me/we/you). Every real archive post on the
+#   estate's bridges (10 of 10) meets this; a question or direct address anywhere is treated as a request.
 _NO_REPLY_HEADER_CHARS = 300
 _NO_REPLY_GENRE = re.compile(r"\b(?:archiv\w*|backup|back\s+up|wrap-?\s?up|digest|fyi|for\s+the\s+record)\b",
                              re.IGNORECASE)
@@ -111,7 +114,7 @@ _NO_REPLY_DECLARATION = re.compile(
 _NO_REPLY_FOREIGN_TEXT = re.compile(
     r"```.*?(?:```|\Z)"                          # fenced code, closed or running to the end
     r"|`[^`\n]*`"                                # inline code
-    r"|^[ \t]*(?:>|&gt;).*$"                     # block quote line (Slack sends '>' as '&gt;')
+    r"|^[ \t]*(?:>|&gt;)[^\n]*$"                 # one block quote line (Slack sends '>' as '&gt;')
     r"|\"[^\"\n]*\"|“[^”\n]*”|‘[^’\n]*’"         # double / curly quotes
     r"|(?<![\w])'[^'\n]*'(?![\w])",              # single quotes, not apostrophes
     re.DOTALL | re.MULTILINE)
@@ -128,6 +131,9 @@ _NO_REPLY_CURRENT_REQUEST = re.compile(
     r"|(?<!\bno\s)(?<!\bnot\s)\b(?:reply|response|answer|action|ack)\s+(?:is\s+)?(?:now\s+|still\s+)?"
     r"(?:required|needed|expected|requested|wanted))\b",
     re.IGNORECASE)
+_NO_REPLY_EXCHANGE = re.compile(
+    r"\b(?:i|i'm|i've|i'd|i'll|me|my|mine|we|we're|we've|we'd|we'll|us|our|ours|let's"
+    r"|you|you're|you've|you'd|you'll|your|yours)\b", re.IGNORECASE)
 _NO_REPLY_WITHDRAWAL = re.compile(
     r"\b(?:ignore|disregard|scratch|forget|cancel|withdraw|retract|rescind|revoke)\s+"
     r"(?:that|this|it|the\s+above|the\s+previous|the\s+earlier|what\s+i\s+said|my\s+(?:previous|earlier|last))\b"
@@ -140,11 +146,9 @@ def _slack_blank_foreign_text(text: str) -> str:
     return _NO_REPLY_FOREIGN_TEXT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
 
 
-def _slack_closes_on_question(own: str) -> bool:
-    """Is the sender's last line of own prose a question (the current ask, whatever the header said)?"""
-    lines = [line.strip(" \t*_~") for line in own.splitlines()]
-    last = next((line for line in reversed(lines) if line), "")
-    return last.endswith("?")
+def _slack_reads_as_exchange(own: str) -> bool:
+    """Does the sender's own prose ask something or address someone, rather than record?"""
+    return "?" in own or bool(_NO_REPLY_EXCHANGE.search(own))
 
 
 def slack_declares_no_reply_expected(text: str) -> bool:
@@ -164,7 +168,7 @@ def slack_declares_no_reply_expected(text: str) -> bool:
         # A current request anywhere in the sender's own prose outranks the declaration.
         if _NO_REPLY_CURRENT_REQUEST.search(own):
             return False
-        if not _NO_REPLY_GENRE.search(own, 0, window_end) or _slack_closes_on_question(own):
+        if not _NO_REPLY_GENRE.search(own, 0, window_end) or _slack_reads_as_exchange(own):
             return False
         start = own.rfind("\n\n", 0, match.start())
         end = own.find("\n\n", match.end())
