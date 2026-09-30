@@ -78,13 +78,22 @@ MENTIONS = [
     "Previous instruction: no reply expected. Ignore that; please confirm the pinned commit.",
     "No reply expected.\n\nActually, scratch that - I need the pinned commit hash.",
     "The header says `no action required`. Is that right",
+    # Round 2: a current request or correction in a later paragraph takes the declaration back.
+    "No reply expected.\n\nActually, please confirm the pinned commit.",
+    "No reply expected.\n\nCorrection: a response is required. What commit is pinned?",
+    "Archive backup. No reply expected.\n\n" + "entry " * 80 + "\n\nCan you check the pinned commit",
+    "Archive backup. No reply expected.\n\nOn second thought, a reply is needed today.",
+    "Archive backup. No reply expected.\n\nWhich commit is pinned?",  # closes on a question
+    "No reply expected.\n\nThe pinned commit is 82fb4c03e0.",  # no archive/FYI genre: not admitted
 ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", MENTIONS, ids=["blockquote", "slack-escaped-quote", "fenced-code",
                                                 "unclosed-fence", "withdrawn-inline", "withdrawn-later",
-                                                "inline-code"])
+                                                "inline-code", "actually-please-later", "correction-required-later",
+                                                "can-you-far-below", "second-thought-needed", "closing-question",
+                                                "no-genre"])
 async def test_quoted_or_withdrawn_declaration_keeps_the_notice(adapter, monkeypatch, tmp_path, text):
     msg_event = await _admit(adapter, text, "1790787600.000001")
     assert msg_event.reply_expected is None
@@ -103,6 +112,9 @@ async def test_declaration_outranks_a_mention_but_not_a_command(adapter):
 @pytest.mark.parametrize("text, declared", [
     (ARCHIVE, True),
     (WRAPUP, True),
+    # An archive body may hold questions and "no ack" rules of its own; only the closing line and
+    # current-request phrasing decide.
+    ("Archive backup. No reply expected.\n\n• Rule: ask 'why?' first? Always.\n• ONLY REAL ANSWERS. No acks.", True),
     ("Archive backup · No action needed, nothing expected back.", True),
     ("FYI: deploy finished. No response needed.", True),
     ("NO REPLY REQUIRED — archive only", True),

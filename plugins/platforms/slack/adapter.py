@@ -93,8 +93,15 @@ _MODEL_PICKER_ACTION_IDS = (
 # - code (fenced or inline), block quotes and quoted strings are someone else's words and never count;
 # - the paragraph holding it must not ask ("?") or request/withdraw ("please", "confirm", "ignore that",
 #   "previous", "template", ...), and no withdrawal ("ignore that", "scratch that") may precede it or
-#   follow within the next 300 chars.
+#   follow within the next 300 chars;
+# - anywhere in the sender's own prose, a current request or correction ("please", "confirm", "can you",
+#   "actually", "correction", "a response is required", ...) takes it back. Real archive posts carry
+#   none, so a message that does is treated as a request and keeps the fallback;
+# - admission is bounded to the genres this exists for: the header must name itself an archive, backup,
+#   wrap-up, digest or FYI, and the message must not close on a question.
 _NO_REPLY_HEADER_CHARS = 300
+_NO_REPLY_GENRE = re.compile(r"\b(?:archiv\w*|backup|back\s+up|wrap-?\s?up|digest|fyi|for\s+the\s+record)\b",
+                             re.IGNORECASE)
 _NO_REPLY_DECLARATION = re.compile(
     r"(?:^|[.;!,(\n*_·•—–-])\s*"
     r"(?:no\s+(?:reply|response|answer|action)\s+(?:is\s+)?(?:expected|required|needed|requested)"
@@ -113,6 +120,14 @@ _NO_REPLY_PARAGRAPH_VETO = re.compile(
     r"|reply\s+with|respond\s+with|previous(?:ly)?|earlier|former|formerly|old|used\s+to|template|example"
     r"|instead|but|unless|except|however|until)\b",
     re.IGNORECASE)
+_NO_REPLY_CURRENT_REQUEST = re.compile(
+    r"\b(?:please|pls|plz|kindly|confirm|let\s+me\s+know|tell\s+me|(?:can|could|would|will)\s+you|need\s+you"
+    r"|i\s+need|we\s+need|reply\s+with|respond\s+with|get\s+back\s+to\s+me|asap|urgent(?:ly)?|actually"
+    r"|correction|on\s+second\s+thought"
+    r"|(?:ignore|disregard|scratch|forget|cancel|withdraw|retract|rescind|revoke)\s+(?:that|this|the\s+above)"
+    r"|(?<!\bno\s)(?<!\bnot\s)\b(?:reply|response|answer|action|ack)\s+(?:is\s+)?(?:now\s+|still\s+)?"
+    r"(?:required|needed|expected|requested|wanted))\b",
+    re.IGNORECASE)
 _NO_REPLY_WITHDRAWAL = re.compile(
     r"\b(?:ignore|disregard|scratch|forget|cancel|withdraw|retract|rescind|revoke)\s+"
     r"(?:that|this|it|the\s+above|the\s+previous|the\s+earlier|what\s+i\s+said|my\s+(?:previous|earlier|last))\b"
@@ -123,6 +138,13 @@ _NO_REPLY_WITHDRAWAL = re.compile(
 def _slack_blank_foreign_text(text: str) -> str:
     """Blank code, quotes and quoted strings, keeping offsets and line breaks."""
     return _NO_REPLY_FOREIGN_TEXT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
+
+
+def _slack_closes_on_question(own: str) -> bool:
+    """Is the sender's last line of own prose a question (the current ask, whatever the header said)?"""
+    lines = [line.strip(" \t*_~") for line in own.splitlines()]
+    last = next((line for line in reversed(lines) if line), "")
+    return last.endswith("?")
 
 
 def slack_declares_no_reply_expected(text: str) -> bool:
@@ -136,7 +158,13 @@ def slack_declares_no_reply_expected(text: str) -> bool:
             break
         # A withdrawal before it or shortly after takes it back. Archive bodies further down may
         # legitimately say "superseded" about their own content, so the scan stays local.
-        if _NO_REPLY_WITHDRAWAL.search(own, 0, match.end() + _NO_REPLY_HEADER_CHARS):
+        window_end = match.end() + _NO_REPLY_HEADER_CHARS
+        if _NO_REPLY_WITHDRAWAL.search(own, 0, window_end):
+            return False
+        # A current request anywhere in the sender's own prose outranks the declaration.
+        if _NO_REPLY_CURRENT_REQUEST.search(own):
+            return False
+        if not _NO_REPLY_GENRE.search(own, 0, window_end) or _slack_closes_on_question(own):
             return False
         start = own.rfind("\n\n", 0, match.start())
         end = own.find("\n\n", match.end())
