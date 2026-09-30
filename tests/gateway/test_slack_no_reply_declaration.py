@@ -133,6 +133,48 @@ async def test_anything_outside_the_closed_form_keeps_the_notice(adapter, monkey
     assert await _deliver_silent(monkeypatch, tmp_path, msg_event) == _UNEXPECTED_SILENCE_REPLY
 
 
+# The Claude Slack connector (app A08SF47R6P4) appends a `context` block that Slack flattens into
+# ``text`` as a trailing " *Sent using* <@U...>"; the sender cannot remove it. Exactly one such
+# attribution at the very end is ignored; everything else about the grammar is unchanged.
+SENT_USING = " *Sent using* <@U0AL2THRN8K>"
+ATTRIBUTED_ADMITTED = [
+    ARCHIVE + SENT_USING,
+    WRAPUP + SENT_USING,
+    "*SWITCHBOARD-ARCHIVE-20260930 — CHUNK 2/3*\n\nArchive backup. No reply expected.\n\n```\npart two\n```"
+    + SENT_USING + "\n",
+    "NO REPLY REQUIRED — ARCHIVE ONLY" + SENT_USING,
+]
+ATTRIBUTED_NOT_ADMITTED = [
+    QUESTION + SENT_USING,
+    "Archive backup. No reply expected.\n\nWhich commit is pinned?" + SENT_USING,
+    "*ARCHIVE BACKUP* No reply expected.\n\n```\nfile one\n```\n\n"
+    "Correction: a response is required. What commit is pinned?\n\n```\nfile two\n```" + SENT_USING,
+    ARCHIVE + SENT_USING + "\n\nActually, please confirm the pinned commit.",
+    ARCHIVE + SENT_USING + SENT_USING,
+    ARCHIVE + " *Sent using* <@U0AL2THRN8K|lars>",   # labelled mention is not the connector's shape
+    ARCHIVE + " *Sent using* <!here>",
+    ARCHIVE + " *Sent using* Claude",
+    ARCHIVE + " Sent using <@U0AL2THRN8K>",
+    "*ARCHIVE BACKUP* No reply expected.\n\n```\nfile\n" + SENT_USING,  # unclosed fence
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ATTRIBUTED_ADMITTED)
+async def test_connector_attribution_does_not_break_the_archive_form(adapter, monkeypatch, tmp_path, text):
+    msg_event = await _admit(adapter, text, "1790787700.000001")
+    assert msg_event.reply_expected is False
+    assert await _deliver_silent(monkeypatch, tmp_path, msg_event) == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ATTRIBUTED_NOT_ADMITTED)
+async def test_connector_attribution_does_not_admit_anything_else(adapter, monkeypatch, tmp_path, text):
+    msg_event = await _admit(adapter, text, "1790787800.000001")
+    assert msg_event.reply_expected is None
+    assert await _deliver_silent(monkeypatch, tmp_path, msg_event) == _UNEXPECTED_SILENCE_REPLY
+
+
 @pytest.mark.asyncio
 async def test_declaration_outranks_a_mention_but_not_a_command(adapter):
     mentioned = await _admit(adapter, f"<@{BOT_USER_ID}> *ARCHIVE COPY*\n\nNo reply expected.", "1.1")
@@ -159,6 +201,8 @@ async def test_declaration_outranks_a_mention_but_not_a_command(adapter):
     ("*ARCHIVE*\n\nStatus: no reply expected", False),
     ("*ARCHIVE* No reply expected. Not archived.", False),
     *[(text, False) for text in NOT_ADMITTED],
+    *[(text, True) for text in ATTRIBUTED_ADMITTED],
+    *[(text, False) for text in ATTRIBUTED_NOT_ADMITTED],
 ])
 def test_declaration_rule(text, declared):
     assert slack_declares_no_reply_expected(text) is declared

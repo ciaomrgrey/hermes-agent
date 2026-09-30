@@ -98,7 +98,11 @@ _MODEL_PICKER_ACTION_IDS = (
 # - payload: closed ``` fences only, separated by whitespace; nothing may follow the last fence.
 # Anything else - unfenced payload, a request or correction anywhere, an unclosed fence - keeps the
 # gateway's visible fallback. Descriptions belong inside the fence.
+# The one exception is the attribution a Slack connector app (Claude, A08SF47R6P4) appends as a final
+# `context` block and Slack flattens into ``text``: exactly one trailing "*Sent using* <@U...>" (a bare
+# user id, no label) is dropped before the grammar runs. Anything after it, or a second one, still rejects.
 _NO_REPLY_LEADING_MENTIONS = re.compile(r"\A(?:\s*<[@!][^>\n]*>)*\s*")
+_NO_REPLY_CONNECTOR_ATTRIBUTION = re.compile(r"\*Sent using\* <@U[A-Z0-9]+>\Z")  # on rstripped text
 _NO_REPLY_HEADER_CHARS = re.compile(r"[A-Za-z0-9\s.,;:()*_/#\-\u2010-\u2015\u00b7\u2022]*\Z")
 _NO_REPLY_CLAUSE_SPLIT = re.compile(r"[.,;:()*_\n\u00b7\u2022\u2010-\u2015]+|\s-+\s")
 _NO_REPLY_LABEL = (r"(?:(?:routine|session|end-of-session)\s+)*(?:archive[sd]?|backup|back-up|wrap-?up)"
@@ -134,7 +138,10 @@ def slack_declares_no_reply_expected(text: str) -> bool:
     declares no reply is expected? Lets a bare silence marker stand; anything else keeps the fallback."""
     if not text:
         return False
-    own = text[_NO_REPLY_LEADING_MENTIONS.match(text).end():]
+    own = text[_NO_REPLY_LEADING_MENTIONS.match(text).end():].rstrip()
+    attribution = _NO_REPLY_CONNECTOR_ATTRIBUTION.search(own)
+    if attribution:
+        own = own[:attribution.start()]
     fence = own.find("```")
     header, payload = (own, "") if fence < 0 else (own[:fence], own[fence:])
     if not _slack_payload_is_closed_fences(payload) or not _NO_REPLY_HEADER_CHARS.match(header):
