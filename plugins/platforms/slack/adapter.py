@@ -99,7 +99,6 @@ _MODEL_PICKER_ACTION_IDS = (
 # Anything else - unfenced payload, a request or correction anywhere, an unclosed fence - keeps the
 # gateway's visible fallback. Descriptions belong inside the fence.
 _NO_REPLY_LEADING_MENTIONS = re.compile(r"\A(?:\s*<[@!][^>\n]*>)*\s*")
-_NO_REPLY_FENCES = re.compile(r"\A(?:\s*```.*?```)*\s*\Z", re.DOTALL)
 _NO_REPLY_HEADER_CHARS = re.compile(r"[A-Za-z0-9\s.,;:()*_/#\-\u2010-\u2015\u00b7\u2022]*\Z")
 _NO_REPLY_CLAUSE_SPLIT = re.compile(r"[.,;:()*_\n\u00b7\u2022\u2010-\u2015]+|\s-+\s")
 _NO_REPLY_LABEL = (r"(?:(?:routine|session|end-of-session)\s+)*(?:archive[sd]?|backup|back-up|wrap-?up)"
@@ -113,6 +112,23 @@ _NO_REPLY_DECL_CLAUSE = re.compile(rf"{_NO_REPLY_DECL}(?:\s+and\s+{_NO_REPLY_DEC
 _NO_REPLY_HAS_LABEL = re.compile(rf"(?<![A-Za-z]){_NO_REPLY_LABEL}(?![A-Za-z])", re.IGNORECASE)
 
 
+def _slack_payload_is_closed_fences(payload: str) -> bool:
+    """Is ``payload`` only closed ``` blocks separated by whitespace? Walks the delimiters left to
+    right: each block closes at the FIRST ``` after its opener (as Slack renders it), so no closer can
+    be absorbed into a later block and text between blocks is always seen."""
+    pos = 0
+    while True:
+        opener = payload.find("```", pos)
+        if opener < 0:
+            return not payload[pos:].strip()
+        if payload[pos:opener].strip():
+            return False
+        closer = payload.find("```", opener + 3)
+        if closer < 0:
+            return False
+        pos = closer + 3
+
+
 def slack_declares_no_reply_expected(text: str) -> bool:
     """Is the whole message an archive post in the closed form header + fenced payload, whose header
     declares no reply is expected? Lets a bare silence marker stand; anything else keeps the fallback."""
@@ -121,7 +137,7 @@ def slack_declares_no_reply_expected(text: str) -> bool:
     own = text[_NO_REPLY_LEADING_MENTIONS.match(text).end():]
     fence = own.find("```")
     header, payload = (own, "") if fence < 0 else (own[:fence], own[fence:])
-    if not _NO_REPLY_FENCES.match(payload) or not _NO_REPLY_HEADER_CHARS.match(header):
+    if not _slack_payload_is_closed_fences(payload) or not _NO_REPLY_HEADER_CHARS.match(header):
         return False
     labelled = declared = False
     for clause in _NO_REPLY_CLAUSE_SPLIT.split(header):

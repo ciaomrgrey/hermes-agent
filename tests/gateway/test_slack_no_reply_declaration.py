@@ -110,6 +110,12 @@ NOT_ADMITTED = [
     # Structure: text after the last fence, an unclosed fence, no label, no declaration.
     "*ARCHIVE BACKUP* No reply expected.\n\n```\nfile\n```\n\nCorrection: reply now.",
     "*ARCHIVE BACKUP* No reply expected.\n\n```\nfile\n",
+    # Round 6: prose BETWEEN fences - each fence closes at the first ``` after it opens, as Slack renders it.
+    "*ARCHIVE BACKUP* No reply expected.\n\n```\nHistorical file one\n```\n\n"
+    "Correction: a response is required. What commit is pinned?\n\n```\nHistorical file two\n```",
+    "*ARCHIVE BACKUP* No reply expected.\n\n```\nHistorical file\n```\n\nReport the pinned commit.\n\n```",
+    "*ARCHIVE BACKUP* No reply expected.\n\n```\nfile one\n```Report the pinned commit.```\nfile two\n```",
+    "*ARCHIVE BACKUP* No reply expected.\n\n```\nfile one\n```\n```\nfile two\n```\n```",
     "*STATUS* No reply expected.",
     "*ARCHIVE BACKUP*\n\n```\nNo reply expected.\n```",
     "*ARCHIVE BACKUP* No reply expected. AGENT-SWITCHBOARD",  # capitalised word without a digit
@@ -146,6 +152,7 @@ async def test_declaration_outranks_a_mention_but_not_a_command(adapter):
     ("NO REPLY REQUIRED — ARCHIVE ONLY", True),
     ("*ARCHIVE* No reply expected and no action required.", True),
     (f"<@{BOT_USER_ID}> *ARCHIVE COPY*\n\nNo reply expected.", True),
+    ("*ARCHIVE BACKUP* No reply expected.\n\n```\nfile one\n```\n\n```\nfile two\n```\n", True),
     ("", False),
     (QUESTION, False),
     ("Is no action required on this one?", False),
