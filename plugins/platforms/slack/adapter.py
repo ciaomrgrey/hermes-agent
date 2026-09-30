@@ -86,74 +86,55 @@ _MODEL_PICKER_ACTION_IDS = (
 )
 
 
-# A sender's own archive envelope ("*SWITCHBOARD-ARCHIVE-20260930 - CHUNK 1/3*" + "No reply expected.") lets
-# a bare silence marker stand. Admission is a positively bounded envelope, never an inference from the
-# body, because a false positive silences a real request:
-# - the message (after any leading @mentions) opens with a title line naming itself, in capitals, an
-#   ARCHIVE, BACKUP or WRAP-UP - the form every archive post on the estate's bridges uses;
-# - the envelope is the title paragraph, or the title paragraph plus the one paragraph right after it,
-#   and it must hold the declaration as a clause of its own ("No reply expected.", "(archive, no action
-#   required)", "nothing expected back") within the first 300 chars: never after a colon, never inside
-#   code, a block quote or quotation marks (someone else's words);
-# - the envelope must read as a record: no "?", no request, correction or withdrawal wording ("please",
-#   "confirm", "actually", "ignore that", "previous", "but", ...) and no direct address (I/we/you);
-# - everything after the envelope is the archived payload and is never read as the sender's current
-#   words. A current request belongs in its own message, not inside an archive: any message without
-#   this envelope, or with a doubtful one, keeps the gateway's visible fallback.
-_NO_REPLY_HEADER_CHARS = 300
+# A sender's own archive post may end on a bare silence marker. Admission is a closed grammar, never an
+# inference from prose: a false positive silences a real request, and prose cannot be told apart from a
+# request (five review rounds of t_6faaeff7 each found one). The whole message must be
+#   <header> [```payload```]...
+# - header (after any leading @mentions): only clauses from a closed set, split on . , ; : ( ) * _ and
+#   dashes/bullets/newlines - an archive label ("ARCHIVE BACKUP", "Archive only", "routine archive"),
+#   a capitalised reference id carrying a digit ("SWITCHBOARD-ARCHIVE-20260930", "CHUNK 1/3", "2026-09-30")
+#   and the declaration ("No reply expected", "nothing expected back").
+#   It needs at least one label and one declaration; any other word, "?", quote or inline code rejects;
+# - payload: closed ``` fences only, separated by whitespace; nothing may follow the last fence.
+# Anything else - unfenced payload, a request or correction anywhere, an unclosed fence - keeps the
+# gateway's visible fallback. Descriptions belong inside the fence.
 _NO_REPLY_LEADING_MENTIONS = re.compile(r"\A(?:\s*<[@!][^>\n]*>)*\s*")
-_NO_REPLY_TITLE = re.compile(r"(?<![A-Za-z])(?:ARCHIVE[SD]?|BACKUP|WRAP-?UP)(?![a-z])")
-_NO_REPLY_DECLARATION = re.compile(
-    r"(?:^|[.;!,(\n*_·•—–-])\s*"
-    r"(?:no\s+(?:reply|response|answer|action)\s+(?:is\s+)?(?:expected|required|needed|requested)"
-    r"|nothing\s+(?:is\s+)?expected\s+back)"
-    r"\s*(?=$|[.;!,)\n*_·•—–-])",
-    re.IGNORECASE)
-_NO_REPLY_FOREIGN_TEXT = re.compile(
-    r"```.*?(?:```|\Z)"                          # fenced code, closed or running to the end
-    r"|`[^`\n]*`"                                # inline code
-    r"|^[ \t]*(?:>|&gt;)[^\n]*$"                 # one block quote line (Slack sends '>' as '&gt;')
-    r"|\"[^\"\n]*\"|“[^”\n]*”|‘[^’\n]*’"         # double / curly quotes
-    r"|(?<![\w])'[^'\n]*'(?![\w])",              # single quotes, not apostrophes
-    re.DOTALL | re.MULTILINE)
-_NO_REPLY_ENVELOPE_VETO = re.compile(
-    r"\?|\b(?:please|pls|plz|kindly|confirm|let\s+me\s+know|tell\s+me|(?:can|could|would|will)\s+you"
-    r"|need\s+you|reply\s+with|respond\s+with|get\s+back|asap|urgent(?:ly)?|actually|correction"
-    r"|second\s+thought|previous(?:ly)?|earlier|former|formerly|old|used\s+to|template|example|instead"
-    r"|but|unless|except|however|until|ignore|disregard|scratch|forget|cancel|withdraw\w*|retract\w*"
-    r"|rescind\w*|revoke\w*|superseded|no\s+longer"
-    r"|i|i'm|i've|i'd|i'll|me|my|mine|we|we're|we've|we'd|we'll|us|our|ours|let's"
-    r"|you|you're|you've|you'd|you'll|your|yours)\b"
-    r"|(?<!\bno\s)(?<!\bnot\s)\b(?:reply|response|answer|action|ack)\s+(?:is\s+)?(?:now\s+|still\s+)?"
-    r"(?:required|needed|expected|requested|wanted)\b",
-    re.IGNORECASE)
-_NO_REPLY_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
-
-
-def _slack_blank_foreign_text(text: str) -> str:
-    """Blank code, quotes and quoted strings, keeping offsets and line breaks."""
-    return _NO_REPLY_FOREIGN_TEXT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
+_NO_REPLY_FENCES = re.compile(r"\A(?:\s*```.*?```)*\s*\Z", re.DOTALL)
+_NO_REPLY_HEADER_CHARS = re.compile(r"[A-Za-z0-9\s.,;:()*_/#\-\u2010-\u2015\u00b7\u2022]*\Z")
+_NO_REPLY_CLAUSE_SPLIT = re.compile(r"[.,;:()*_\n\u00b7\u2022\u2010-\u2015]+|\s-+\s")
+_NO_REPLY_LABEL = (r"(?:(?:routine|session|end-of-session)\s+)*(?:archive[sd]?|backup|back-up|wrap-?up)"
+                   r"(?:\s+(?:backup|copy|snapshot|only))*")
+_NO_REPLY_REF = r"(?:(?:chunk|part)\s+\d+(?:/\d+)?|(?-i:[A-Z0-9#-]*[0-9][A-Z0-9#-]*|\d+/\d+))"
+_NO_REPLY_DECL = (r"(?:no\s+(?:reply|response|answer|action|ack)s?\s+(?:is\s+)?(?:expected|required|needed|requested)"
+                  r"|nothing\s+(?:is\s+)?expected\s+back)")
+_NO_REPLY_ITEM_CLAUSE = re.compile(rf"(?:{_NO_REPLY_LABEL}|{_NO_REPLY_REF})(?:\s+(?:{_NO_REPLY_LABEL}|{_NO_REPLY_REF}))*",
+                                   re.IGNORECASE)
+_NO_REPLY_DECL_CLAUSE = re.compile(rf"{_NO_REPLY_DECL}(?:\s+and\s+{_NO_REPLY_DECL})*", re.IGNORECASE)
+_NO_REPLY_HAS_LABEL = re.compile(rf"(?<![A-Za-z]){_NO_REPLY_LABEL}(?![A-Za-z])", re.IGNORECASE)
 
 
 def slack_declares_no_reply_expected(text: str) -> bool:
-    """Does the message open with the sender's own archive envelope declaring no reply is expected?
-    Lets a bare silence marker stand; any doubt keeps the gateway's visible fallback."""
+    """Is the whole message an archive post in the closed form header + fenced payload, whose header
+    declares no reply is expected? Lets a bare silence marker stand; anything else keeps the fallback."""
     if not text:
         return False
-    own = _slack_blank_foreign_text(text)
-    own = own[_NO_REPLY_LEADING_MENTIONS.match(own).end():]
-    title = own.split("\n", 1)[0]
-    if not _NO_REPLY_TITLE.search(title):
+    own = text[_NO_REPLY_LEADING_MENTIONS.match(text).end():]
+    fence = own.find("```")
+    header, payload = (own, "") if fence < 0 else (own[:fence], own[fence:])
+    if not _NO_REPLY_FENCES.match(payload) or not _NO_REPLY_HEADER_CHARS.match(header):
         return False
-    # Envelope: the title paragraph, or it plus the next one - up to the paragraph holding the declaration.
-    breaks = [m.start() for m in _NO_REPLY_PARAGRAPH_BREAK.finditer(own)][:2] + [len(own)] * 2
-    for envelope_end in breaks[:2]:
-        envelope = own[:envelope_end]
-        match = _NO_REPLY_DECLARATION.search(envelope)
-        if match is None:
+    labelled = declared = False
+    for clause in _NO_REPLY_CLAUSE_SPLIT.split(header):
+        clause = " ".join(clause.split())
+        if not clause:
             continue
-        return match.start() < _NO_REPLY_HEADER_CHARS and not _NO_REPLY_ENVELOPE_VETO.search(envelope)
-    return False
+        if _NO_REPLY_DECL_CLAUSE.fullmatch(clause):
+            declared = True
+        elif _NO_REPLY_ITEM_CLAUSE.fullmatch(clause):
+            labelled = labelled or bool(_NO_REPLY_HAS_LABEL.search(clause))
+        else:
+            return False
+    return labelled and declared
 
 
 def _slack_unfurl_kwargs(extra: Optional[Dict[str, Any]]) -> Dict[str, bool]:
