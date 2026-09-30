@@ -676,7 +676,7 @@ Set this to `true` when the bot follows busy threads (via thread auto-engagement
 :::
 
 :::note Silence markers on messages not addressed to the bot
-When the bot answers a human message with only a [silence token](index.md#intentional-silence-tokens), Hermes normally posts a short notice instead so a question never goes unanswered. On Slack the token is allowed to stand when the message opened by @mentioning someone else, or was an unmentioned top-level message in a `free_response_channels` channel that starts its own thread (the default `reply_in_thread: true`). A 1:1 DM, a mention of the bot, a command, a reaction trigger, or a plain follow-up in a conversation the bot is part of (a thread, or a `reply_in_thread: false` channel) still gets the notice.
+When the bot answers a human message with only a [silence token](index.md#intentional-silence-tokens), Hermes normally posts a short notice instead so a question never goes unanswered. On Slack the token is allowed to stand when the message opened by @mentioning someone else, or was an unmentioned top-level message in a `free_response_channels` channel that starts its own thread (the default `reply_in_thread: true`). A 1:1 DM, a mention of the bot, a command, a reaction trigger, or a plain follow-up in a conversation the bot is part of (a thread, or a `reply_in_thread: false` channel) still gets the notice. A message whose first 300 characters declare as a clause of their own that no reply is wanted (`No reply expected.`, `(archive, no action required)`, `nothing expected back`) may also stay silent, even in a thread or a flat channel and even when it mentions the bot; a question such as `Is no action required?` and a slash command never count.
 :::
 
 :::info

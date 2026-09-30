@@ -86,6 +86,23 @@ _MODEL_PICKER_ACTION_IDS = (
 )
 
 
+# A sender's up-front "no reply expected" declaration (archive posts, FYI digests). The phrase must be a
+# whole clause of the message header: bounded by start/end or clause punctuation, never a question
+# ("Is no action required here?") or a quoted mention ("what 'no action required' means").
+_NO_REPLY_HEADER_CHARS = 300
+_NO_REPLY_DECLARATION = re.compile(
+    r"(?:^|[.;:!,(\n*_·•—–-])\s*"
+    r"(?:no\s+(?:reply|response|answer|action)\s+(?:is\s+)?(?:expected|required|needed)"
+    r"|nothing\s+(?:is\s+)?expected\s+back)"
+    r"\s*(?=$|[.;!,)\n*_·•—–-])",
+    re.IGNORECASE)
+
+
+def slack_declares_no_reply_expected(text: str) -> bool:
+    """Does the message header declare that no reply is expected? Lets a bare silence marker stand."""
+    return bool(text) and bool(_NO_REPLY_DECLARATION.search(text[:_NO_REPLY_HEADER_CHARS]))
+
+
 def _slack_unfurl_kwargs(extra: Optional[Dict[str, Any]]) -> Dict[str, bool]:
     """Explicitly configured link-preview controls (omitted key = Slack default). String bools are
     coerced (config tooling persists YAML bools as strings); junk is dropped, NOT coerced to False,
@@ -4546,7 +4563,9 @@ class SlackAdapter(BasePlatformAdapter):
             media_types=media_types, media_text_inlined=media_text_inlined, channel_context=channel_context,
             reply_expected=self._slack_reply_expected(
                 routing_text, bot_uid, channel_id=channel_id, opens_own_session=thread_ts == ts,
-                addressed=is_one_to_one_dm or is_mentioned or is_command_text or force_process))
+                addressed=is_one_to_one_dm or is_mentioned or is_command_text or force_process,
+                declares_no_reply=not is_command_text and slack_declares_no_reply_expected(
+                    event.get("text") or routing_text)))
         # React only when directly addressed; MPIMs are shared, so they need a
         # mention like any channel.
         if (is_one_to_one_dm or is_mentioned) and self._reactions_enabled():
@@ -6241,13 +6260,16 @@ class SlackAdapter(BasePlatformAdapter):
 
     def _slack_reply_expected(
         self, routing_text: str, bot_uid: Optional[str], *, channel_id: str, addressed: bool,
-        opens_own_session: bool) -> Optional[bool]:
+        opens_own_session: bool, declares_no_reply: bool = False) -> Optional[bool]:
         """``MessageEvent.reply_expected`` for an admitted message. False (a bare silence marker may
         stand) only when it opens by @mentioning someone else, or is an unaddressed message that a
         free-response channel admitted as the start of its own session (a new top-level thread).
         A plain follow-up in a conversation the bot is part of (a thread, or a flat
         ``reply_in_thread: false`` channel) is None: it is usually meant for the bot, so the
-        gateway keeps its visible fallback (#110952)."""
+        gateway keeps its visible fallback (#110952). A sender's own header declaration that no
+        reply is expected (``declares_no_reply``, never set for a command) is False everywhere."""
+        if declares_no_reply:
+            return False
         self_uids = {u for u in (bot_uid, self._bot_user_id) if u}
         if addressed or self._slack_message_mentions_self(routing_text, self_uids):
             return True
