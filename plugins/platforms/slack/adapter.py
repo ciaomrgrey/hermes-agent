@@ -86,25 +86,23 @@ _MODEL_PICKER_ACTION_IDS = (
 )
 
 
-# A sender's own, current, up-front "no reply expected" declaration (archive posts, FYI digests). Admission
-# is deliberately conservative, because a false positive silences a real request:
-# - the phrase is a whole clause starting in the first 300 chars, never after a colon (a label such as
-#   "Previous instruction:" or "The template says:" introduces a mention, not a declaration);
-# - code (fenced or inline), block quotes and quoted strings are someone else's words and never count;
-# - the paragraph holding it must not ask ("?") or request/withdraw ("please", "confirm", "ignore that",
-#   "previous", "template", ...), and no withdrawal ("ignore that", "scratch that") may precede it or
-#   follow within the next 300 chars;
-# - anywhere in the sender's own prose, a current request or correction ("please", "confirm", "can you",
-#   "actually", "correction", "a response is required", ...) takes it back. Real archive posts carry
-#   none, so a message that does is treated as a request and keeps the fallback;
-# - admission is bounded to the genres this exists for: the header must name itself an archive, backup,
-#   wrap-up, digest or FYI;
-# - the sender's own prose must read as an impersonal record, not an exchange: it asks nothing (no "?"
-#   anywhere outside quotes/code) and addresses nobody (no I/me/we/you). Every real archive post on the
-#   estate's bridges (10 of 10) meets this; a question or direct address anywhere is treated as a request.
+# A sender's own archive envelope ("*SWITCHBOARD-ARCHIVE-20260930 - CHUNK 1/3*" + "No reply expected.") lets
+# a bare silence marker stand. Admission is a positively bounded envelope, never an inference from the
+# body, because a false positive silences a real request:
+# - the message (after any leading @mentions) opens with a title line naming itself, in capitals, an
+#   ARCHIVE, BACKUP or WRAP-UP - the form every archive post on the estate's bridges uses;
+# - the envelope is the title paragraph, or the title paragraph plus the one paragraph right after it,
+#   and it must hold the declaration as a clause of its own ("No reply expected.", "(archive, no action
+#   required)", "nothing expected back") within the first 300 chars: never after a colon, never inside
+#   code, a block quote or quotation marks (someone else's words);
+# - the envelope must read as a record: no "?", no request, correction or withdrawal wording ("please",
+#   "confirm", "actually", "ignore that", "previous", "but", ...) and no direct address (I/we/you);
+# - everything after the envelope is the archived payload and is never read as the sender's current
+#   words. A current request belongs in its own message, not inside an archive: any message without
+#   this envelope, or with a doubtful one, keeps the gateway's visible fallback.
 _NO_REPLY_HEADER_CHARS = 300
-_NO_REPLY_GENRE = re.compile(r"\b(?:archiv\w*|backup|back\s+up|wrap-?\s?up|digest|fyi|for\s+the\s+record)\b",
-                             re.IGNORECASE)
+_NO_REPLY_LEADING_MENTIONS = re.compile(r"\A(?:\s*<[@!][^>\n]*>)*\s*")
+_NO_REPLY_TITLE = re.compile(r"(?<![A-Za-z])(?:ARCHIVE[SD]?|BACKUP|WRAP-?UP)(?![a-z])")
 _NO_REPLY_DECLARATION = re.compile(
     r"(?:^|[.;!,(\n*_·•—–-])\s*"
     r"(?:no\s+(?:reply|response|answer|action)\s+(?:is\s+)?(?:expected|required|needed|requested)"
@@ -118,27 +116,18 @@ _NO_REPLY_FOREIGN_TEXT = re.compile(
     r"|\"[^\"\n]*\"|“[^”\n]*”|‘[^’\n]*’"         # double / curly quotes
     r"|(?<![\w])'[^'\n]*'(?![\w])",              # single quotes, not apostrophes
     re.DOTALL | re.MULTILINE)
-_NO_REPLY_PARAGRAPH_VETO = re.compile(
-    r"\?|\b(?:please|pls|confirm|let\s+me\s+know|tell\s+me|can\s+you|could\s+you|would\s+you|need\s+you"
-    r"|reply\s+with|respond\s+with|previous(?:ly)?|earlier|former|formerly|old|used\s+to|template|example"
-    r"|instead|but|unless|except|however|until)\b",
-    re.IGNORECASE)
-_NO_REPLY_CURRENT_REQUEST = re.compile(
-    r"\b(?:please|pls|plz|kindly|confirm|let\s+me\s+know|tell\s+me|(?:can|could|would|will)\s+you|need\s+you"
-    r"|i\s+need|we\s+need|reply\s+with|respond\s+with|get\s+back\s+to\s+me|asap|urgent(?:ly)?|actually"
-    r"|correction|on\s+second\s+thought"
-    r"|(?:ignore|disregard|scratch|forget|cancel|withdraw|retract|rescind|revoke)\s+(?:that|this|the\s+above)"
+_NO_REPLY_ENVELOPE_VETO = re.compile(
+    r"\?|\b(?:please|pls|plz|kindly|confirm|let\s+me\s+know|tell\s+me|(?:can|could|would|will)\s+you"
+    r"|need\s+you|reply\s+with|respond\s+with|get\s+back|asap|urgent(?:ly)?|actually|correction"
+    r"|second\s+thought|previous(?:ly)?|earlier|former|formerly|old|used\s+to|template|example|instead"
+    r"|but|unless|except|however|until|ignore|disregard|scratch|forget|cancel|withdraw\w*|retract\w*"
+    r"|rescind\w*|revoke\w*|superseded|no\s+longer"
+    r"|i|i'm|i've|i'd|i'll|me|my|mine|we|we're|we've|we'd|we'll|us|our|ours|let's"
+    r"|you|you're|you've|you'd|you'll|your|yours)\b"
     r"|(?<!\bno\s)(?<!\bnot\s)\b(?:reply|response|answer|action|ack)\s+(?:is\s+)?(?:now\s+|still\s+)?"
-    r"(?:required|needed|expected|requested|wanted))\b",
+    r"(?:required|needed|expected|requested|wanted)\b",
     re.IGNORECASE)
-_NO_REPLY_EXCHANGE = re.compile(
-    r"\b(?:i|i'm|i've|i'd|i'll|me|my|mine|we|we're|we've|we'd|we'll|us|our|ours|let's"
-    r"|you|you're|you've|you'd|you'll|your|yours)\b", re.IGNORECASE)
-_NO_REPLY_WITHDRAWAL = re.compile(
-    r"\b(?:ignore|disregard|scratch|forget|cancel|withdraw|retract|rescind|revoke)\s+"
-    r"(?:that|this|it|the\s+above|the\s+previous|the\s+earlier|what\s+i\s+said|my\s+(?:previous|earlier|last))\b"
-    r"|\b(?:withdrawn|rescinded|revoked|superseded|no\s+longer\s+applies)\b",
-    re.IGNORECASE)
+_NO_REPLY_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
 
 
 def _slack_blank_foreign_text(text: str) -> str:
@@ -146,35 +135,24 @@ def _slack_blank_foreign_text(text: str) -> str:
     return _NO_REPLY_FOREIGN_TEXT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
 
 
-def _slack_reads_as_exchange(own: str) -> bool:
-    """Does the sender's own prose ask something or address someone, rather than record?"""
-    return "?" in own or bool(_NO_REPLY_EXCHANGE.search(own))
-
-
 def slack_declares_no_reply_expected(text: str) -> bool:
-    """Does the sender currently declare, in the header of their own prose, that no reply is expected?
+    """Does the message open with the sender's own archive envelope declaring no reply is expected?
     Lets a bare silence marker stand; any doubt keeps the gateway's visible fallback."""
     if not text:
         return False
     own = _slack_blank_foreign_text(text)
-    for match in _NO_REPLY_DECLARATION.finditer(own):
-        if match.start() >= _NO_REPLY_HEADER_CHARS:
-            break
-        # A withdrawal before it or shortly after takes it back. Archive bodies further down may
-        # legitimately say "superseded" about their own content, so the scan stays local.
-        window_end = match.end() + _NO_REPLY_HEADER_CHARS
-        if _NO_REPLY_WITHDRAWAL.search(own, 0, window_end):
-            return False
-        # A current request anywhere in the sender's own prose outranks the declaration.
-        if _NO_REPLY_CURRENT_REQUEST.search(own):
-            return False
-        if not _NO_REPLY_GENRE.search(own, 0, window_end) or _slack_reads_as_exchange(own):
-            return False
-        start = own.rfind("\n\n", 0, match.start())
-        end = own.find("\n\n", match.end())
-        paragraph = own[start + 2 if start >= 0 else 0:end if end >= 0 else len(own)]
-        if not _NO_REPLY_PARAGRAPH_VETO.search(paragraph):
-            return True
+    own = own[_NO_REPLY_LEADING_MENTIONS.match(own).end():]
+    title = own.split("\n", 1)[0]
+    if not _NO_REPLY_TITLE.search(title):
+        return False
+    # Envelope: the title paragraph, or it plus the next one - up to the paragraph holding the declaration.
+    breaks = [m.start() for m in _NO_REPLY_PARAGRAPH_BREAK.finditer(own)][:2] + [len(own)] * 2
+    for envelope_end in breaks[:2]:
+        envelope = own[:envelope_end]
+        match = _NO_REPLY_DECLARATION.search(envelope)
+        if match is None:
+            continue
+        return match.start() < _NO_REPLY_HEADER_CHARS and not _NO_REPLY_ENVELOPE_VETO.search(envelope)
     return False
 
 

@@ -19,7 +19,13 @@ from tests.gateway.test_slack_ignore_other_user_mentions import (  # noqa: F401 
     BOT_USER_ID, CHANNEL_ID, _redirect_cache, adapter,
 )
 
+# The original round-0 fixture, unchanged: its payload carries an unquoted question.
 ARCHIVE = (
+    "*SWITCHBOARD-ARCHIVE-20260930 — CHUNK 1/3*\n\n"
+    "Archive backup of Chat's agent-switchboard memory file. No reply expected. No action required.\n\n"
+    "*name: agent-switchboard* — does anything here need a question mark? CONSULT vs INSTRUCT."
+)
+ARCHIVE_QUOTED = (
     "*SWITCHBOARD-ARCHIVE-20260930 — CHUNK 1/3*\n\n"
     "Archive backup of Chat's agent-switchboard memory file. No reply expected. No action required.\n\n"
     "*name: agent-switchboard* — CONSULT vs INSTRUCT.\n"
@@ -55,7 +61,7 @@ async def _deliver_silent(monkeypatch, tmp_path, msg_event):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", [ARCHIVE, WRAPUP], ids=["archive-chunk", "wrapup"])
+@pytest.mark.parametrize("text", [ARCHIVE, ARCHIVE_QUOTED, WRAPUP], ids=["archive-chunk", "archive-quoted", "wrapup"])
 async def test_declared_no_reply_post_with_silence_marker_posts_nothing(adapter, monkeypatch, tmp_path, text):
     msg_event = await _admit(adapter, text, "1790787447.957279")
     assert msg_event.reply_expected is False
@@ -95,6 +101,21 @@ MENTIONS = [
     "Archive backup. No reply expected.\n\nWhich commit is pinned?\nThanks.",
     "Archive backup. No reply expected.\n\nWhich commit is pinned? Thanks, much appreciated.",
     "Archive backup. No reply expected.\n\nWe still need the pinned commit hash from you today.",
+    # Round 4 (Gurney): an imperative or a code-quoted question after an untitled header. Admission now
+    # needs a positive envelope - an ARCHIVE/BACKUP/WRAP-UP title line - so these never qualify.
+    "Archive backup. No reply expected.\n\nAnswer this: `Which commit is pinned?`",
+    "Archive backup. No reply expected.\n\nReport the pinned commit.",
+    # A titled envelope that itself asks, requests, corrects or addresses someone is not a record.
+    "*ARCHIVE BACKUP*\n\nNo reply expected. Please confirm the pinned commit.",
+    "*ARCHIVE BACKUP* No reply expected. Report the pinned commit to me.",
+    "*ARCHIVE BACKUP*\n\nNo reply expected - actually, a response is required.",
+    "*ARCHIVE BACKUP*\n\nNo reply expected. Which commit is pinned?",
+    "*ARCHIVE BACKUP*\n\nNo reply expected, but answer the question below.",
+    # The declaration must sit in the envelope (title or the paragraph right after it).
+    "*ARCHIVE BACKUP*\n\nReport the pinned commit.\n\nNo reply expected.",
+    # The title must name the genre itself, not quote it.
+    "*`ARCHIVE BACKUP`*\n\nNo reply expected.",
+    "What is an \"ARCHIVE BACKUP\"?\n\nNo reply expected.",
 ]
 
 
@@ -105,7 +126,12 @@ MENTIONS = [
                                                 "can-you-far-below", "second-thought-needed", "closing-question",
                                                 "no-genre", "request-after-blockquote",
                                                 "request-after-escaped-blockquote", "address-after-blockquote",
-                                                "question-with-signoff", "question-mid-line", "direct-address"])
+                                                "question-with-signoff", "question-mid-line", "direct-address",
+                                                "round4-code-quoted-question", "round4-imperative",
+                                                "envelope-please", "envelope-imperative-address",
+                                                "envelope-correction", "envelope-question", "envelope-but",
+                                                "declaration-after-request", "title-in-code",
+                                                "title-in-quote"])
 async def test_quoted_or_withdrawn_declaration_keeps_the_notice(adapter, monkeypatch, tmp_path, text):
     msg_event = await _admit(adapter, text, "1790787600.000001")
     assert msg_event.reply_expected is None
@@ -114,7 +140,7 @@ async def test_quoted_or_withdrawn_declaration_keeps_the_notice(adapter, monkeyp
 
 @pytest.mark.asyncio
 async def test_declaration_outranks_a_mention_but_not_a_command(adapter):
-    mentioned = await _admit(adapter, f"<@{BOT_USER_ID}> FYI archive copy. No reply expected.", "1.1")
+    mentioned = await _admit(adapter, f"<@{BOT_USER_ID}> *ARCHIVE COPY*\n\nNo reply expected.", "1.1")
     assert mentioned.reply_expected is False
     adapter.handle_message.reset_mock()
     command = await _admit(adapter, "/status no reply expected", "1.2")
@@ -123,26 +149,33 @@ async def test_declaration_outranks_a_mention_but_not_a_command(adapter):
 
 @pytest.mark.parametrize("text, declared", [
     (ARCHIVE, True),
+    (ARCHIVE_QUOTED, True),
     (WRAPUP, True),
-    # An archive body may carry archived questions and "no ack" rules, provided the questions are quoted
-    # or fenced (someone else's words); an unquoted own question is indistinguishable from a current ask.
-    ("Archive backup. No reply expected.\n\n• Rule: ask 'why?' first. Always.\n• ONLY REAL ANSWERS. No acks.", True),
-    ("Archive backup. No reply expected.\n\n> Is this still open?\n&gt; Who owns it?\n\nRouting table follows.", True),
-    ("Archive backup. No reply expected.\n\n• Rule: ask why first? Always.", False),
-    ("Archive backup · No action needed, nothing expected back.", True),
-    ("FYI: deploy finished. No response needed.", True),
-    ("NO REPLY REQUIRED — archive only", True),
+    # Everything after the envelope is archived payload: its questions, "no acks" rules, "superseded"
+    # notes and imperatives are the archived file's words, not the sender's current request.
+    ("*ARCHIVE BACKUP*\n\nNo reply expected.\n\n• Rule: ask why first? Always.\n• ONLY REAL ANSWERS. No acks.", True),
+    ("*ARCHIVE BACKUP* · No action needed, nothing expected back.\n\n• Old routing rule: superseded.", True),
+    ("*SWITCHBOARD-ARCHIVE-20260928 · CHUNK 1/3* · Archive backup. No action needed, nothing expected back.", True),
+    ("*ARCHIVE BACKUP — AGENT-SWITCHBOARD-20260924-01*\n\nArchive only. No action requested, no response "
+     "expected.\n\nCurrent contents of the file.\n\n```---\nname: agent-switchboard\n```", True),
+    ("NO REPLY REQUIRED — ARCHIVE ONLY", True),
+    (f"<@{BOT_USER_ID}> *ARCHIVE COPY*\n\nNo reply expected.", True),
+    # No positive envelope (a capitalised ARCHIVE/BACKUP/WRAP-UP title line): never admitted, even when
+    # otherwise harmless. Narrower than rounds 1-3, which admitted these; they keep the notice.
+    ("Archive only. No action requested, no response expected.", False),
+    ("FYI: deploy finished. No response needed.", False),
+    ("NO REPLY REQUIRED — archive only", False),
+    ("Archive backup · No action needed, nothing expected back.", False),
+    ("*STATUS*\n\nNo reply expected.", False),
     (QUESTION, False),
     ("Is no action required on this one?", False),
     ("No reply expected? Tell me if there is.", False),
     ("Please explain what 'no action required' means in the card.", False),
-    ("a" * 400 + " No reply expected.", False),  # declaration buried past the header is not a header
+    ("*ARCHIVE*\n\n" + "a" * 400 + " No reply expected.", False),  # past the 300-char header
+    ("*ARCHIVE*\n\nIndex.\n\nNo reply expected.", False),  # outside the envelope
     ("", False),
-    ("Archive only. No action requested, no response expected.", True),
-    ("Old note, no action required, but please ack.", False),  # request in the same paragraph
-    ("Status: no reply expected", False),  # colon-led: a label introducing a mention
-    # An archive body far below the header may describe its own entries as superseded.
-    ("Archive backup. No reply expected.\n\n" + "entry " * 80 + "\n\nOld routing rule: superseded.", True),
+    ("*ARCHIVE*\n\nOld note, no action required, but please ack.", False),
+    ("*ARCHIVE*\n\nStatus: no reply expected", False),  # colon-led: a label introducing a mention
     *[(text, False) for text in MENTIONS],
 ])
 def test_declaration_rule(text, declared):
