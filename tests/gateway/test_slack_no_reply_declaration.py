@@ -68,6 +68,29 @@ async def test_question_with_silence_marker_still_gets_the_notice(adapter, monke
     assert response == _UNEXPECTED_SILENCE_REPLY and not is_intentional_silence_response(response)
 
 
+# Mentions, not declarations: someone else's words (quote, code) or a declaration the sender withdraws.
+# Each is a real request, so the model's [SILENT] must still surface the notice (review of t_6faaeff7).
+MENTIONS = [
+    "Please explain this quoted policy:\n> No reply expected.\nDoes it apply to me?",
+    "Please explain this quoted policy:\n&gt; No reply expected.",
+    "What does this template mean?\n```\nNo reply expected.\n```",
+    "Check this snippet\n```\nNo reply expected.",  # unclosed fence runs to the end
+    "Previous instruction: no reply expected. Ignore that; please confirm the pinned commit.",
+    "No reply expected.\n\nActually, scratch that - I need the pinned commit hash.",
+    "The header says `no action required`. Is that right",
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", MENTIONS, ids=["blockquote", "slack-escaped-quote", "fenced-code",
+                                                "unclosed-fence", "withdrawn-inline", "withdrawn-later",
+                                                "inline-code"])
+async def test_quoted_or_withdrawn_declaration_keeps_the_notice(adapter, monkeypatch, tmp_path, text):
+    msg_event = await _admit(adapter, text, "1790787600.000001")
+    assert msg_event.reply_expected is None
+    assert await _deliver_silent(monkeypatch, tmp_path, msg_event) == _UNEXPECTED_SILENCE_REPLY
+
+
 @pytest.mark.asyncio
 async def test_declaration_outranks_a_mention_but_not_a_command(adapter):
     mentioned = await _admit(adapter, f"<@{BOT_USER_ID}> FYI archive copy. No reply expected.", "1.1")
@@ -89,6 +112,12 @@ async def test_declaration_outranks_a_mention_but_not_a_command(adapter):
     ("Please explain what 'no action required' means in the card.", False),
     ("a" * 400 + " No reply expected.", False),  # declaration buried past the header is not a header
     ("", False),
+    ("Archive only. No action requested, no response expected.", True),
+    ("Old note, no action required, but please ack.", False),  # request in the same paragraph
+    ("Status: no reply expected", False),  # colon-led: a label introducing a mention
+    # An archive body far below the header may describe its own entries as superseded.
+    ("Archive backup. No reply expected.\n\n" + "entry " * 80 + "\n\nOld routing rule: superseded.", True),
+    *[(text, False) for text in MENTIONS],
 ])
 def test_declaration_rule(text, declared):
     assert slack_declares_no_reply_expected(text) is declared

@@ -86,21 +86,64 @@ _MODEL_PICKER_ACTION_IDS = (
 )
 
 
-# A sender's up-front "no reply expected" declaration (archive posts, FYI digests). The phrase must be a
-# whole clause of the message header: bounded by start/end or clause punctuation, never a question
-# ("Is no action required here?") or a quoted mention ("what 'no action required' means").
+# A sender's own, current, up-front "no reply expected" declaration (archive posts, FYI digests). Admission
+# is deliberately conservative, because a false positive silences a real request:
+# - the phrase is a whole clause starting in the first 300 chars, never after a colon (a label such as
+#   "Previous instruction:" or "The template says:" introduces a mention, not a declaration);
+# - code (fenced or inline), block quotes and quoted strings are someone else's words and never count;
+# - the paragraph holding it must not ask ("?") or request/withdraw ("please", "confirm", "ignore that",
+#   "previous", "template", ...), and no withdrawal ("ignore that", "scratch that") may precede it or
+#   follow within the next 300 chars.
 _NO_REPLY_HEADER_CHARS = 300
 _NO_REPLY_DECLARATION = re.compile(
-    r"(?:^|[.;:!,(\n*_·•—–-])\s*"
-    r"(?:no\s+(?:reply|response|answer|action)\s+(?:is\s+)?(?:expected|required|needed)"
+    r"(?:^|[.;!,(\n*_·•—–-])\s*"
+    r"(?:no\s+(?:reply|response|answer|action)\s+(?:is\s+)?(?:expected|required|needed|requested)"
     r"|nothing\s+(?:is\s+)?expected\s+back)"
     r"\s*(?=$|[.;!,)\n*_·•—–-])",
     re.IGNORECASE)
+_NO_REPLY_FOREIGN_TEXT = re.compile(
+    r"```.*?(?:```|\Z)"                          # fenced code, closed or running to the end
+    r"|`[^`\n]*`"                                # inline code
+    r"|^[ \t]*(?:>|&gt;).*$"                     # block quote line (Slack sends '>' as '&gt;')
+    r"|\"[^\"\n]*\"|“[^”\n]*”|‘[^’\n]*’"         # double / curly quotes
+    r"|(?<![\w])'[^'\n]*'(?![\w])",              # single quotes, not apostrophes
+    re.DOTALL | re.MULTILINE)
+_NO_REPLY_PARAGRAPH_VETO = re.compile(
+    r"\?|\b(?:please|pls|confirm|let\s+me\s+know|tell\s+me|can\s+you|could\s+you|would\s+you|need\s+you"
+    r"|reply\s+with|respond\s+with|previous(?:ly)?|earlier|former|formerly|old|used\s+to|template|example"
+    r"|instead|but|unless|except|however|until)\b",
+    re.IGNORECASE)
+_NO_REPLY_WITHDRAWAL = re.compile(
+    r"\b(?:ignore|disregard|scratch|forget|cancel|withdraw|retract|rescind|revoke)\s+"
+    r"(?:that|this|it|the\s+above|the\s+previous|the\s+earlier|what\s+i\s+said|my\s+(?:previous|earlier|last))\b"
+    r"|\b(?:withdrawn|rescinded|revoked|superseded|no\s+longer\s+applies)\b",
+    re.IGNORECASE)
+
+
+def _slack_blank_foreign_text(text: str) -> str:
+    """Blank code, quotes and quoted strings, keeping offsets and line breaks."""
+    return _NO_REPLY_FOREIGN_TEXT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
 
 
 def slack_declares_no_reply_expected(text: str) -> bool:
-    """Does the message header declare that no reply is expected? Lets a bare silence marker stand."""
-    return bool(text) and bool(_NO_REPLY_DECLARATION.search(text[:_NO_REPLY_HEADER_CHARS]))
+    """Does the sender currently declare, in the header of their own prose, that no reply is expected?
+    Lets a bare silence marker stand; any doubt keeps the gateway's visible fallback."""
+    if not text:
+        return False
+    own = _slack_blank_foreign_text(text)
+    for match in _NO_REPLY_DECLARATION.finditer(own):
+        if match.start() >= _NO_REPLY_HEADER_CHARS:
+            break
+        # A withdrawal before it or shortly after takes it back. Archive bodies further down may
+        # legitimately say "superseded" about their own content, so the scan stays local.
+        if _NO_REPLY_WITHDRAWAL.search(own, 0, match.end() + _NO_REPLY_HEADER_CHARS):
+            return False
+        start = own.rfind("\n\n", 0, match.start())
+        end = own.find("\n\n", match.end())
+        paragraph = own[start + 2 if start >= 0 else 0:end if end >= 0 else len(own)]
+        if not _NO_REPLY_PARAGRAPH_VETO.search(paragraph):
+            return True
+    return False
 
 
 def _slack_unfurl_kwargs(extra: Optional[Dict[str, Any]]) -> Dict[str, bool]:
