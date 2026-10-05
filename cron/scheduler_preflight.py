@@ -258,23 +258,38 @@ def _delivery_platform_routed_from_primary_gateway(platform_name: str) -> bool:
 
 
 class SharedRouteAdapters:
-    """Read-only adapter map for a credentialless satellite profile. ``get(platform, target)``
-    resolves the PRIMARY adapter iff the inbound route matcher (``ProfileRoute.matches``) accepts
-    the target; anything else (unmatched target, disabled route, other profile, or target-less
+    """Read-only adapter map for a satellite profile. ``get(platform, target)`` resolves the
+    PRIMARY adapter iff the inbound route matcher (``ProfileRoute.matches``) accepts the target;
+    anything else (unmatched target, disabled route, other profile, or target-less
     ``get(platform)``) is a miss — fail closed, never the default bot.
+
+    ``own_adapters`` are the satellite's OWN live adapters (a mixed satellite may run its own bot
+    on one platform and rely on host routes for another). A platform present there is ALWAYS
+    served by the satellite's own adapter, never the host bot; host routes only fill platforms
+    the satellite lacks. ``owned`` platforms (the profile's own bot, even while reconnecting)
+    never fall back to the host bot.
 
     See #101113.
     """
 
-    def __init__(self, primary_adapters, routes) -> None:
+    def __init__(self, primary_adapters, routes, own_adapters=None, owned=None) -> None:
         self._primary = dict(primary_adapters or {})
         self._routes = list(routes or [])
+        self.own_adapters = dict(own_adapters or {})
+        # Platforms this profile's own bot owns even while it is disconnected/reconnecting: the
+        # host bot never substitutes for them (fail closed until the own adapter is back).
+        self._owned = {str(getattr(p, "value", p)).lower() for p in (owned or ())}
 
     def __bool__(self) -> bool:
-        return bool(self._primary) and bool(self._routes)
+        return bool(self.own_adapters) or (bool(self._primary) and bool(self._routes))
 
     def get(self, platform, target=None, default=None):
+        own = self.own_adapters.get(platform)
+        if own is not None:
+            return own
         if not target:
+            return default
+        if str(getattr(platform, "value", platform)).lower() in self._owned:
             return default
         adapter = self._primary.get(platform)
         if adapter is None:
@@ -306,6 +321,26 @@ def has_credential_platform(adapters, owned=None) -> bool:
     disconnects and reconnects, and borrowing the primary meanwhile would send through the wrong bot."""
     return bool(owned) or any(
         getattr(platform, "value", platform) != "local" for platform in adapters or ())
+
+
+def satellite_delivery_adapters(own_adapters, primary_adapters, routes=None, owned=None):
+    """Delivery adapter view for a multiplexed satellite profile (the ticker and the restart-safe
+    drain both use this so they cannot drift). Call inside the satellite's profile scope when
+    ``routes`` is omitted: they are the live host's ``profile_routes`` targeting this profile.
+
+    Returns ``own_adapters`` unchanged when there is nothing to route through the host (no primary
+    adapters or no routes); otherwise a ``SharedRouteAdapters`` that serves the satellite's own
+    platforms from its own adapters and the rest only through exact enabled host routes.
+    ``owned`` is the profile's ``_profile_bot_platforms`` entry: a platform whose own bot is
+    reconnecting is absent from ``own_adapters`` but must still never borrow the host bot.
+    """
+    if not primary_adapters:
+        return own_adapters
+    if routes is None:
+        routes = _primary_profile_routes_for_current_home()
+    if not routes:
+        return own_adapters
+    return SharedRouteAdapters(primary_adapters, routes, own_adapters, owned=owned)
 
 
 def _preflight_check_delivery(job: dict) -> Optional[str]:
