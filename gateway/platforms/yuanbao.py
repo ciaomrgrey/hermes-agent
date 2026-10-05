@@ -2551,14 +2551,19 @@ class MessageSender:
     @staticmethod
     def strip_cron_wrapper(content: str) -> str:
         """Strip the scheduler's cron header/footer wrapper; unchanged when the shape doesn't match."""
-        if not content.startswith("Cronjob Response: "):
+        if content.startswith("Cronjob Response: "):
+            divider, job_marker = "\n-------------\n\n", "\n(job_id: "
+        elif content.startswith("`Cronjob:` "):  # cron.wrap_style: markdown
+            divider, job_marker = "\n`-------------`\n\n", "\n`(job_id: "
+        else:
             return content
-        divider = "\n-------------\n\n"
         footer_prefix = '\n\nTo stop or manage this job, send me a new message (e.g. "stop reminder '
         divider_pos = content.find(divider)
-        footer_pos = content.rfind(footer_prefix)
-        if divider_pos < 0 or footer_pos < 0 or footer_pos <= divider_pos or "\n(job_id: " not in content[:divider_pos]:
+        if divider_pos < 0 or job_marker not in content[:divider_pos]:
             return content
+        footer_pos = content.rfind(footer_prefix)
+        if footer_pos <= divider_pos:  # cron.wrap_footer: false -> header-only wrapper
+            footer_pos = len(content)
         return content[divider_pos + len(divider):footer_pos].strip() or content
 
     async def close(self) -> None:
