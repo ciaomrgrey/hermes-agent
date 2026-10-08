@@ -2225,6 +2225,18 @@ def _summary_text(agent, response, **normalize_kwargs) -> str:
     return (normalized.content or "").strip()
 
 
+def _summary_request_middleware(agent, request: dict, api_request_id: str) -> dict:
+    from hermes_cli.middleware import apply_request_middleware_or_original
+
+    return apply_request_middleware_or_original(
+        request, request_kind="iteration_summary", api_request_id=api_request_id,
+        task_id=getattr(agent, "_current_task_id", None) or getattr(agent, "task_id", None),
+        **{key: getattr(agent, key, None) for key in (
+            "session_id", "platform", "model", "provider", "api_mode", "base_url",
+        )},
+    )
+
+
 def _codex_summary_attempt(agent, api_messages: list, api_request_id: str):
     def _attempt(retry_count: int) -> str:
         codex_kwargs = agent._build_api_kwargs(api_messages)
@@ -2233,6 +2245,7 @@ def _codex_summary_attempt(agent, api_messages: list, api_request_id: str):
         codex_kwargs.pop("tools", None)
         codex_kwargs.pop("tool_choice", None)
         codex_kwargs.pop("parallel_tool_calls", None)
+        codex_kwargs = _summary_request_middleware(agent, codex_kwargs, api_request_id)
         return _summary_text(agent, agent._run_codex_stream(codex_kwargs))
     return _attempt
 
@@ -2244,6 +2257,7 @@ def _anthropic_summary_attempt(agent, api_messages: list, api_request_id: str):
             reasoning_config=agent.reasoning_config, is_oauth=agent._is_anthropic_oauth,
             preserve_dots=agent._anthropic_preserve_dots(), base_url=getattr(agent, "_anthropic_base_url", None))
         ant_kw = _merge_nous_portal_messages_extra_body(agent, ant_kw)
+        ant_kw = _summary_request_middleware(agent, ant_kw, api_request_id)
         response = _managed_summary_call(agent, api_request_id, ant_kw, agent._anthropic_messages_create, retry_count=retry_count)
         return _summary_text(agent, response, strip_tool_prefix=agent._is_anthropic_oauth)
     return _attempt
@@ -2262,7 +2276,7 @@ def _chat_summary_attempt(agent, api_messages: list, api_request_id: str):
     def _attempt(retry_count: int) -> str:
         summary_client = agent._ensure_primary_openai_client(reason="iteration_limit_summary_retry" if retry_count else "iteration_limit_summary")
         response = _managed_summary_call(
-            agent, api_request_id, summary_kwargs,
+            agent, api_request_id, _summary_request_middleware(agent, summary_kwargs, api_request_id),
             lambda request: summary_client.chat.completions.create(**bypass_chat_sdk_request_transform(request, summary_client)),
             retry_count=retry_count)
         return _summary_text(agent, response)
