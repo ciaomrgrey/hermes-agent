@@ -539,10 +539,11 @@ def apply_llm_output_transform(
     if held:
         rewrite = _run_held_transforms(held, payload, logger)
     else:
-        # First hook to return a string wins; None/empty leaves the text unchanged.
+        # First hook to return a string wins; None leaves the text unchanged.
+        # Empty is a valid stripping result (e.g. a model-forged footer-only reply).
         rewrite = next((r for r in _invoke_hook_safely("transform_llm_output", logger, **payload)
-                        if isinstance(r, str) and r), None)
-    if rewrite:
+                        if isinstance(r, str)), None)
+    if rewrite is not None:
         pre_transform, final_response, transformed = final_response, rewrite, True
     agent._llm_output_transform = (turn_id, transformed, pre_transform)
     return final_response, transformed, pre_transform
