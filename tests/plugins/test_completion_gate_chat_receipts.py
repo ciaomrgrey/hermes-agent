@@ -3,6 +3,7 @@ import json
 import sqlite3
 
 import pytest
+from tests.completion_gate_support import no_directive
 
 
 @pytest.fixture(autouse=True)
@@ -605,12 +606,12 @@ def test_plugin_routes_receipt_failure_through_existing_block_and_replay_dedupes
     assert blocked[0]["action"] == "block"
     assert "Send the missing authorized line" in blocked[0]["message"]
     receipt = manager.invoke_hook("before_turn_end", turn_id="two", messages=messages(), **kwargs)
-    assert receipt == []
+    assert no_directive(receipt)
     event = loaded.Gate({"enabled": True, "db_path": str(tmp_path / "gate.db")}, extract=lambda _: []).events()[-1]
     assert event["claims"][0]["subtype"] == "missing_chat_telegram_receipt"
     assert event["claims"][0]["source_identity"]["request_id"] == source()["request_id"]
     # Compacted replay can use the durable exact-source receipt binding; it never resends.
-    assert manager.invoke_hook("before_turn_end", turn_id="three", messages=[], **kwargs) == []
+    assert no_directive(manager.invoke_hook("before_turn_end", turn_id="three", messages=[], **kwargs))
     with sqlite3.connect(board) as db:
         db.execute("UPDATE tasks SET status='archived' WHERE id='t_ab12cd34'")
     stale = manager.invoke_hook("before_turn_end", turn_id="four", messages=[], **kwargs)
@@ -646,7 +647,7 @@ def test_plugin_recovers_fully_compacted_receipt_before_first_verdict(
         task_id="task", turn_id="first", source_identity=source(),
         user_message="Lars decided: apply the approved change now; confirm to me on Telegram.", messages=[],
     )
-    assert result == []
+    assert no_directive(result)
     events = loaded.Gate(
         {"enabled": True, "db_path": str(tmp_path / "gate.db")}, extract=lambda _: [],
     ).events()

@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from tests.completion_gate_support import no_directive
 
 
 SOURCE_TS = time.time()
@@ -190,12 +191,12 @@ def test_receipt_send_uses_native_helper_persists_and_satisfies_restarted_hook(t
     monkeypatch.setattr(loaded, "bounded_extract", lambda *_a, **_k: [])
     import hermes_constants
     monkeypatch.setattr(hermes_constants, "profile_name_for_home", lambda _home: "generalist")
-    assert manager.invoke_hook(
+    assert no_directive(manager.invoke_hook(
         "before_turn_end", final_response=f"Applied {CARD}", session_id=SOURCE_SESSION,
         task_id="task", turn_id="after-restart", messages=[], user_message=f"Lars decided: apply {CARD} now; confirm to me on Telegram.",
         source_identity={"platform": "slack", "channel_id": "C0BTEFMAAJX",
                          "request_id": SOURCE_ID, "timestamp": SOURCE_TS, "internal": False},
-    ) == []
+    ))
     event = loaded.Gate(
         {"enabled": True, "db_path": str(gate)}, extract=lambda _answer: [],
     ).events()[-1]
@@ -707,7 +708,7 @@ def test_cached_receipt_revalidates_exact_source_and_action(tmp_path, monkeypatc
     })))
     assert cli["handler_fn"](_args(parser, message_file))["status"] == "mirrored"
     hook = _enable_hook(loaded, manager, state, gate, monkeypatch)
-    assert hook("initial") == []
+    assert no_directive(hook("initial"))
 
     with sqlite3.connect(state) as db:
         if mutation == "missing":
@@ -784,7 +785,7 @@ def test_cli_uses_real_native_helper_and_mirror_with_only_transport_stubbed(tmp_
     assert transport_calls == [("123456789", message)]
     assert native_state.get_messages(DESTINATION_SESSION)[-1]["content"] == message
     assert _receipt_rows(gate)[-1][-1] == "mirrored"
-    assert _enable_hook(loaded, manager, state, gate, monkeypatch)("native-helper") == []
+    assert no_directive(_enable_hook(loaded, manager, state, gate, monkeypatch)("native-helper"))
     native_state.close()
 
 

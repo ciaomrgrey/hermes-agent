@@ -18,6 +18,19 @@ DEFAULTS = {"enabled": False, "max_blocks": 2, "check_timeout_seconds": 60, "max
             "state_db_path": "", "kanban_db_path": ""}
 
 
+def with_outcome(verdict, evaluated):
+    """Attach the evaluated verdict as display-only ``gate_outcome``.
+
+    Hosts honour only ``{"action": "block", "message": ...}``; a dict without ``action`` is
+    ignored by every core, so attaching the outcome to a delivery cannot change control flow.
+    """
+    if evaluated is None:
+        return verdict
+    if isinstance(verdict, dict):
+        return {**verdict, "gate_outcome": evaluated}
+    return {"gate_outcome": evaluated}
+
+
 def register(ctx):
     from .cli import register_cli
     register_cli(ctx)
@@ -100,9 +113,10 @@ def register(ctx):
             gate = Gate(settings, extract=extract, check=check,
                         escalate=lambda event: send(event, deadline=deadline))
             # Suppress only a gate-authored, durably recorded inbound. A magic prefix is not enough.
-            return gate.evaluate(final_response, profile=profile, task_id=chain, turn_id=turn_id,
-                                 already_blocked=already_blocked, can_continue=can_continue,
-                                 deadline=deadline, user_message=user_message)
+            verdict = gate.evaluate(final_response, profile=profile, task_id=chain, turn_id=turn_id,
+                                    already_blocked=already_blocked, can_continue=can_continue,
+                                    deadline=deadline, user_message=user_message)
+            return with_outcome(verdict, gate.last_outcome)
         except Exception as exc:
             logger.warning("Completion gate adapter failed open %s", failure(exc))
             return None

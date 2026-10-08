@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 from test_metrics import pkg, Gate
+from tests.completion_gate_support import no_directive
 from metricsgate.diagnostics import ExtractionError, sanitize
 
 
@@ -27,7 +28,7 @@ class DeadlineDiagnostics(unittest.TestCase):
                         now[0] = 1060.001 if expired else 1059.999
                         raise error
                     with patch.object(pkg.time, 'monotonic', side_effect=lambda: now[0]), patch.object(pkg, 'bounded_extract', side_effect=extract):
-                        self.assertIsNone(ctx.register_hook.call_args.args[1]('PRIVATE', session_id='offline', turn_id='one'))
+                        self.assertTrue(no_directive(ctx.register_hook.call_args.args[1]('PRIVATE', session_id='offline', turn_id='one')))
                     g = Gate(config, extract=lambda _: [])
                     rows = g.events()
                     self.assertEqual([r['action'] for r in rows], ['gate_error'])

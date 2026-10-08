@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 from test_metrics import pkg, Gate
+from tests.completion_gate_support import no_directive
 
 class Deadline(unittest.TestCase):
     def test_expired_event_scan_is_audited_even_when_empty(self):
@@ -17,7 +18,7 @@ class Deadline(unittest.TestCase):
                 now[0] += 61
                 return []
             with patch.object(pkg.time, 'monotonic', side_effect=lambda: now[0]), patch.object(Gate, 'events', events), patch.object(pkg, 'bounded_extract') as extract:
-                self.assertIsNone(ctx.register_hook.call_args.args[1]('private', session_id='offline', turn_id='scan', user_message='hello'))
+                self.assertTrue(no_directive(ctx.register_hook.call_args.args[1]('private', session_id='offline', turn_id='scan', user_message='hello')))
                 extract.assert_not_called()
             rows = Gate(config, extract=lambda _: []).events()
             self.assertEqual([r['action'] for r in rows], ['gate_error'])
@@ -79,7 +80,7 @@ class Deadline(unittest.TestCase):
                 now[0] += 31
                 return 'unverified', 'check_unavailable'
             with patch.object(pkg.time, 'monotonic', side_effect=lambda: now[0]), patch.object(pkg, 'bounded_extract', side_effect=extract), patch.object(pkg, 'bounded_check', side_effect=check):
-                self.assertIsNone(callback('private', session_id='offline', turn_id='one'))
+                self.assertTrue(no_directive(callback('private', session_id='offline', turn_id='one')))
             rows = Gate(config, extract=lambda _: []).events()
             self.assertEqual([r['action'] for r in rows], ['gate_error'])
             self.assertEqual(rows[0]['diagnostics']['cause'], 'aux_timeout')

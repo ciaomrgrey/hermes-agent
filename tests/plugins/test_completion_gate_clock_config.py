@@ -18,6 +18,7 @@ import types
 import pytest
 
 from hermes_cli import plugins
+from tests.completion_gate_support import no_directive
 
 
 class Clock:
@@ -88,7 +89,7 @@ def test_defaults_expose_only_the_single_clock_setting(tmp_path, monkeypatch):
 def test_configured_60_gives_60s_deadline_and_30s_extraction_is_not_cut(tmp_path, monkeypatch, settings):
     manager, loaded, clock, seen = _load(tmp_path, monkeypatch, settings)
     started = clock.now
-    assert _invoke(manager) == []
+    assert no_directive(_invoke(manager))
     assert seen["extract_deadline"] == started + 60
     assert seen["extract_timeout_kwarg"] is None  # no legacy per-phase cap
     assert seen["check_deadline"] == started + 60  # same clock, not a fresh per-phase budget
@@ -106,7 +107,7 @@ def test_check_timeout_seconds_is_actually_read(tmp_path, monkeypatch):
     """
     manager, loaded, clock, seen = _load(tmp_path, monkeypatch, {"check_timeout_seconds": 20})
     started = clock.now
-    assert _invoke(manager) == []  # fail-open delivery
+    assert no_directive(_invoke(manager))  # fail-open delivery
     assert seen["extract_deadline"] == started + 20
     assert "check_deadline" not in seen
     event = _last_event(loaded, tmp_path)

@@ -68,6 +68,35 @@ class DeadlineConnection(sqlite3.Connection):
         return self._bounded(sqlite3.Connection.commit)
 
 
+def _failed_kinds(row):
+    """Fixed artefact kinds of a block row's failed claims (no text, refs or hashes)."""
+    try:
+        claims = json.loads(row["claims"] or "[]")
+    except (TypeError, ValueError):
+        return []
+    return sorted({c.get("artefact_kind", "unknown") for c in claims
+                   if isinstance(c, dict) and c.get("verdict") == "failed"})
+
+
+def outcome(action, results=(), block_count=0, escalation_reason=None, event_id=None, cause=None,
+            history=(), turn=None):
+    """The EVALUATED verdict for this candidate, for display-only consumers (append_turn_footer).
+
+    ``action`` is always one of EVALUATED_ACTIONS, never escalation_*/advice_* bookkeeping.
+    ``block_count`` is the chain retry budget; ``turn_blocks`` counts blocks of THIS turn only
+    (rework reuses the turn_id), so an earlier turn's block never reads as a rewrite now.
+    Carries counts and fixed identifiers only: no claim text, references, hashes or mismatches.
+    """
+    assert action in EVALUATED_ACTIONS
+    verdicts = Counter(r.get("verdict") for r in results if isinstance(r, dict))
+    turn_blocks = [r for r in history if turn is not None and r["turn_id"] == turn and r["action"] == "block"]
+    last = max(turn_blocks, key=lambda r: r["id"]) if turn_blocks else None
+    return {"action": action, "claims": {str(k): v for k, v in sorted(verdicts.items(), key=str)},
+            "claim_count": sum(verdicts.values()), "block_count": int(block_count),
+            "turn_blocks": len(turn_blocks), "last_block_failed_kinds": _failed_kinds(last) if last else [],
+            "escalation_reason": escalation_reason, "event_id": event_id, "cause": cause}
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
 
@@ -89,6 +118,8 @@ class Gate:
         from .checks import bounded_check
         self.check = check or bounded_check
         self.path = Path(settings["db_path"])
+        # Evaluated verdict of the last evaluate() call on this instance; None = not evaluated.
+        self.last_outcome = None
 
     @contextmanager
     def connect(self):
@@ -204,6 +235,7 @@ class Gate:
 
     def evaluate(self, answer, *, profile, task_id, turn_id, already_blocked=False, can_continue=True,
                  deadline=None, user_message=None):
+        self.last_outcome = None
         if self.settings.get("enabled") is not True:
             return None
         if _evaluating.get():
@@ -239,11 +271,16 @@ class Gate:
             try:
                 with self.connect() as db:
                     count = sum(r["action"] == "block" for r in self._history(db, profile, task_id))
-                    self._append(db, profile, task_id, turn_id, "gate_error",
-                                 [{"verdict": "unverified", "mismatch": "gate_error"}], count,
-                                 diagnostics=diagnostics)
+                    errored = [{"verdict": "unverified", "mismatch": "gate_error"}]
+                    event_id = self._append(db, profile, task_id, turn_id, "gate_error", errored, count,
+                                            diagnostics=diagnostics)
+                    self.last_outcome = outcome("gate_error", errored, count, event_id=event_id,
+                                                cause=sanitize(diagnostics)["cause"],
+                                                history=self._history(db, profile, task_id), turn=turn_id)
             except Exception:
                 logger.warning("Completion gate audit unavailable; delivery still allowed")
+                self.last_outcome = outcome("gate_error", [{"verdict": "unverified"}],
+                                            cause=sanitize(diagnostics)["cause"])
             return None
         finally:
             _deadline.reset(clock_token)
@@ -258,8 +295,10 @@ class Gate:
             history = self._history(db, profile, task)
             ensure_time()
             if already_blocked or any(r["turn_id"] == turn and r["action"] == "block" for r in history):
-                self._append(db, profile, task, turn, "reentrant_pass", [],
-                             sum(r["action"] == "block" for r in history))
+                count = sum(r["action"] == "block" for r in history)
+                event_id = self._append(db, profile, task, turn, "reentrant_pass", [], count)
+                self.last_outcome = outcome("reentrant_pass", (), count, event_id=event_id,
+                                            history=history, turn=turn)
                 return None
         # No database lock is held during extraction or I/O.
         results, failures = [], []
@@ -287,7 +326,7 @@ class Gate:
             count = len(blocks)
             prior = {h for r in blocks for h in json.loads(r["reason_hashes"])}
             hashes = [f[0] for f in failures]
-            action, escalation = "deliver", None
+            action, escalation, reason = "deliver", None, None
             if any(r["turn_id"] == turn for r in blocks):
                 action = "reentrant_pass"
             elif failures:
@@ -303,6 +342,9 @@ class Gate:
                         escalation["reason"] = "turn_budget_exhausted"
                     if advice_failed:
                         escalation.update(reason="advice_failed_again", target="gurney")
+                    # Captured before dedup: a repeat escalation is not re-sent but the
+                    # evaluated fail_open still has this reason.
+                    reason = escalation["reason"]
                     if any(json.loads(r["escalation"]) and json.loads(r["escalation"]).get("reason") == escalation["reason"] for r in history):
                         escalation = None
                 else:
@@ -315,6 +357,7 @@ class Gate:
             event_id = self._append(db, profile, task, turn,
                                     "escalation_pending" if pending else action,
                                     [] if pending else results, count, hashes, escalation)
+            evaluated_id = None if pending else event_id
         if pending:
             try:
                 ensure_time()
@@ -327,8 +370,12 @@ class Gate:
                 ensure_time()
                 status = "failed"
             with self.connect() as db:
-                self._append(db, profile, task, turn, action, results, count, hashes)
+                evaluated_id = self._append(db, profile, task, turn, action, results, count, hashes)
                 self._append(db, profile, task, turn, "escalation_" + status, [], count)
+        # Blocks recorded before this evaluation; a block written now is not a past rewrite.
+        prior_rows = [r for r in history if r["action"] == "block"]
+        self.last_outcome = outcome(action, results, count, reason, evaluated_id,
+                                    history=prior_rows, turn=turn)
         if action == "block":
             return {"action": "block", "message": "Completion evidence mismatch:\n" + "\n".join(
                 f"{claim['claim']} [{claim['artefact_ref']}]: {mismatch}" for _, claim, mismatch in failures

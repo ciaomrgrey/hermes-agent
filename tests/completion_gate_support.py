@@ -38,3 +38,16 @@ def load():
 def module(name):
     plugin = load()
     return sys.modules[plugin.__name__ + '.' + name]
+
+
+def no_directive(value):
+    """Delivery contract: no block directive. A hook result is None or exactly
+    ``{"gate_outcome": {...}}`` (display-only, ignored by control flow); a list of
+    results (``invoke_hook``) must contain only such entries."""
+    def single(item):
+        return item is None or (isinstance(item, dict) and set(item) == {"gate_outcome"}
+                                and isinstance(item["gate_outcome"], dict)
+                                and item["gate_outcome"].get("action") != "block")
+    if isinstance(value, list):
+        return all(single(item) and item is not None for item in value)
+    return single(value)

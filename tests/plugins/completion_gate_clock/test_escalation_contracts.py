@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 from test_metrics import pkg, Gate
+from tests.completion_gate_support import no_directive
 
 
 class EscalationContracts(unittest.TestCase):
@@ -30,7 +31,7 @@ class EscalationContracts(unittest.TestCase):
                 now[0] = 1060
                 raise TimeoutError('PRIVATE MUST NOT PERSIST')
             with patch.object(pkg.time, 'monotonic', side_effect=lambda: now[0]), patch.object(pkg, 'bounded_extract', side_effect=extract), patch.object(pkg, 'bounded_check', side_effect=check), patch.object(pkg, 'send', side_effect=send) as sent:
-                self.assertIsNone(callback('private', session_id='test', turn_id='one', can_continue=False))
+                self.assertTrue(no_directive(callback('private', session_id='test', turn_id='one', can_continue=False)))
                 self.assertEqual(sent.call_count, 1)
             g = Gate(settings, extract=lambda _: [claim], check=lambda _: ('failed', 'missing'), escalate=Mock())
             self.assertEqual([r['action'] for r in g.events()], ['escalation_pending', 'gate_error'])
