@@ -455,7 +455,8 @@ Payload fields below are the exact event-specific fields supplied by each call s
 | `pre_transcription` | Transform | Fired by the STT dispatcher after provider resolution and before any backend (built-in, command-type, or plugin-registered) is invoked; dict results are applied in registration order, last-writer-wins per field (`prompt`, `language`, `model`; `file_path` is read-only). | `file_path`, `provider`, `model`, `language`, `prompt`, `source` | The final prompt is uploaded to the configured STT provider with the audio — keep secrets out of hook returns. |
 | `pre_llm_call` | Directive/control | Once per turn before the loop; all valid string/`{"context": ...}` returns are joined and injected into the user message. | `session_id`, `task_id`, `turn_id`, `user_message`, `conversation_history`, `is_first_turn`, `model`, `platform`, `parent_session_id`, `sender_id` | Full user message and conversation history. |
 | `post_llm_call` | Observer | Successful, non-interrupted turn finalization; return ignored. | `session_id`, `task_id`, `turn_id`, `user_message`, `assistant_response`, `conversation_history`, `model`, `platform` | Full prompt, response, and history. |
-| `transform_llm_output` | Transform | Before `post_llm_call` and final delivery; first non-empty string replaces the response. | `response_text`, `session_id`, `model`, `platform` | Full final assistant text. |
+| `transform_llm_output` | Transform | Before `post_llm_call` and final delivery; first string replaces the response (including an explicit empty stripping result); `None` is no-op. | `response_text`, `session_id`, `model`, `platform`, `turn_id`, `prompt_tokens`, `context_threshold_tokens` | Full final assistant text. |
+| `append_turn_footer` | Transform (append-only) | After `before_turn_end` accepted the final text, before persistence/delivery; first non-blank string is appended verbatim. Python only. | `response_text`, `session_id`, `model`, `platform`, `turn_id`, `gate_outcome`, `prompt_tokens`, `context_threshold_tokens` | Full final assistant text. |
 | `before_turn_end` | Directive/control | Before candidate persistence/delivery; first valid block requests same-loop rework, at most once per turn. Python only, fail-open on error/timeout. Registration defers text streaming. | `final_response`, `session_id`, `task_id`, `turn_id`, `platform`, `user_message`, `messages`, `source_identity`, `already_blocked`, `can_continue` | Full candidate, original user text, turn transcript (including tool arguments/results), and gateway source routing identifiers. |
 | `pre_verify` | Directive/control | At the bounded edited-code verify gate; first valid continue/block-stop directive keeps the turn going. | `session_id`, `platform`, `model`, `coding`, `attempt`, `final_response`, `changed_paths` | Draft response and changed paths. |
 | `pre_api_request` | Observer | Per provider attempt, immediately before the request; return ignored. | `task_id`, `turn_id`, `api_request_id`, `session_id`, `user_message`, `conversation_history`, `platform`, `model`, `provider`, `base_url`, `api_mode`, `api_call_count`, `retry_count`, `request_messages`, `message_count`, `tool_count`, `approx_input_tokens`, `request_char_count`, `max_tokens`, `started_at`, `middleware_trace`, `request` | High sensitivity: legacy `user_message`, `conversation_history`, and `request_messages` are intentionally raw; prefer sanitized `request`. |
@@ -832,6 +833,8 @@ purpose-specific evidence.
 
 Return `None` to deliver, or `{"action": "block", "message": "Exact mismatch and repair request"}`
 to continue the same conversation loop before final-answer persistence/delivery.
+A result may also carry `"gate_outcome": {...}` (JSON-safe, display only) describing the evaluated
+verdict; it is passed to `append_turn_footer` and never changes control flow.
 The first valid block wins. At most one block is honored per turn, and only while
 iteration budget remains. The rejected answer and synthetic repair request are
 available to the next model iteration but excluded from persisted/returned history.
@@ -853,6 +856,31 @@ Generic hook limits do not replace a plugin's persistent chain-level retry limit
 reason deduplication, evidence deadlines, or escalation policy. See the opt-in
 `external/completion-gate/README.md` distribution for one concrete consumer;
 install it in the native user-plugin directory, never as a bundled core plugin.
+
+### `append_turn_footer`
+
+Fires **once per turn** after `before_turn_end` accepted the final candidate (or immediately when no
+gate is registered) and **before** the assistant row is first persisted. The callback returns only a
+suffix; Hermes concatenates it after the exact bytes the gate evaluated, so it cannot change what the
+gate checked, and the stored/replayed row equals the delivered text. The suffix is unchecked,
+non-claim metadata (a provenance footer, a context meter). Streaming surfaces deliver it like an
+append-only `transform_llm_output`. The suffix is part of the stored assistant row: a plugin that
+must keep it out of later provider requests strips it in its own `llm_request` middleware.
+
+Only normal text turns get a footer. Stream-recovered, budget-exhausted and error-summary replies
+reach the finalizer without having passed the gate (their audit-only `before_turn_end` runs after
+persistence), so `append_turn_footer` does not fire for them and they are delivered unchanged.
+
+```python
+def footer(response_text, gate_outcome, prompt_tokens, context_threshold_tokens, model, **kwargs) -> str | None:
+    ...
+```
+
+`gate_outcome` is the `gate_outcome` mapping a `before_turn_end` callback returned for this turn and
+this exact text (JSON-safe; display only — it never affects control flow), else `None` (no gate
+registered, or mismatched text). `prompt_tokens` / `context_threshold_tokens` as for
+`transform_llm_output`. First non-blank string wins; `None`, blank strings and exceptions leave the
+reply unchanged. Not available to shell hooks.
 
 ### `pre_verify`
 
@@ -1634,6 +1662,9 @@ def my_callback(
 | `session_id` | `str` | Session ID for this conversation (may be empty for one-shot runs). |
 | `model` | `str` | Model name that produced the response (e.g. `anthropic/claude-sonnet-4.6`). |
 | `platform` | `str` | Delivery platform (`cli`, `telegram`, `discord`, …; empty when unset). |
+| `turn_id` | `str` | Per-turn identity. |
+| `prompt_tokens` | `int \| None` | The context engine's latest real prompt-token reading (`last_prompt_tokens`, the figure compared against the threshold); `None` when unknown. |
+| `context_threshold_tokens` | `int \| None` | The context engine's computed compaction trigger (`threshold_tokens`); `None` when unknown. Never recompute it from config. |
 
 **Return value:** Non-empty `str` to replace the response text, `None` or empty string to leave it unchanged. **First non-empty string wins** when multiple plugins register. Unlike the tool and terminal transforms, an empty string is not accepted as a replacement.
 
