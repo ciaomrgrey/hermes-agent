@@ -26,7 +26,7 @@ def finish(a, text, messages):
         api_call_count=1, user_message="do work", active_system_prompt="unchanged", final_response=None,
         _turn_exit_reason=None, _preflight_compression_blocked=False, codex_ack_continuations=0,
         truncated_response_parts=[], length_continue_retries=0, _pending_verification_response=None,
-        _pending_verification_response_previewed=False)
+        _pending_verification_response_previewed=False, effective_task_id="task")
 
 
 def test_hook_blocks_once_with_narrow_callback_and_no_premature_flush(monkeypatch):
