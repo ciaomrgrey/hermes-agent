@@ -27,7 +27,7 @@ def _route_cfg(profile, platform="slack", chat_id="C0BVBHM4AS0", **extra):
 
 def _write_host(home: Path, routes, token=HOST_TOKEN):
     home.mkdir(parents=True, exist_ok=True)
-    import yaml
+    import hermes_yaml as yaml
     (home / "config.yaml").write_text(yaml.safe_dump(
         {"gateway": {"multiplex_profiles": True, "profile_routes": routes},
          "platforms": {"slack": {"extra": {"unfurl_links": False}}}}), encoding="utf-8")
