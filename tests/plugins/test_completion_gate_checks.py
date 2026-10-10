@@ -125,3 +125,61 @@ def test_parse_claims_overflow_still_raises_without_truncation():
             extraction.parse_claims(json.dumps([item] * n), max_claims=20)
     with pytest.raises(ValueError, match="invalid_claim_list"):
         extraction.parse_claims(json.dumps([item] * 8), max_claims=7)
+
+
+def _yaml_claim(path, expected):
+    return {"path": str(path), "key": "agent.enabled", "expected": expected}
+
+
+def test_yaml_config_claims_verify_with_the_runtime_parser(tmp_path):
+    """v0.21.6 ships hermes_yaml without PyYAML; older engines ship PyYAML only. Both verify."""
+    checks = module("checks")
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("agent:\n  enabled: true\n")
+    assert checks.check("config", _yaml_claim(cfg, True)) == ("reproduced", "")
+    assert checks.check("config", _yaml_claim(cfg, False)) == ("failed", "config value mismatch")
+    # The production path: the probe runs in a child interpreter.
+    claim = {"artefact_kind": "config", "artefact_ref": _yaml_claim(cfg, True)}
+    assert checks.bounded_check(claim) == ("reproduced", "")
+    claim["artefact_ref"]["expected"] = False
+    assert checks.bounded_check(claim) == ("failed", "config value mismatch")
+    cron = tmp_path / "jobs.yml"
+    cron.write_text("jobs:\n  - id: abc\n")
+    assert checks.check("cron", {"path": str(cron), "id": "abc"})[0] == "reproduced"
+    assert checks.check("cron", {"path": str(cron), "id": "zzz"})[0] == "failed"
+
+
+def test_yaml_documents_are_safe_loaded(tmp_path):
+    checks = module("checks")
+    marker = tmp_path / "PWNED"
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(f"agent: !!python/object/apply:os.system ['touch {marker}']\n")
+    assert checks.check("config", {"path": str(cfg), "key": "agent", "expected": 0})[0] == "unverified"
+    assert not marker.exists()
+
+
+def test_hermes_yaml_preferred_then_pyyaml(monkeypatch):
+    checks = module("checks")
+    import sys, types
+    hy, py = types.ModuleType("hermes_yaml"), types.ModuleType("yaml")
+    hy.safe_load, py.safe_load = (lambda text: "hermes_yaml"), (lambda text: "pyyaml")
+    monkeypatch.setitem(sys.modules, "hermes_yaml", hy)
+    monkeypatch.setitem(sys.modules, "yaml", py)
+    assert checks.yaml_safe_load()("") == "hermes_yaml"
+    monkeypatch.setitem(sys.modules, "hermes_yaml", None)
+    assert checks.yaml_safe_load()("") == "pyyaml"
+
+
+def test_yaml_claims_unverified_when_no_parser_is_importable(tmp_path, monkeypatch):
+    checks = module("checks")
+    import sys
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("agent:\n  enabled: true\n")
+    monkeypatch.setitem(sys.modules, "hermes_yaml", None)
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    for expected in (True, False):
+        assert checks.check("config", _yaml_claim(cfg, expected)) == ("unverified", "yaml_parser_unavailable")
+    assert checks.check("cron", {"path": str(cfg), "id": "x"}) == ("unverified", "yaml_parser_unavailable")
+    as_json = tmp_path / "config.json"
+    as_json.write_text('{"agent":{"enabled":true}}')
+    assert checks.check("config", _yaml_claim(as_json, True)) == ("reproduced", "")

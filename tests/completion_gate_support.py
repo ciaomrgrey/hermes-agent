@@ -16,11 +16,14 @@ def install(home):
 def load():
     from hermes_constants import get_hermes_home
     from hermes_cli import plugins
-    import yaml
+    try:
+        from hermes_yaml import safe_load
+    except ImportError:
+        from yaml import safe_load
     home = get_hermes_home()
     target = install(home)
     config = home / 'config.yaml'
-    cfg = yaml.safe_load(config.read_text()) if config.exists() else {}
+    cfg = safe_load(config.read_text()) if config.exists() else {}
     cfg = cfg or {}
     enabled = cfg.setdefault('plugins', {}).setdefault('enabled', [])
     if 'completion-gate' not in enabled:

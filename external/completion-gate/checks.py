@@ -60,6 +60,24 @@ def process_check(ref, timeout):
     return "reproduced", ""
 
 
+class YamlParserUnavailable(Exception):
+    """No safe YAML loader is importable, so a YAML artefact cannot be verified either way."""
+
+
+def yaml_safe_load():
+    # v0.21.6+ ships hermes_yaml (ruamel, safe) and drops PyYAML; older engines have only PyYAML.
+    try:
+        from hermes_yaml import safe_load
+        return safe_load
+    except ImportError:
+        pass
+    try:
+        from yaml import safe_load
+        return safe_load
+    except ImportError:
+        raise YamlParserUnavailable() from None
+
+
 def read_document(path):
     path = Path(path)
     if not path.is_absolute() or path.suffix not in {".json", ".yaml", ".yml"}:
@@ -69,8 +87,7 @@ def read_document(path):
     text = path.read_text()
     if path.suffix == ".json":
         return json.loads(text)
-    import yaml
-    return yaml.safe_load(text)
+    return yaml_safe_load()(text)
 
 
 def config_check(ref, timeout):
@@ -151,6 +168,8 @@ def check(kind, ref, timeout=10):
         return checker(ref, timeout)
     except (ConnectionRefusedError, ProcessLookupError):
         return "failed", "target not responding"
+    except YamlParserUnavailable:
+        return "unverified", "yaml_parser_unavailable"
     except Exception:
         # Invalid schemas, absent permissions, timeout and malformed evidence aren't false claims.
         return "unverified", "check_unavailable"
@@ -163,7 +182,8 @@ def bounded_check(claim, timeout=10, *, deadline=None):
         if timeout <= 0:
             raise TimeoutError()
         proc = subprocess.run([sys.executable, str(Path(__file__).resolve())],
-                              input=json.dumps({"claim": claim, "deadline": deadline}), text=True,
+                              # The child resolves parsers (hermes_yaml) exactly as this process does, not via inherited env.
+                              input=json.dumps({"claim": claim, "deadline": deadline, "sys_path": sys.path}), text=True,
                               capture_output=True, timeout=timeout, check=True)
         verdict, mismatch = json.loads(proc.stdout)
         if time.monotonic() >= deadline:
@@ -179,6 +199,7 @@ def bounded_check(claim, timeout=10, *, deadline=None):
 
 if __name__ == "__main__":
     payload = json.load(sys.stdin)
+    sys.path[:] = [p for p in payload.get("sys_path", ()) if isinstance(p, str)] or sys.path
     claim = payload["claim"]
     remaining = payload['deadline'] - time.monotonic()
     if remaining <= 0:
