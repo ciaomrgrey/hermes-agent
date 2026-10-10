@@ -1754,7 +1754,7 @@ def my_callback(
 | `prompt_tokens` | `int \| None` | The context engine's latest real prompt-token reading (`last_prompt_tokens`, the figure compared against the threshold); `None` when unknown. |
 | `context_threshold_tokens` | `int \| None` | The context engine's computed compaction trigger (`threshold_tokens`); `None` when unknown. Never recompute it from config. |
 
-**Return value:** Non-empty `str` to replace the response text, `None` or empty string to leave it unchanged. **First non-empty string wins** when multiple plugins register. Unlike the tool and terminal transforms, an empty string is not accepted as a replacement.
+**Return value:** A `str` replaces the response text, including an empty string (an explicit stripping result, e.g. removing a model-forged footer-only reply); `None` leaves it unchanged. **First string wins** when multiple plugins register, matching the tool and terminal transforms.
 
 **Use cases:** Apply a personality/vocabulary transform (pirate-speak, Spongebob), redact user-specific identifiers from the final text, append a project-specific signature footer, enforce a house style guide without burning tokens on SOUL instructions.
 
