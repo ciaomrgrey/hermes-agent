@@ -105,7 +105,7 @@ def test_footer_appends_after_gate_with_exact_outcome_and_persists_identically(e
 
 
 def test_transform_kwargs_carry_context_usage_without_footer_subscriber(env):
-    agent, db, manager = env
+    agent, _db, manager = env
     seen = {}
     manager._hooks["transform_llm_output"] = [lambda response_text, **kw: seen.update(kw)]
     agent.client.chat.completions.create = _fake_completion(["Body."], prompt_tokens=4242)
@@ -142,7 +142,7 @@ def test_rework_fires_footer_once_with_final_candidates_outcome(env):
 
 
 def test_finalize_does_not_reaudit_footed_text(env):
-    agent, db, manager = env
+    agent, _db, manager = env
     gate_calls = []
     manager._hooks["before_turn_end"] = [lambda final_response, **_: gate_calls.append(final_response)]
     manager._hooks["append_turn_footer"] = [lambda **_: "\n-- f"]
@@ -153,7 +153,7 @@ def test_finalize_does_not_reaudit_footed_text(env):
 
 
 def test_no_subscriber_is_byte_identical(env):
-    agent, db, manager = env
+    agent, db, _manager = env
     agent.client.chat.completions.create = _fake_completion(["Body."])
     result = agent.run_conversation("hi")
     assert result["final_response"] == "Body."
@@ -175,7 +175,7 @@ def test_crashing_or_blank_footer_fails_open(env):
 
 
 def test_gate_outcome_absent_without_gate_and_non_json_outcome_ignored(env):
-    agent, db, manager = env
+    agent, _db, manager = env
     outcomes = []
     manager._hooks["append_turn_footer"] = [lambda gate_outcome, **_: outcomes.append(gate_outcome)]
     agent.client.chat.completions.create = _fake_completion(["Body."])

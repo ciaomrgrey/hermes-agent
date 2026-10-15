@@ -350,7 +350,7 @@ def _enabled_without_own_credential(platform, config):
         from gateway.config import PLATFORM_TOKEN_ENV_NAMES
         from tools.send_message_shared_bot import own_credential_present
         return platform in PLATFORM_TOKEN_ENV_NAMES and not own_credential_present(platform, config)
-    except Exception:  # noqa: BLE001 - unknown: let the host lookup decide and fail closed
+    except Exception:  # health: allow BLE001 -- unknown: let the host lookup decide and fail closed
         logger.debug("own-credential check failed for %s", platform, exc_info=True)
         return True
 
@@ -360,7 +360,7 @@ def _shared_bot_host(platform_name, platform, config):
     try:
         from tools.send_message_shared_bot import resolve_shared_bot_host
         return resolve_shared_bot_host(platform_name, platform, config)
-    except Exception as exc:  # noqa: BLE001 - fail closed to the not-configured error
+    except Exception as exc:  # health: allow BLE001 -- fail closed to the not-configured error
         logger.debug("shared-bot host lookup failed for %s", platform_name, exc_info=True)
         return None, f"host lookup failed ({type(exc).__name__})"
 

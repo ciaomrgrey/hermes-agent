@@ -60,7 +60,7 @@ def _safe_copy(payload: Any) -> Any:
         return dict(payload) if isinstance(payload, dict) else payload
 
 
-def _invoke_llm_request_middleware(**kwargs: Any) -> List[Any]:
+def _invoke_llm_request_middleware(**kwargs: Any) -> list[Any]:
     """Keep a failed callback from publishing a partially mutated request."""
     from hermes_cli.plugins import _delivery_manager
 
@@ -127,8 +127,8 @@ def apply_llm_request_middleware(request: dict[str, Any], **context: Any) -> Req
 
 
 def apply_request_middleware_or_original(
-    request: Dict[str, Any], *, request_kind: str, **context: Any,
-) -> Dict[str, Any]:
+    request: dict[str, Any], *, request_kind: str, **context: Any,
+) -> dict[str, Any]:
     """Filter a provider request without letting middleware failure prevent the call.
 
     The existing no-listener fast path preserves the payload's identity and cache bytes.
