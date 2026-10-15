@@ -3975,7 +3975,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             )
         return content
 
-    def _summary_input_turns(self, turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _summary_input_turns(self, turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # Filter only the summarizer's view; retained/persisted turns stay canonical.
         from hermes_cli.middleware import apply_request_middleware_or_original
 

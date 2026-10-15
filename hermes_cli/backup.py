@@ -341,7 +341,7 @@ def _in_kanban_task_workspace(rel_dir: Path) -> bool:
     return len(tail) >= 4 and tail[0] == "boards" and tail[2] == "workspaces"
 
 
-def _pytest_temp_dirs(dirpath: Path, dirnames: List[str], filenames: List[str]) -> set:
+def _pytest_temp_dirs(dirpath: Path, dirnames: list[str], filenames: list[str]) -> set:
     """Subdirs of *dirpath* that are pytest numbered temp dirs (``tmp_path``/basetemp trees).
 
     ``_pytest.pathlib.make_numbered_dir`` creates ``<stem><N>`` and points a sibling symlink
