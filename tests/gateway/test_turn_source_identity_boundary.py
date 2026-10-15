@@ -3,7 +3,7 @@
 import sys
 import threading
 import types
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -90,7 +90,7 @@ def _runner(monkeypatch, tmp_path):
             "api_key": "test-only",
         },
     )
-    import hermes_cli.tools_config as tools_config
+    from hermes_cli import tools_config
     monkeypatch.setattr(tools_config, "_get_platform_tools", lambda user_config, platform_key: {"core"})
     monkeypatch.setattr(
         "gateway.run_heartbeat_acceptance.heartbeat_owner_is_current",
@@ -136,7 +136,7 @@ async def test_handle_message_reaches_agent_with_exact_source_identity(
 ):
     runner = _runner(monkeypatch, tmp_path)
     source = _source()
-    timestamp = datetime(2026, 9, 26, 16, 27, 32, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 9, 26, 16, 27, 32, tzinfo=UTC)
     event = MessageEvent(
         text="normal slack turn",
         source=source,
@@ -173,7 +173,7 @@ async def test_proxy_stays_compatible_and_queued_followup_rebinds_exact_source_i
 ):
     runner = _runner(monkeypatch, tmp_path)
     source = _source()
-    timestamp = datetime(2026, 9, 26, 16, 30, 1, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 9, 26, 16, 30, 1, tzinfo=UTC)
     source_state = {"request_id": "1789000001.654321", "status": "closed"}
 
     runner._get_proxy_url = lambda: "http://proxy.invalid"

@@ -161,7 +161,7 @@ def test_moa_reference_and_prepared_aggregator_filter_canonical_copies(api_mode,
     original = deepcopy(messages)
     agent = NS(task_id="task", session_id="session", platform="cli")
     slot = {"provider": "test", "model": "slot"}
-    label, text, accounting = moa_loop._run_references_parallel([slot], messages, agent=agent)[0]
+    _label, text, accounting = moa_loop._run_references_parallel([slot], messages, agent=agent)[0]
     assert text == "Advice."
     prepared = {"messages": messages, "aggregator": slot, "aggregator_temperature": None}
     original_prepared = deepcopy(prepared)

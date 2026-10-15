@@ -60,7 +60,7 @@ def _env_snapshot():
 
 
 def test_satellite_resolves_host_token_without_leaking(estate):
-    root, gen, sat = estate
+    _root, _gen, sat = estate
     before_env = _env_snapshot()
     before_sat_env = (sat / ".env").read_text()
     from agent.secret_scope import current_secret_scope
@@ -101,7 +101,7 @@ def test_satellite_send_uses_host_token_and_own_home_channel(estate):
 
 
 def test_own_token_profile_unchanged(estate):
-    root, gen, sat = estate
+    _root, _gen, sat = estate
     (sat / ".env").write_text(f"SLACK_BOT_TOKEN={OWN_TOKEN}\n", encoding="utf-8")
     os.environ["SLACK_BOT_TOKEN"] = OWN_TOKEN
     try:
@@ -121,7 +121,7 @@ def test_own_disabled_credential_never_borrows_host(estate):
 
 
 def test_ambiguous_host_fails_closed(estate):
-    root, gen, sat = estate
+    root, _gen, _sat = estate
     _write_host(root / "profiles" / "other", [_route_cfg("sat")], token="xoxb-other")
     _, pconfig, _, err = _resolve_platform_config("slack", load_gateway_config())
     assert pconfig is None
@@ -130,7 +130,7 @@ def test_ambiguous_host_fails_closed(estate):
 
 
 def test_ambiguity_broken_by_live_gateway_serving_profile(estate, monkeypatch):
-    root, gen, sat = estate
+    root, _gen, _sat = estate
     _write_host(root / "profiles" / "other", [_route_cfg("sat")], token="xoxb-other")
     import tools.send_message_shared_bot as sb
     monkeypatch.setattr(sb, "_live_gateway_serves", lambda home, name: Path(home).name == "gen")
@@ -145,7 +145,7 @@ def test_ambiguity_broken_by_live_gateway_serving_profile(estate, monkeypatch):
     ({"profile": "someone-else"}, "no profile has an enabled"),
 ])
 def test_ineligible_routes_fail_closed(estate, route_extra, reason):
-    root, gen, sat = estate
+    _root, gen, _sat = estate
     route = _route_cfg("sat")
     route.update(route_extra)
     _write_host(gen, [route])
@@ -154,7 +154,7 @@ def test_ineligible_routes_fail_closed(estate, route_extra, reason):
 
 
 def test_host_without_token_fails_closed(estate):
-    root, gen, sat = estate
+    _root, gen, _sat = estate
     _write_host(gen, [_route_cfg("sat")], token=None)
     _, pconfig, _, err = _resolve_platform_config("slack", load_gateway_config())
     assert pconfig is None and "has no SLACK_BOT_TOKEN" in err
@@ -173,7 +173,7 @@ def test_lookup_fault_fails_closed(estate, monkeypatch):
 def test_in_process_satellite_turn_prefers_host_live_adapter(estate, monkeypatch):
     """Inside the multiplexed host gateway the token is only a fallback: the satellite's send goes
     through the host's live adapter (``_adapters_for_profile`` shared-bot rule)."""
-    root, gen, sat = estate
+    _root, _gen, sat = estate
     from gateway.run import GatewayRunner, _profile_runtime_scope
     from agent.secret_scope import build_profile_secret_scope
     from gateway.profile_routing import parse_profile_routes
@@ -214,7 +214,7 @@ def test_enabled_block_without_own_token_still_borrows(estate):
 def test_enabled_block_without_route_refuses_before_transport(estate):
     """No route anywhere: an enabled credentialless block fails closed with the not-configured error
     and never reaches the transport with token=None (settled: "Ambiguous or none -> fail closed")."""
-    root, gen, sat = estate
+    _root, gen, sat = estate
     _write_host(gen, [])
     (sat / "config.yaml").write_text("platforms:\n  slack:\n    enabled: true\n", encoding="utf-8")
     _, pconfig, _, err = _resolve_platform_config("slack", load_gateway_config())
@@ -265,7 +265,7 @@ def test_own_config_token_unchanged(estate):
 
 
 def test_enabled_block_with_ambiguous_host_fails_closed(estate):
-    root, gen, sat = estate
+    root, _gen, sat = estate
     _write_host(root / "profiles" / "other", [_route_cfg("sat")], token="xoxb-other")
     (sat / "config.yaml").write_text("platforms:\n  slack:\n    enabled: true\n", encoding="utf-8")
     _, pconfig, _, err = _resolve_platform_config("slack", load_gateway_config())
@@ -293,7 +293,7 @@ def _unreadable(monkeypatch, target):
 
 
 def test_unreadable_competing_host_fails_closed(estate, monkeypatch):
-    root, gen, sat = estate
+    root, _gen, _sat = estate
     other = root / "profiles" / "other"
     _write_host(other, [_route_cfg("sat")], token="xoxb-other")
     _unreadable(monkeypatch, other)
@@ -305,14 +305,14 @@ def test_unreadable_competing_host_fails_closed(estate, monkeypatch):
 
 def test_unreadable_profile_with_no_readable_route_fails_closed(estate, monkeypatch):
     """An unreadable profile is uncertainty, never proof that no route exists."""
-    root, gen, sat = estate
+    _root, gen, _sat = estate
     _unreadable(monkeypatch, gen)
     _, pconfig, _, err = _resolve_platform_config("slack", load_gateway_config())
     assert pconfig is None and "unproven" in err
 
 
 def test_unreadable_census_resolved_by_verified_live_host(estate, monkeypatch):
-    root, gen, sat = estate
+    root, gen, _sat = estate
     other = root / "profiles" / "other"
     _write_host(other, [_route_cfg("sat")], token="xoxb-other")
     sb = _unreadable(monkeypatch, other)
@@ -322,7 +322,7 @@ def test_unreadable_census_resolved_by_verified_live_host(estate, monkeypatch):
 
 
 def test_unreadable_census_not_resolved_by_non_serving_host(estate, monkeypatch):
-    root, gen, sat = estate
+    root, _gen, _sat = estate
     other = root / "profiles" / "other"
     _write_host(other, [_route_cfg("sat")], token="xoxb-other")
     sb = _unreadable(monkeypatch, other)
@@ -333,7 +333,7 @@ def test_unreadable_census_not_resolved_by_non_serving_host(estate, monkeypatch)
 
 def test_malformed_host_yaml_is_uncertainty(estate):
     """Real (unmocked) read fault: a malformed competing config fails closed."""
-    root, gen, sat = estate
+    root, _gen, _sat = estate
     other = root / "profiles" / "other"
     other.mkdir(parents=True)
     (other / "config.yaml").write_text("gateway: [unclosed\n  profile_routes: {\n", encoding="utf-8")

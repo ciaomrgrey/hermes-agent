@@ -3,13 +3,13 @@ import json
 from unittest.mock import Mock
 import pytest
 
-from tests.agent.test_text_turn_incremental_persistence import loop_agent  # noqa: F401
+from tests.agent.test_text_turn_incremental_persistence import loop_agent
 from tests.agent.test_run_agent import _mock_response
 from hermes_cli import plugins
 
 
 @pytest.mark.parametrize('transform', [False, True])
-def test_external_hook_reworks_without_persisting_rejected_candidate(loop_agent, tmp_path, monkeypatch, transform):
+def test_external_hook_reworks_without_persisting_rejected_candidate(loop_agent, tmp_path, monkeypatch, transform):  # health: allow F811 -- loop_agent is the imported pytest fixture
     from hermes_state import SessionDB
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     package = tmp_path / 'plugins/evidence-example'
