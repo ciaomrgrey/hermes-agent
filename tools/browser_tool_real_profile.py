@@ -27,8 +27,26 @@ def _terminate_real_profile_chrome() -> None:
     agent-browser only ATTACHED to them, so its own session cleanup never kills them."""
     from tools.browser_lightpanda import _terminate
     _bt = _origin()
+    terminated = False
     while _bt._real_profile_chrome_procs:
         _terminate(_bt._real_profile_chrome_procs.pop(), what="real-profile chrome")
+        terminated = True
+    if terminated:
+        _sweep_orphaned_code_sign_clones()
+
+
+def _sweep_orphaned_code_sign_clones() -> None:
+    """macOS Google Chrome clones its ~1.4 GiB app bundle per launch and only deletes it on an
+    orderly exit; the SIGKILL fallback in ``_terminate`` (or a terminate racing startup) leaves
+    it behind until reboot. Reap ORPHANED clones only (gated: age, exact structure, no open
+    file/mapping/executable) — never a live browser's, ours or the user's."""
+    if sys.platform != "darwin":
+        return
+    from tools.chrome_code_sign_clones import sweep_code_sign_clones
+    res = sweep_code_sign_clones(apply=True)
+    if res.removed or res.error:
+        _origin().logger.info("real-profile: code-sign clone sweep removed=%s error=%s host_free_delta=%s",
+                              res.removed, res.error, res.host_free_delta_bytes)
 
 
 def _cdp_http_ready(http_cdp: str) -> bool:

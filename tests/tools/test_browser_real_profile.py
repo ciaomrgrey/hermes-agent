@@ -990,3 +990,31 @@ class TestWindowsLockedProfileCopy:
         dst, err = bc.snapshot_real_profile("chrome", src=str(root))
         assert dst is None
         assert err
+
+
+class TestRealProfileCodeSignCloneSweep:
+    """Terminating a Hermes-launched real browser reaps orphaned macOS Chrome clones
+    (its SIGKILL fallback skips Chrome's own cleanup); nothing to terminate, no sweep."""
+
+    def _run(self, monkeypatch, procs, platform="darwin"):
+        from tools import browser_tool as bt
+        from tools import chrome_code_sign_clones as ccs
+        calls = []
+        monkeypatch.setattr(bt, "_real_profile_chrome_procs", list(procs))
+        monkeypatch.setattr(bt_real_profile.sys, "platform", platform)
+        monkeypatch.setattr("tools.browser_lightpanda._terminate", lambda p, what="": calls.append(("term", p)))
+        monkeypatch.setattr(ccs, "sweep_code_sign_clones",
+                            lambda **kw: calls.append(("sweep", kw)) or ccs.SweepResult(root=None, applied=True))
+        bt_real_profile._terminate_real_profile_chrome()
+        return calls
+
+    def test_sweeps_after_terminating(self, monkeypatch):
+        p = Mock()
+        assert self._run(monkeypatch, [p]) == [("term", p), ("sweep", {"apply": True})]
+
+    def test_no_sweep_when_nothing_terminated(self, monkeypatch):
+        assert self._run(monkeypatch, []) == []
+
+    def test_no_sweep_off_macos(self, monkeypatch):
+        p = Mock()
+        assert self._run(monkeypatch, [p], platform="linux") == [("term", p)]
