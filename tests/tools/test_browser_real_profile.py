@@ -395,7 +395,7 @@ class TestRealProfileVersionGate:
              patch("hermes_cli.browser_connect.snapshot_real_profile",
                    return_value=(str(env["copy"]), None)) as snapshot, \
              patch("tools.browser_lightpanda._terminate",
-                   side_effect=lambda proc, what="": (killed.append(proc.pid),
+                   side_effect=lambda proc, what="": (killed.append(proc.pid), proc.poll.configure_mock(return_value=0),
                                                      (env["copy"] / "DevToolsActivePort").unlink())), \
              patch.object(bt_real_profile, "_agent_browser_get_cdp", return_value=existing), \
              patch.object(bt_real_profile, "_agent_browser_close_session"), \
@@ -488,10 +488,63 @@ class TestRealProfileVersionGate:
         with get, patch.object(bt_real_profile.os, "kill", return_value=None):
             cdp, err, snapshot, attach, killed, launched = self._run(env)
         assert cdp is None and "PID 4242" in err and "running unknown" in err, err
+        assert f"installed {self.INSTALLED}" in err, err
         snapshot.assert_not_called()
         attach.assert_not_called()
         assert not killed and not launched
         assert sorted(p.name for p in env["copy"].iterdir()) == before
+
+    @pytest.mark.parametrize("discovery", ["empty-json", "json-without-ws-url", "json-list", "non-ws-url",
+                                           "malformed-port-file", "missing-port-file", "recycled-port"])
+    @pytest.mark.parametrize("owner", ["owned-live", "foreign-live"])
+    def test_unidentified_discovery_of_live_browser_fails_closed(self, env, discovery, owner):
+        """Discovery that does not POSITIVELY identify our browser (incomplete JSON, malformed or missing
+        DevToolsActivePort, a recycled port answering for another browser id) is not confirmed absence:
+        while the SingletonLock PID is alive, no snapshot, launch, attach or kill."""
+        if owner == "owned-live":
+            self._own()
+        payloads = {"empty-json": {}, "json-without-ws-url": {"Browser": "Chrome/155.0.8059.40"},
+                    "json-list": [], "non-ws-url": {"webSocketDebuggerUrl": "/devtools/browser/x"},
+                    "recycled-port": {"webSocketDebuggerUrl": "ws://127.0.0.1:1/devtools/browser/other"}}
+        if discovery == "malformed-port-file":
+            (env["copy"] / "DevToolsActivePort").write_text("invalid\n")
+        elif discovery == "missing-port-file":
+            (env["copy"] / "DevToolsActivePort").unlink()
+        get = patch("requests.get", return_value=Mock(**{"json.return_value": payloads.get(discovery, {})}))
+        before = {p.name: p.stat().st_mtime_ns for p in env["copy"].iterdir() if not p.is_symlink()}
+        with get, patch.object(bt_real_profile.os, "kill", return_value=None):
+            cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert cdp is None and err, (cdp, err)
+        assert "PID 4242" in err and "running unknown" in err and f"installed {self.INSTALLED}" in err, err
+        snapshot.assert_not_called()
+        attach.assert_not_called()
+        assert not killed and not launched
+        assert {p.name: p.stat().st_mtime_ns for p in env["copy"].iterdir() if not p.is_symlink()} == before
+
+    def test_held_live_popen_on_copy_dir_without_lock_fails_closed(self, env):
+        """No SingletonLock, but a Popen we hold is still running on the copy dir: not absent."""
+        import tools.browser_tool as bt
+        os.unlink(env["copy"] / "SingletonLock")
+        bt._real_profile_chrome_procs.append(Mock(pid=4242, args=["chrome", f"--user-data-dir={env['copy']}"],
+                                                  **{"poll.return_value": None}))
+        with patch("requests.get", return_value=Mock(**{"json.return_value": {}})):
+            cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert cdp is None and err
+        snapshot.assert_not_called()
+        assert not killed and not launched
+
+    @pytest.mark.parametrize("discovery", ["empty-json", "malformed-port-file", "recycled-port"])
+    def test_unidentified_discovery_of_confirmed_dead_browser_launches(self, env, discovery):
+        """Control: same unidentified discovery, but the lock PID is gone -> normal snapshot+launch."""
+        if discovery == "malformed-port-file":
+            (env["copy"] / "DevToolsActivePort").write_text("invalid\n")
+        payload = {"webSocketDebuggerUrl": "ws://127.0.0.1:1/devtools/browser/other"} if discovery == "recycled-port" else {}
+        with patch("requests.get", return_value=Mock(**{"json.return_value": payload})), \
+             patch.object(bt_real_profile.os, "kill", side_effect=ProcessLookupError):
+            cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert (cdp, err) == ("http://127.0.0.1:5555", None)
+        snapshot.assert_called_once()
+        assert launched == [env["exe"]] and not killed
 
     @pytest.mark.parametrize("dead", ["owned-exited", "foreign-gone", "no-lock"])
     def test_unreadable_endpoint_of_confirmed_dead_browser_launches(self, env, dead):

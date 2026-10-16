@@ -23,13 +23,18 @@ from tools import browser_tool_session as _session
 _RP = "browser.use_real_profile is on, but "
 
 
-def _terminate_real_profile_chrome() -> None:
+def _terminate_real_profile_chrome() -> list:
     """Terminate real-browser processes launched for real-profile sessions (idempotent, atexit-safe);
-    agent-browser only ATTACHED to them, so its own session cleanup never kills them."""
+    agent-browser only ATTACHED to them, so its own session cleanup never kills them. Returns the
+    terminated Popens (their exit status is what proves those PIDs gone afterwards)."""
     from tools.browser_lightpanda import _terminate
     _bt = _origin()
+    terminated = []
     while _bt._real_profile_chrome_procs:
-        _terminate(_bt._real_profile_chrome_procs.pop(), what="real-profile chrome")
+        proc = _bt._real_profile_chrome_procs.pop()
+        _terminate(proc, what="real-profile chrome")
+        terminated.append(proc)
+    return terminated
 
 
 def _cdp_http_ready(http_cdp: str) -> bool:
@@ -87,37 +92,53 @@ def _surviving_chrome_cdp(data_dir: str) -> Optional[str]:
     return _surviving_chrome(data_dir)[0]
 
 
-def _surviving_chrome(data_dir: str) -> Tuple[Optional[str], bool]:
+def _surviving_chrome(data_dir: str, exited: tuple = ()) -> Tuple[Optional[str], bool]:
     """``(http_cdp, uncertain)`` for a Chrome still running on ``data_dir``.
 
-    ``DevToolsActivePort`` outlives a crashed Chrome and its port can be recycled by another local
-    CDP server, so the file's browser id (line 2) must match what ``/json/version`` reports before
-    it is trusted. A /json/version that cannot be read (timeout, refused, non-JSON) is NOT proof the
-    browser is gone: ``uncertain`` is True unless the ``SingletonLock`` PID is confirmed dead, and
-    the caller must then fail closed (never snapshot over a profile that may still be open)."""
+    Only POSITIVE identity is trusted: a well-formed ``DevToolsActivePort`` whose browser id (line 2)
+    is what ``/json/version`` reports as ``webSocketDebuggerUrl`` yields ``http_cdp``. Every other
+    outcome (no/malformed discovery file, timeout, refused, non-JSON, JSON without a usable
+    ``webSocketDebuggerUrl``, or a recycled port answering for a different browser id) proves only
+    that THIS endpoint cannot identify our browser, not that it is gone. Absence is then established
+    solely by liveness: ``uncertain`` is False only when the ``SingletonLock`` PID is confirmed dead
+    (or there is no lock) and no held Popen of ours is still running on ``data_dir``. The caller must
+    fail closed on ``uncertain`` (never snapshot over a profile that may still be open).
+    ``exited`` are Popens just terminated by this process (their exit status proves their PIDs gone)."""
     try:
         with open(os.path.join(data_dir, "DevToolsActivePort"), encoding="utf-8") as fh:
             port, browser_path = fh.readline().strip(), fh.readline().strip()
-    except OSError:
-        return None, False
-    if not port.isdigit() or not browser_path.startswith("/devtools/browser/"):
-        return None, False
-    http_cdp = f"http://127.0.0.1:{port}"
-    try:
-        import requests
-        info = requests.get(f"{http_cdp}/json/version", timeout=2, **loopback_request_kwargs(http_cdp)).json()
-        ws_url = str(info.get("webSocketDebuggerUrl") or "")
-    except Exception:
-        pid = _copy_browser_pid(data_dir)
-        return None, pid is not None and _pid_alive(pid)
-    # Readable answer from a DIFFERENT browser id: the port was recycled, our Chrome is gone.
-    return (http_cdp if ws_url.endswith(browser_path) else None), False
+    except (OSError, UnicodeDecodeError):
+        port = browser_path = ""
+    if port.isdigit() and browser_path.startswith("/devtools/browser/"):
+        http_cdp = f"http://127.0.0.1:{port}"
+        try:
+            import requests
+            info = requests.get(f"{http_cdp}/json/version", timeout=2, **loopback_request_kwargs(http_cdp)).json()
+            ws_url = info.get("webSocketDebuggerUrl") if isinstance(info, dict) else None
+        except Exception:
+            ws_url = None
+        if isinstance(ws_url, str) and ws_url.startswith("ws://") and ws_url.endswith(browser_path):
+            return http_cdp, False
+    return None, _copy_dir_maybe_live(data_dir, exited)
 
 
-def _pid_alive(pid: int) -> bool:
-    """True unless ``pid`` is confirmed gone (a held Popen that exited, or no such process)."""
+def _copy_dir_maybe_live(data_dir: str, exited: tuple = ()) -> bool:
+    """True unless every browser that could hold ``data_dir`` is confirmed gone: the
+    ``SingletonLock`` PID (if any) is dead, and no held Popen of ours runs on ``data_dir``."""
     _bt = _origin()
+    flag = f"--user-data-dir={data_dir}"
     for proc in _bt._real_profile_chrome_procs:
+        args = getattr(proc, "args", None)
+        if isinstance(args, (list, tuple)) and flag in args and proc.poll() is None:
+            return True
+    pid = _copy_browser_pid(data_dir)
+    return pid is not None and _pid_alive(pid, exited)
+
+
+def _pid_alive(pid: int, exited: tuple = ()) -> bool:
+    """True unless ``pid`` is confirmed gone (a held/just-terminated Popen that exited, or no such process)."""
+    _bt = _origin()
+    for proc in (*_bt._real_profile_chrome_procs, *exited):
         if proc.pid == pid:  # our own Popen is authoritative (and immune to PID reuse)
             return proc.poll() is None
     try:
@@ -131,9 +152,11 @@ def _pid_alive(pid: int) -> bool:
 
 def _survivor_unreadable_error(data_dir: str, browser: str) -> str:
     pid = _copy_browser_pid(data_dir)
+    installed = _installed_bundle_version(browser) or "unknown"
     return (f"{_RP}a real-profile {browser} may still be running on {data_dir} (PID {pid if pid is not None else 'unknown'}), "
-            "but its devtools endpoint did not answer, so its version (running unknown) cannot be checked and its "
-            "profile is not snapshotted over. It was left running: quit that process, then retry.")
+            "but its devtools discovery (DevToolsActivePort + /json/version) did not identify it, so its version "
+            f"cannot be checked (running unknown, installed {installed}) and its profile is not snapshotted over. "
+            "It was left running: quit that process, then retry.")
 
 
 # Browsers whose macOS app-bundle CFBundleShortVersionString is the Chromium version that
@@ -197,10 +220,12 @@ def _copy_browser_pid(data_dir: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def _retire_outdated_browser(data_dir: str, browser: str, mismatch: Tuple[str, str]) -> Optional[str]:
+def _retire_outdated_browser(data_dir: str, browser: str, mismatch: Tuple[str, str],
+                             terminated: Optional[list] = None) -> Optional[str]:
     """Version-mismatched browser on ``data_dir``: terminate it when THIS process launched it (we hold
     its Popen) and return None so the normal snapshot+launch runs; otherwise fail closed. A browser
-    we did not launch is never killed (ownership unproven) and never snapshotted over."""
+    we did not launch is never killed (ownership unproven) and never snapshotted over. Terminated
+    Popens are appended to ``terminated`` (their exit status later proves the copy dir free)."""
     _bt = _origin()
     pid = _copy_browser_pid(data_dir)
     running, installed = mismatch
@@ -210,7 +235,9 @@ def _retire_outdated_browser(data_dir: str, browser: str, mismatch: Tuple[str, s
                 "is not reused and was left running. Quit that process (and check the browser install), then retry.")
     if pid is not None and any(p.pid == pid and p.poll() is None for p in _bt._real_profile_chrome_procs):
         _bt.logger.info("real-profile: restarting %s PID %s (running %s, installed %s)", browser, pid, *mismatch)
-        _terminate_real_profile_chrome()
+        done = _terminate_real_profile_chrome()
+        if terminated is not None:
+            terminated.extend(done)
         return None
     return (f"{_RP}the real-profile {browser} still running on {data_dir} (PID {pid if pid is not None else 'unknown'}) "
             f"is version {running}, but the installed {browser} is {installed}. A browser running across an update "
@@ -410,6 +437,7 @@ def _real_profile_cdp() -> tuple:
         # hermes process) holds the user-data-dir open — that corrupts the databases.
         copy_dir = real_profile_copy_dir(browser)
         existing = _agent_browser_get_cdp(_bt._REAL_PROFILE_SESSION)
+        terminated: list = []  # our outdated browsers stopped below; their exit proves the dir free
         if _installed_bundle_version(browser) == "":
             return None, _unreadable_install_error(copy_dir, browser, existing)
         if existing and _cdp_http_ready(existing) and _cdp_on_data_dir(existing, copy_dir):
@@ -417,7 +445,7 @@ def _real_profile_cdp() -> tuple:
             if not mismatch:
                 _bt._real_profile_cdp_cache.update(cdp=existing, browser=browser)
                 return existing, None
-            err = _retire_outdated_browser(copy_dir, browser, mismatch)
+            err = _retire_outdated_browser(copy_dir, browser, mismatch, terminated)
             if err:
                 return None, err
         if existing:  # stale/wrong-dir session: close it so nothing holds the dir open
@@ -427,14 +455,14 @@ def _real_profile_cdp() -> tuple:
         # if the daemon cannot attach, fail closed — never snapshot over an open profile. Not ours
         # to terminate (no Popen handle): it lives until the user closes it, by design — but it is
         # reused only while its version matches the installed bundle (see _retire_outdated_browser).
-        surviving, uncertain = _surviving_chrome(copy_dir)
-        if uncertain:  # unreadable endpoint, PID not proven dead: absence is not established
+        surviving, uncertain = _surviving_chrome(copy_dir, tuple(terminated))
+        if uncertain:  # discovery could not identify it and it is not proven dead: absence not established
             return None, _survivor_unreadable_error(copy_dir, browser)
         if surviving and (mismatch := _version_mismatch(surviving, browser)):
-            err = _retire_outdated_browser(copy_dir, browser, mismatch)
+            err = _retire_outdated_browser(copy_dir, browser, mismatch, terminated)
             if err:
                 return None, err
-            if any(_surviving_chrome(copy_dir)):  # terminated yet still (maybe) alive: never overlay it
+            if any(_surviving_chrome(copy_dir, tuple(terminated))):  # terminated yet still (maybe) alive: never overlay it
                 return None, _RP + "the outdated real-profile browser did not exit. Retry, or turn the toggle off."
             surviving = None
         if surviving:
