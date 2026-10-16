@@ -220,3 +220,152 @@ def test_host_root_is_never_swept_under_test_isolation(monkeypatch):
     monkeypatch.setattr(ccs, "default_clone_root", lambda: called.append(1))
     res = ccs.sweep_code_sign_clones(apply=True)
     assert called == [] and res.removed == [] and "test isolation" in res.error
+
+
+# --- Destructive eligibility stays bound to the object being deleted (review 4841) ---
+
+def _hook_referenced(monkeypatch, at_call, action):
+    """Run ``action`` during the ``at_call``-th reference scan (1 = pre-rename scan,
+    2 = post-rename scan), then report no references."""
+    calls = []
+
+    def refs(r):
+        calls.append(1)
+        if len(calls) == at_call:
+            action()
+        return set()
+    monkeypatch.setattr(ccs, "_referenced", refs)
+
+
+@pytest.mark.parametrize("at_call", [1, 2])
+def test_hold_added_during_reference_scan_is_preserved(root, monkeypatch, at_call):
+    c = make_clone(root, "code_sign_clone.HOLDIT")
+
+    def add_hold():
+        held = c if at_call == 1 else root / (ccs._REAPING_PREFIX + c.name)
+        (held / "KEEP-reviewer").write_text("hold")
+    _hook_referenced(monkeypatch, at_call, add_hold)
+    res = sweep(root, apply=True)
+    assert res.removed == [] and (c / "KEEP-reviewer").exists() and (c / "Google Chrome.app.bundle").exists()
+    assert "unknown contents" in res.preserved[c.name]
+
+
+@pytest.mark.parametrize("at_call", [1, 2])
+def test_identically_shaped_replacement_is_preserved(root, monkeypatch, at_call):
+    """The pathname is swapped for a DIFFERENT object with the exact Chrome-clone shape;
+    only inode identity distinguishes it, and neither object is removed."""
+    c = make_clone(root, "code_sign_clone.SWAPPD")
+
+    def swap():
+        target = c if at_call == 1 else root / (ccs._REAPING_PREFIX + c.name)
+        target.rename(root / "retained-original")
+        make_clone(root, target.name)
+        (target / "Google Chrome.app.bundle" / "rollback-data").write_text("not ours")
+    _hook_referenced(monkeypatch, at_call, swap)
+    res = sweep(root, apply=True)
+    assert res.removed == [] and "identity mismatch" in res.preserved[c.name]
+    assert (root / "retained-original" / "Google Chrome.app.bundle").exists()
+    survivors = [p for p in root.rglob("rollback-data")]
+    assert len(survivors) == 1
+
+
+def test_replacement_with_foreign_contents_is_preserved(root, monkeypatch):
+    c = make_clone(root, "code_sign_clone.FOREGN")
+
+    def swap():
+        c.rename(root / "retained-original")
+        c.mkdir()
+        (c / "rollback-data").write_text("not a chrome bundle")
+    _hook_referenced(monkeypatch, 1, swap)
+    res = sweep(root, apply=True)
+    assert res.removed == [] and (c / "rollback-data").exists()
+    assert (root / "retained-original").exists()
+
+
+def test_hold_dropped_after_last_check_keeps_the_clone_dir(root, monkeypatch):
+    """Final window between the last revalidation and deletion: only the bound bundle
+    subtree is deleted and the clone dir is rmdir'd, so a hold file survives."""
+    c = make_clone(root, "code_sign_clone.LATEHD")
+    parked = root / (ccs._REAPING_PREFIX + c.name)
+    real_rmtree = ccs.shutil.rmtree
+
+    def rmtree(path, **kw):
+        (parked / "KEEP-reviewer").write_text("late hold")
+        return real_rmtree(path, **kw)
+    monkeypatch.setattr(ccs.shutil, "rmtree", rmtree)
+    res = sweep(root, apply=True)
+    assert res.removed == [] and (parked / "KEEP-reviewer").exists()
+    assert "partial removal" in res.preserved[c.name]
+
+
+class _FakeProc:
+    def __init__(self, pid, uids, exe=None):
+        self.pid, self._uids, self._exe = pid, uids, exe
+
+    def exe(self):
+        import psutil
+        if self._exe is None:
+            raise psutil.AccessDenied(self.pid)
+        return self._exe
+
+    def uids(self):
+        return self._uids
+
+
+def _with_procs(monkeypatch, procs):
+    import psutil
+    monkeypatch.setattr(psutil, "process_iter", lambda: iter(procs))
+    monkeypatch.setattr(ccs, "_lsof_referenced", lambda r: set())
+
+
+@pytest.mark.parametrize("uids", [
+    lambda me: (me, me, me),          # same user, unreadable executable
+    lambda me: (me + 1, me, me + 1),  # same effective/saved user
+    lambda me: (0, 0, 0),             # root can traverse anything
+])
+def test_unresolved_relevant_process_fails_closed(root, monkeypatch, uids):
+    c = make_clone(root, "code_sign_clone.DENIED")
+    _with_procs(monkeypatch, [_FakeProc(4242, uids(os.getuid()))])
+    res = sweep(root, apply=True)
+    assert res.removed == [] and c.exists() and res.error == "reference check unavailable"
+
+
+def test_unreadable_process_identity_fails_closed(root, monkeypatch):
+    c = make_clone(root, "code_sign_clone.NOUIDS")
+
+    class NoIdentity(_FakeProc):
+        def uids(self):
+            import psutil
+            raise psutil.AccessDenied(self.pid)
+    _with_procs(monkeypatch, [NoIdentity(4243, None)])
+    assert sweep(root, apply=True).removed == [] and c.exists()
+
+
+def test_known_foreign_process_with_contained_root_does_not_block(root, monkeypatch):
+    """Positive control: cleanup is not merely disabled. Another non-root user's
+    unreadable process is excluded only when the root is verifiably 0700 with no ACL;
+    kernel PID 0 and readable unrelated processes never block."""
+    root.chmod(0o700)
+    c = make_clone(root, "code_sign_clone.FOREOK")
+    me = os.getuid()
+    procs = [_FakeProc(0, (0, 0, 0)), _FakeProc(4244, (me + 7, me + 7, me + 7)),
+             _FakeProc(4245, (me, me, me), exe="/bin/sleep")]
+    _with_procs(monkeypatch, procs)
+    assert ccs._root_contained(root) is True
+    assert sweep(root, apply=True).removed == [c.name] and not c.exists()
+
+
+def test_known_foreign_process_with_open_root_fails_closed(root, monkeypatch):
+    root.chmod(0o755)
+    c = make_clone(root, "code_sign_clone.FOREOP")
+    me = os.getuid()
+    _with_procs(monkeypatch, [_FakeProc(4246, (me + 7, me + 7, me + 7))])
+    assert ccs._root_contained(root) is False
+    assert sweep(root, apply=True).removed == [] and c.exists()
+
+
+def test_acl_on_root_defeats_containment(root):
+    root.chmod(0o700)
+    assert ccs._root_contained(root) is True
+    subprocess.run(["/bin/chmod", "+a", "everyone allow list,search", str(root)], check=True)
+    assert ccs._root_contained(root) is False

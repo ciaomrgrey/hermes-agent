@@ -24,9 +24,15 @@ A directory is removed only when every gate passes; anything ambiguous is preser
 * not in the caller's keep set, and (if given) in the caller's ``only`` set;
 * untouched for ``min_age_s`` (protects a clone that a starting Chrome is still writing);
 * no open file / mapped executable (``lsof +D``) and no live process whose executable
-  path lies inside it (psutil). If ``lsof`` cannot run, NOTHING is removed;
-* re-checked after an atomic rename to a private name immediately before deletion
-  (rename back if a reference appeared).
+  path lies inside it (psutil). If ``lsof`` cannot run, or any process whose executable
+  cannot be read is not verifiably excluded (another non-root uid AND a 0700, ACL-free
+  root), NOTHING is removed;
+* bound to the scanned object: dev/inode of the clone and bundle dirs are recorded at
+  scan time, and identity, shape and holds are re-checked on the exact path before the
+  rename, after it, and again after the second reference scan; any mismatch preserves
+  (and restores, if the original name is free). Deletion removes only the bound bundle
+  subtree and then ``rmdir``s the clone dir, so a hold file dropped in at the last
+  instant keeps the clone dir.
 """
 
 from __future__ import annotations
@@ -119,31 +125,45 @@ def _validate_root(root: Path) -> Optional[str]:
     return None
 
 
-def _newest_change(path: Path) -> float:
-    st = os.lstat(path)
-    return max(st.st_mtime, st.st_ctime, getattr(st, "st_birthtime", 0.0))
-
-
-def _structure_reason(clone: Path, uid: int) -> Optional[str]:
-    """None when ``clone`` looks exactly like a Chrome clone dir; else why it is preserved."""
+def _inspect(clone: Path, uid: int):
+    """``(identity, None)`` when ``clone`` looks exactly like a Chrome clone dir, else
+    ``(None, reason)``. ``identity`` = (dev, ino) of the clone dir and of its bundle dir,
+    the bundle name, and the newest change time of either: it binds a later destructive
+    step to THIS object rather than to whatever is at the pathname by then."""
     try:
         st = os.lstat(clone)
     except OSError as e:
-        return f"unreadable: {e}"
+        return None, f"unreadable: {e}"
     if not stat.S_ISDIR(st.st_mode):
-        return "not a real directory"
+        return None, "not a real directory"
     if st.st_uid != uid:
-        return "unknown owner (uid)"
+        return None, "unknown owner (uid)"
     try:
         entries = os.listdir(clone)
     except OSError as e:
-        return f"unreadable: {e}"
+        return None, f"unreadable: {e}"
     if len(entries) != 1 or entries[0] not in _BUNDLE_NAMES:
-        return "unknown contents (not exactly one Chrome clone bundle)"
-    bundle = clone / entries[0]
-    bst = os.lstat(bundle)
+        return None, "unknown contents (not exactly one Chrome clone bundle)"
+    try:
+        bst = os.lstat(clone / entries[0])
+    except OSError as e:
+        return None, f"unreadable: {e}"
     if not stat.S_ISDIR(bst.st_mode) or bst.st_uid != uid:
-        return "unknown contents (bundle not a real user-owned directory)"
+        return None, "unknown contents (bundle not a real user-owned directory)"
+    newest = max(st.st_mtime, st.st_ctime, getattr(st, "st_birthtime", 0.0),
+                 bst.st_mtime, bst.st_ctime, getattr(bst, "st_birthtime", 0.0))
+    return ((st.st_dev, st.st_ino), (bst.st_dev, bst.st_ino), entries[0], newest), None
+
+
+def _rebind_reason(path: Path, uid: int, identity) -> Optional[str]:
+    """None only when ``path`` is still the exact object authorised at scan time, with the
+    same shape and no new hold; else why it must be preserved. Rename keeps the inode
+    and does not touch the directory's own ctime, so a parked clone still matches."""
+    now_id, reason = _inspect(path, uid)
+    if reason:
+        return f"changed before removal: {reason}"
+    if now_id[:3] != identity[:3]:
+        return "replaced before removal (identity mismatch)"
     return None
 
 
@@ -172,13 +192,39 @@ def _lsof_referenced(root: Path) -> Optional[set]:
     return names
 
 
+def _root_contained(root: Path) -> bool:
+    """True only when ``root`` is verifiably inaccessible to other non-root users: mode
+    0700 (no group/other bits) and no ACL entries (``ls -lde`` prints none)."""
+    try:
+        st = os.stat(root)
+    except OSError:
+        return False
+    if st.st_mode & 0o077:
+        return False
+    try:
+        out = subprocess.run(["/bin/ls", "-lde", str(root)], capture_output=True, text=True,
+                             timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if out.returncode != 0 or (out.stderr or "").strip():
+        return False
+    return len([ln for ln in (out.stdout or "").splitlines() if ln.strip()]) == 1
+
+
 def _exe_referenced(root: Path) -> Optional[set]:
-    """Top-level entry names under ``root`` that a live process runs its executable from."""
+    """Top-level entry names under ``root`` that a live process runs its executable from.
+
+    None (callers remove nothing) when any process whose executable cannot be read might
+    still be using the clone dir. A process is excluded only on verified grounds: PID 0
+    (the kernel, no user executable), or every uid of it differs from ours and is non-root
+    while ``root`` is verifiably contained (0700, no ACL), so it cannot traverse ``root``."""
     try:
         import psutil
     except ImportError:
         return None
+    uid = os.getuid()
     real_root = os.path.realpath(root).rstrip("/") + "/"
+    contained = None
     names = set()
     for p in psutil.process_iter():
         try:
@@ -186,7 +232,21 @@ def _exe_referenced(root: Path) -> Optional[set]:
         except (psutil.NoSuchProcess, psutil.ZombieProcess):
             continue
         except (psutil.AccessDenied, OSError):
-            continue  # another user's process cannot use this user's 0700 clone dir
+            if getattr(p, "pid", None) == 0:
+                continue
+            try:
+                uids = tuple(p.uids())
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue
+            except Exception:
+                return None  # identity unknown: cannot rule it out
+            if not uids or uid in uids or 0 in uids:
+                return None  # same user (or root) with an unreadable executable
+            if contained is None:
+                contained = _root_contained(root)
+            if not contained:
+                return None
+            continue
         if exe:
             exe = os.path.realpath(exe)
             if exe.startswith(real_root):
@@ -243,6 +303,7 @@ def _sweep(*, apply, root, min_age_s, max_remove, keep, only, now) -> SweepResul
     uid = os.getuid()
     now = time.time() if now is None else now
     candidates = []
+    identities = {}
     for name in sorted(os.listdir(root)):
         clone = root / name
         if name.startswith(_REAPING_PREFIX):
@@ -257,19 +318,16 @@ def _sweep(*, apply, root, min_age_s, max_remove, keep, only, now) -> SweepResul
         if only is not None and name not in only:
             result.preserved[name] = "not selected"
             continue
-        reason = _structure_reason(clone, uid)
+        identity, reason = _inspect(clone, uid)
         if reason:
             result.preserved[name] = reason
             continue
-        try:
-            age = now - max(_newest_change(clone), _newest_change(clone / os.listdir(clone)[0]))
-        except OSError as e:
-            result.preserved[name] = f"unreadable: {e}"
-            continue
+        age = now - identity[3]
         if age < min_age_s:
             result.preserved[name] = f"too new ({int(age)}s < {int(min_age_s)}s)"
             continue
         candidates.append(name)
+        identities[name] = identity
 
     if not candidates:
         return result
@@ -297,21 +355,66 @@ def _sweep(*, apply, root, min_age_s, max_remove, keep, only, now) -> SweepResul
     for name in eligible:
         src = root / name
         parked = root / f"{_REAPING_PREFIX}{name}"
+        identity = identities[name]
+        # Every gate is bound to the object authorised at scan time (dev/inode of the
+        # clone and bundle dirs) and re-run on the exact path about to be deleted: a
+        # pathname that now holds a different object, or the same object with a new hold
+        # file or changed shape, is preserved, never removed.
+        why = _rebind_reason(src, uid, identity)
+        if why:
+            result.preserved[name] = why
+            continue
+        if os.path.lexists(parked):
+            result.preserved[name] = "reap name already taken (left for inspection)"
+            continue
         try:
             os.rename(src, parked)
         except OSError as e:
             result.preserved[name] = f"rename failed: {e}"
             continue
-        again = _referenced(root)
-        if again is None or (parked.name in again):
+
+        def restore(reason):
+            # Only put back what we parked; never move a foreign object onto src.
+            if os.path.lexists(src):
+                result.preserved[name] = reason + f" (left as {parked.name}: original name reused)"
+                return
             try:
                 os.rename(parked, src)
+                result.preserved[name] = reason + " (restored)"
             except OSError as e:
                 logger.warning("code-sign clone sweep: could not restore %s: %s", parked, e)
-            result.preserved[name] = "reference appeared during reap (restored)"
+                result.preserved[name] = reason + f" (left as {parked.name})"
+
+        why = _rebind_reason(parked, uid, identity)
+        if why:
+            restore(why)
             continue
-        shutil.rmtree(parked, ignore_errors=True)
-        if parked.exists():
+        again = _referenced(root)
+        if again is None or (parked.name in again) or (name in again):
+            restore("reference appeared during reap")
+            continue
+        # The reference scan can take up to a minute: revalidate once more at the boundary.
+        why = _rebind_reason(parked, uid, identity)
+        if why:
+            restore(why)
+            continue
+        # Delete only the bound bundle subtree, then rmdir the clone dir: a hold file
+        # dropped in after the last check makes rmdir fail and the clone dir survives.
+        bundle = parked / identity[2]
+        try:
+            bst = os.lstat(bundle)
+        except OSError as e:
+            restore(f"changed before removal: {e}")
+            continue
+        if (bst.st_dev, bst.st_ino) != identity[1]:
+            restore("replaced before removal (bundle identity mismatch)")
+            continue
+        shutil.rmtree(bundle, ignore_errors=True)
+        try:
+            os.rmdir(parked)
+        except OSError:
+            pass
+        if os.path.lexists(parked):
             result.preserved[name] = "partial removal (left as " + parked.name + ")"
             continue
         result.removed.append(name)
