@@ -121,8 +121,11 @@ _REAL_PROFILE_CHROME_FLAGS = (
     # MacAppCodeSignClone: macOS Google Chrome copies its whole app bundle (~1.4 GiB logical)
     # into /var/folders/<user>/X/com.google.Chrome.code_sign_clone per launch and deletes it
     # only on an orderly exit; a SIGKILL (our _terminate fallback) leaves it until reboot.
-    # This short-lived headless copy never needs to outlive an app update, so skip the clone.
-    # Unknown feature names are ignored by other Chromium browsers.
+    # Tradeoff: the clone exists so a running Chrome survives an update staged on disk.
+    # Without it, this browser (which may be reused until the user closes it, see
+    # _surviving_chrome_cdp) can hit code-signature validation errors after Chrome updates
+    # underneath it (code_sign_clone_manager.mm); restart it after an
+    # update. Unknown feature names are ignored by other Chromium browsers.
     "--disable-sync", "--disable-features=Translate,MacAppCodeSignClone", "--no-startup-window",
 )
 
