@@ -310,6 +310,7 @@ class TestRealProfileCdpLaunch:
              patch("hermes_cli.browser_connect.snapshot_real_profile", return_value=(None, "boom")) as snapshot, \
              patch("requests.get", return_value=version), \
              patch.object(bt_real_profile, "_agent_browser_get_cdp", return_value=None), \
+             patch.object(bt_real_profile, "_installed_bundle_version", return_value=None), \
              patch.object(bt_real_profile, "_attach_agent_browser_to_real_profile",
                           return_value=("http://127.0.0.1:41000", None)) as attach:
             cdp, err = bt_real_profile._real_profile_cdp()
@@ -326,6 +327,142 @@ class TestRealProfileCdpLaunch:
         (tmp_path / "DevToolsActivePort").write_text("41000\n/devtools/browser/x\n")
         assert bt_real_profile._cdp_on_data_dir("http://127.0.0.1:41000", str(tmp_path))
         assert not bt_real_profile._cdp_on_data_dir("http://127.0.0.1:9999", str(tmp_path))
+
+
+class TestRealProfileVersionGate:
+    """With MacAppCodeSignClone disabled, a browser running across a staged update execs the new
+    bundle's helpers and fails code-signature checks: no reuse path may hand it out. A real
+    loopback server plays CDP ``/json/version``; a real temp ``Info.plist`` is the installed bundle."""
+
+    INSTALLED = "155.0.8059.80"
+
+    @pytest.fixture
+    def env(self, tmp_path):
+        import http.server
+        import plistlib
+        import threading
+
+        import tools.browser_tool as bt
+        state = {"browser": "Chrome/155.0.8059.80"}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = {"webSocketDebuggerUrl": f"ws://127.0.0.1:{port}/devtools/browser/x"}
+                if state["browser"] is not None:
+                    body["Browser"] = state["browser"]
+                data = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        app = tmp_path / "Google Chrome.app" / "Contents"
+        (app / "MacOS").mkdir(parents=True)
+        (app / "MacOS" / "Google Chrome").write_text("")
+        with open(app / "Info.plist", "wb") as fh:
+            plistlib.dump({"CFBundleShortVersionString": self.INSTALLED}, fh)
+        copy = tmp_path / "copy"
+        copy.mkdir()
+        (copy / "DevToolsActivePort").write_text(f"{port}\n/devtools/browser/x\n")
+        os.symlink("host.example-4242", copy / "SingletonLock")
+        bt._real_profile_cdp_cache.clear()
+        bt._real_profile_chrome_procs.clear()
+        state.update(cdp=f"http://127.0.0.1:{port}", copy=copy, plist=app / "Info.plist",
+                     exe=str(app / "MacOS" / "Google Chrome"))
+        try:
+            yield state
+        finally:
+            server.shutdown()
+            server.server_close()
+            bt._real_profile_cdp_cache.clear()
+            bt._real_profile_chrome_procs.clear()
+
+    def _run(self, env, existing=None):
+        """Drive _real_profile_cdp with the OS/process edges faked; a fresh launch lands on :5555."""
+        killed, launched = [], []
+        with patch.object(bt_cloud, "_use_real_profile", return_value=True), \
+             patch.object(bt_real_profile, "_on_macos", return_value=True), \
+             patch("hermes_cli.browser_connect.detect_default_chromium", return_value="chrome"), \
+             patch("hermes_cli.browser_connect.chromium_executable", return_value=env["exe"]), \
+             patch("hermes_cli.browser_connect.real_profile_copy_dir", return_value=str(env["copy"])), \
+             patch("hermes_cli.browser_connect.snapshot_real_profile",
+                   return_value=(str(env["copy"]), None)) as snapshot, \
+             patch("tools.browser_lightpanda._terminate",
+                   side_effect=lambda proc, what="": (killed.append(proc.pid),
+                                                     (env["copy"] / "DevToolsActivePort").unlink())), \
+             patch.object(bt_real_profile, "_agent_browser_get_cdp", return_value=existing), \
+             patch.object(bt_real_profile, "_agent_browser_close_session"), \
+             patch.object(bt_real_profile, "_launch_real_profile_chrome",
+                          side_effect=lambda b, d: (launched.append(b), (5555, None))[1]), \
+             patch.object(bt_real_profile, "_attach_agent_browser_to_real_profile",
+                          side_effect=lambda port, d: (f"http://127.0.0.1:{port}", None)) as attach:
+            cdp, err = bt_real_profile._real_profile_cdp()
+        return cdp, err, snapshot, attach, killed, launched
+
+    def _own(self, pid=4242):
+        import tools.browser_tool as bt
+        bt._real_profile_chrome_procs.append(Mock(pid=pid, **{"poll.return_value": None}))
+
+    @pytest.mark.parametrize("path", ["cache", "existing", "surviving"])
+    def test_matching_version_is_reused_on_every_path(self, env, path):
+        import tools.browser_tool as bt
+        if path == "cache":
+            bt._real_profile_cdp_cache.update(cdp=env["cdp"], browser="chrome")
+        cdp, err, snapshot, attach, killed, launched = self._run(
+            env, existing=env["cdp"] if path == "existing" else None)
+        assert (cdp, err) == (env["cdp"], None)
+        snapshot.assert_not_called()
+        assert not killed and not launched
+        assert attach.called == (path == "surviving")
+
+    @pytest.mark.parametrize("path", ["cache", "existing", "surviving"])
+    def test_mismatch_on_browser_we_launched_restarts_it(self, env, path):
+        import tools.browser_tool as bt
+        env["browser"] = "Chrome/155.0.8059.40"
+        self._own()
+        if path == "cache":
+            bt._real_profile_cdp_cache.update(cdp=env["cdp"], browser="chrome")
+        cdp, err, snapshot, attach, killed, launched = self._run(
+            env, existing=env["cdp"] if path in ("cache", "existing") else None)
+        assert (cdp, err) == ("http://127.0.0.1:5555", None)
+        assert killed == [4242]
+        snapshot.assert_called_once()
+        assert launched == [env["exe"]]
+        attach.assert_called_once_with(5555, str(env["copy"]))
+
+    @pytest.mark.parametrize("path", ["existing", "surviving"])
+    def test_mismatch_on_browser_we_did_not_launch_fails_closed(self, env, path):
+        env["browser"] = "Chrome/155.0.8059.40"
+        self._own(pid=9999)  # we own SOME browser, but not the one holding the copy
+        before = sorted(p.name for p in env["copy"].iterdir())
+        cdp, err, snapshot, attach, killed, launched = self._run(
+            env, existing=env["cdp"] if path == "existing" else None)
+        assert cdp is None
+        assert "PID 4242" in err and "155.0.8059.40" in err and self.INSTALLED in err
+        snapshot.assert_not_called()
+        attach.assert_not_called()
+        assert not killed and not launched
+        assert sorted(p.name for p in env["copy"].iterdir()) == before
+
+    @pytest.mark.parametrize("unreadable", ["running", "installed"])
+    def test_unreadable_version_fails_closed_even_when_owned(self, env, unreadable):
+        if unreadable == "running":
+            env["browser"] = None
+        else:
+            env["plist"].write_bytes(b"not a plist")
+        self._own()
+        cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert cdp is None and "could not be read" in err
+        snapshot.assert_not_called()
+        attach.assert_not_called()
+        assert not killed and not launched
 
 
 class TestConsentConfigRead:
@@ -838,6 +975,7 @@ class TestReviewRound3:
              patch.object(bt_real_profile, "_agent_browser_get_cdp", return_value="http://127.0.0.1:9251"), \
              patch.object(bt_real_profile, "_cdp_http_ready", return_value=True), \
              patch.object(bt_real_profile, "_cdp_on_data_dir", return_value=True), \
+             patch.object(bt_real_profile, "_installed_bundle_version", return_value=None), \
              patch("hermes_cli.browser_connect.snapshot_real_profile") as snap:
             cdp, err = bt_real_profile._real_profile_cdp()
         assert cdp == "http://127.0.0.1:9251" and err is None

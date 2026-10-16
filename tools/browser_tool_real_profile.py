@@ -7,6 +7,7 @@ through ``_bt`` (resolved per call — never import ``tools.browser_tool`` at im
 """
 
 import os
+import plistlib
 import re
 import subprocess
 import sys
@@ -102,6 +103,88 @@ def _surviving_chrome_cdp(data_dir: str) -> Optional[str]:
     return http_cdp if ws_url.endswith(browser_path) else None
 
 
+# Browsers whose macOS app-bundle CFBundleShortVersionString is the Chromium version that
+# /json/version reports (Brave/Edge bundles carry their own product versions: not comparable).
+_VERSION_GATED_BROWSERS = ("chrome", "chromium")
+
+
+def _on_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def _installed_bundle_version(browser: str) -> Optional[str]:
+    """``CFBundleShortVersionString`` of the .app holding ``chromium_executable(browser)``.
+    None when the gate does not apply (not macOS, ungated browser, no bundle/Info.plist);
+    "" when the plist exists but its version cannot be read (callers fail closed)."""
+    from hermes_cli.browser_connect import chromium_executable
+    if not _on_macos() or browser not in _VERSION_GATED_BROWSERS:
+        return None
+    exe = chromium_executable(browser) or ""
+    cut = exe.find(".app/Contents/MacOS/")
+    plist = exe[:cut + 4] + "/Contents/Info.plist" if cut > 0 else ""
+    if not plist or not os.path.isfile(plist):
+        return None
+    try:
+        with open(plist, "rb") as fh:
+            version = plistlib.load(fh).get("CFBundleShortVersionString")
+    except Exception:
+        return ""
+    return version.strip() if isinstance(version, str) else ""
+
+
+def _running_browser_version(http_cdp: str) -> str:
+    """Version from ``/json/version`` ``Browser`` (``Chrome/155.0.8059.40`` -> ``155.0.8059.40``); "" if unreadable."""
+    try:
+        import requests
+        product = requests.get(f"{http_cdp}/json/version", timeout=2,
+                               **loopback_request_kwargs(http_cdp)).json().get("Browser")
+    except Exception:
+        return ""
+    return product.rsplit("/", 1)[-1].strip() if isinstance(product, str) and "/" in product else ""
+
+
+def _version_mismatch(http_cdp: str, browser: Optional[str]) -> Optional[Tuple[str, str]]:
+    """``(running, installed)`` when the browser at ``http_cdp`` must not be reused because the
+    installed bundle changed under it (or either version is unreadable); None when reuse is safe.
+    With MacAppCodeSignClone disabled, a browser running across an update execs the NEW bundle for
+    its helper/renderer processes and fails code-signature validation (code_sign_clone_manager.mm)."""
+    installed = _installed_bundle_version(browser) if browser else None
+    if installed is None:
+        return None
+    running = _running_browser_version(http_cdp)
+    return None if installed and running == installed else (running or "unknown", installed or "unknown")
+
+
+def _copy_browser_pid(data_dir: str) -> Optional[int]:
+    """PID of the browser holding ``data_dir``, from its ``SingletonLock`` (``<host>-<pid>``)."""
+    try:
+        m = re.search(r"-(\d+)$", os.readlink(os.path.join(data_dir, "SingletonLock")))
+    except OSError:
+        return None
+    return int(m.group(1)) if m else None
+
+
+def _retire_outdated_browser(data_dir: str, browser: str, mismatch: Tuple[str, str]) -> Optional[str]:
+    """Version-mismatched browser on ``data_dir``: terminate it when THIS process launched it (we hold
+    its Popen) and return None so the normal snapshot+launch runs; otherwise fail closed. A browser
+    we did not launch is never killed (ownership unproven) and never snapshotted over."""
+    _bt = _origin()
+    pid = _copy_browser_pid(data_dir)
+    running, installed = mismatch
+    if "unknown" in mismatch:  # restarting cannot cure an unreadable version: it would loop
+        return (f"{_RP}the version of the real-profile {browser} on {data_dir} (PID {pid if pid is not None else 'unknown'}) "
+                f"or of the installed {browser} could not be read (running {running}, installed {installed}), so it "
+                "is not reused and was left running. Quit that process (and check the browser install), then retry.")
+    if pid is not None and any(p.pid == pid and p.poll() is None for p in _bt._real_profile_chrome_procs):
+        _bt.logger.info("real-profile: restarting %s PID %s (running %s, installed %s)", browser, pid, *mismatch)
+        _terminate_real_profile_chrome()
+        return None
+    return (f"{_RP}the real-profile {browser} still running on {data_dir} (PID {pid if pid is not None else 'unknown'}) "
+            f"is version {running}, but the installed {browser} is {installed}. A browser running across an update "
+            "fails code-signature checks, so it is not reused. It was not started by this Hermes process, so it was "
+            "left running: quit that process, then retry.")
+
+
 def _cdp_on_data_dir(http_cdp: str, data_dir: str) -> bool:
     """True when the CDP endpoint's browser runs on ``data_dir`` (DevToolsActivePort match proves it
     is our profile copy, not a throwaway temp dir a raced/stale launch fell back to)."""
@@ -121,11 +204,11 @@ _REAL_PROFILE_CHROME_FLAGS = (
     # MacAppCodeSignClone: macOS Google Chrome copies its whole app bundle (~1.4 GiB logical)
     # into /var/folders/<user>/X/com.google.Chrome.code_sign_clone per launch and deletes it
     # only on an orderly exit; a SIGKILL (our _terminate fallback) leaves it until reboot.
-    # Tradeoff: the clone exists so a running Chrome survives an update staged on disk.
-    # Without it, this browser (which may be reused until the user closes it, see
-    # _surviving_chrome_cdp) can hit code-signature validation errors after Chrome updates
-    # underneath it (code_sign_clone_manager.mm); restart it after an
-    # update. Unknown feature names are ignored by other Chromium browsers.
+    # Tradeoff: the clone exists so a running Chrome survives an update staged on disk; without
+    # it a browser running across an update hits code-signature errors (code_sign_clone_manager.mm).
+    # Gate: _version_mismatch compares /json/version with the installed bundle before every reuse;
+    # on a mismatch our own browser is restarted, any other one fails closed (_retire_outdated_browser).
+    # Unknown feature names are ignored by other Chromium browsers.
     "--disable-sync", "--disable-features=Translate,MacAppCodeSignClone", "--no-startup-window",
 )
 
@@ -262,17 +345,22 @@ def _real_profile_cdp() -> tuple:
 
     with _bt._real_profile_cdp_lock:
         cached = _bt._real_profile_cdp_cache.get("cdp")
-        if cached and _cdp_http_ready(cached):
+        cached_browser = _bt._real_profile_cdp_cache.get("browser")
+        if cached and _cdp_http_ready(cached) and not _version_mismatch(cached, cached_browser):
             # Re-claim the shared daemon's socket dir so the orphan reaper's idle clock sees
             # this process still using it (a cache hit never runs a daemon command).
             _session._prepare_session_socket_dir(_bt._REAL_PROFILE_SESSION)
             return cached, None
         _bt._real_profile_cdp_cache.pop("cdp", None)
+        _bt._real_profile_cdp_cache.pop("browser", None)
 
         browser = detect_default_chromium()
         unsupported = _real_profile_unsupported_reason(browser)
         if unsupported:
             return None, unsupported
+        if _installed_bundle_version(browser) == "":
+            return None, (f"{_RP}the installed {browser} version could not be read from its Info.plist, so a running "
+                          "real-profile browser cannot be checked against it. Reinstall the browser, or turn the toggle off.")
 
         # Reuse BEFORE writing anything. CRITICAL: the snapshot overlay (truncates/rewrites
         # Cookies / Login Data) must NOT run while a live copy-browser (maybe from a previous
@@ -280,20 +368,33 @@ def _real_profile_cdp() -> tuple:
         copy_dir = real_profile_copy_dir(browser)
         existing = _agent_browser_get_cdp(_bt._REAL_PROFILE_SESSION)
         if existing and _cdp_http_ready(existing) and _cdp_on_data_dir(existing, copy_dir):
-            _bt._real_profile_cdp_cache["cdp"] = existing
-            return existing, None
+            mismatch = _version_mismatch(existing, browser)
+            if not mismatch:
+                _bt._real_profile_cdp_cache.update(cdp=existing, browser=browser)
+                return existing, None
+            err = _retire_outdated_browser(copy_dir, browser, mismatch)
+            if err:
+                return None, err
         if existing:  # stale/wrong-dir session: close it so nothing holds the dir open
             _agent_browser_close_session(_bt._REAL_PROFILE_SESSION)
         # A Chrome from an earlier hermes process can still hold the copy dir after its attach
         # daemon was reaped (that owner died). Re-attach to it rather than overlay a live profile;
         # if the daemon cannot attach, fail closed — never snapshot over an open profile. Not ours
-        # to terminate (no Popen handle): it lives until the user closes it, by design.
+        # to terminate (no Popen handle): it lives until the user closes it, by design — but it is
+        # reused only while its version matches the installed bundle (see _retire_outdated_browser).
         surviving = _surviving_chrome_cdp(copy_dir)
+        if surviving and (mismatch := _version_mismatch(surviving, browser)):
+            err = _retire_outdated_browser(copy_dir, browser, mismatch)
+            if err:
+                return None, err
+            if _surviving_chrome_cdp(copy_dir):  # terminated yet still answering: never overlay it
+                return None, _RP + "the outdated real-profile browser did not exit. Retry, or turn the toggle off."
+            surviving = None
         if surviving:
             cdp, err = _attach_agent_browser_to_real_profile(int(surviving.rsplit(":", 1)[1]), copy_dir)
             if not cdp:
                 return None, err
-            _bt._real_profile_cdp_cache["cdp"] = cdp
+            _bt._real_profile_cdp_cache.update(cdp=cdp, browser=browser)
             _bt.logger.info("real-profile: re-attached to surviving Chrome at %s (%s)", cdp, copy_dir)
             return cdp, None
 
@@ -309,6 +410,6 @@ def _real_profile_cdp() -> tuple:
         cdp, err = _attach_agent_browser_to_real_profile(port, copy_dir)
         if not cdp:
             return None, err
-        _bt._real_profile_cdp_cache["cdp"] = cdp
+        _bt._real_profile_cdp_cache.update(cdp=cdp, browser=browser)
         _bt.logger.info("real-profile browser ready for %s at %s (%s)", browser, cdp, copy_dir)
         return cdp, None
