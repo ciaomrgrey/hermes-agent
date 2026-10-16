@@ -101,7 +101,7 @@ def _surviving_chrome(data_dir: str, exited: tuple = ()) -> Tuple[Optional[str],
     ``webSocketDebuggerUrl``, or a recycled port answering for a different browser id) proves only
     that THIS endpoint cannot identify our browser, not that it is gone. Absence is then established
     solely by liveness: ``uncertain`` is False only when the ``SingletonLock`` PID is confirmed dead
-    (or there is no lock) and no held Popen of ours is still running on ``data_dir``. The caller must
+    (or the lock is positively missing; an unreadable/malformed lock is unknown) and no held Popen of ours is still running on ``data_dir``. The caller must
     fail closed on ``uncertain`` (never snapshot over a profile that may still be open).
     ``exited`` are Popens just terminated by this process (their exit status proves their PIDs gone)."""
     try:
@@ -131,7 +131,9 @@ def _copy_dir_maybe_live(data_dir: str, exited: tuple = ()) -> bool:
         args = getattr(proc, "args", None)
         if isinstance(args, (list, tuple)) and flag in args and proc.poll() is None:
             return True
-    pid = _copy_browser_pid(data_dir)
+    readable, pid = _copy_lock(data_dir)
+    if not readable:  # an unreadable/malformed lock is not evidence of absence
+        return True
     return pid is not None and _pid_alive(pid, exited)
 
 
@@ -151,9 +153,10 @@ def _pid_alive(pid: int, exited: tuple = ()) -> bool:
 
 
 def _survivor_unreadable_error(data_dir: str, browser: str) -> str:
-    pid = _copy_browser_pid(data_dir)
+    readable, pid = _copy_lock(data_dir)
     installed = _installed_bundle_version(browser) or "unknown"
-    return (f"{_RP}a real-profile {browser} may still be running on {data_dir} (PID {pid if pid is not None else 'unknown'}), "
+    lock_note = "" if readable else "; its SingletonLock exists but could not be read"
+    return (f"{_RP}a real-profile {browser} may still be running on {data_dir} (PID {pid if pid is not None else 'unknown'}{lock_note}), "
             "but its devtools discovery (DevToolsActivePort + /json/version) did not identify it, so its version "
             f"cannot be checked (running unknown, installed {installed}) and its profile is not snapshotted over. "
             "It was left running: quit that process, then retry.")
@@ -211,13 +214,25 @@ def _version_mismatch(http_cdp: str, browser: Optional[str]) -> Optional[Tuple[s
     return None if installed and running == installed else (running or "unknown", installed or "unknown")
 
 
-def _copy_browser_pid(data_dir: str) -> Optional[int]:
-    """PID of the browser holding ``data_dir``, from its ``SingletonLock`` (``<host>-<pid>``)."""
+def _copy_lock(data_dir: str) -> Tuple[bool, Optional[int]]:
+    """``SingletonLock`` evidence for ``data_dir`` as ``(readable, pid)``: ``(True, None)`` only when
+    the lock is positively missing; ``(True, pid)`` for a well-formed ``<host>-<pid>`` link;
+    ``(False, None)`` when it exists but cannot be read or parsed (permission denied, not a
+    symlink, malformed target). Unreadable is unknown, never absent."""
     try:
-        m = re.search(r"-(\d+)$", os.readlink(os.path.join(data_dir, "SingletonLock")))
+        target = os.readlink(os.path.join(data_dir, "SingletonLock"))
+    except FileNotFoundError:
+        return True, None
     except OSError:
-        return None
-    return int(m.group(1)) if m else None
+        return False, None
+    m = re.search(r"-(\d+)$", target)
+    return (True, int(m.group(1))) if m else (False, None)
+
+
+def _copy_browser_pid(data_dir: str) -> Optional[int]:
+    """PID of the browser holding ``data_dir``, from its ``SingletonLock`` (``<host>-<pid>``);
+    None when missing or unreadable (diagnostics/ownership only; absence uses ``_copy_lock``)."""
+    return _copy_lock(data_dir)[1]
 
 
 def _retire_outdated_browser(data_dir: str, browser: str, mismatch: Tuple[str, str],

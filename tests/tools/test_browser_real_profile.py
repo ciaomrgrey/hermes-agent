@@ -546,6 +546,49 @@ class TestRealProfileVersionGate:
         snapshot.assert_called_once()
         assert launched == [env["exe"]] and not killed
 
+    @pytest.mark.parametrize("lock_state", ["permission-denied", "malformed-target", "not-a-symlink"])
+    def test_unreadable_lock_with_unidentified_discovery_fails_closed(self, env, lock_state):
+        """A SingletonLock that exists but cannot be read or parsed is unknown ownership, not absence:
+        with discovery unavailable and no Popen of ours, no snapshot, launch, attach or kill."""
+        lock = env["copy"] / "SingletonLock"
+        if lock_state == "malformed-target":
+            lock.unlink()
+            lock.symlink_to("host-unreadable-pid")
+        elif lock_state == "not-a-symlink":
+            lock.unlink()
+            lock.write_text("x")
+        real_readlink = os.readlink
+
+        def readlink(path, *a, **kw):
+            if str(path) == str(lock) and lock_state == "permission-denied":
+                raise PermissionError("fixture denied")
+            return real_readlink(path, *a, **kw)
+
+        before = {p.name: p.stat().st_mtime_ns for p in env["copy"].iterdir() if not p.is_symlink()}
+        with patch("requests.get", return_value=Mock(**{"json.return_value": {}})), \
+             patch.object(bt_real_profile.os, "readlink", side_effect=readlink), \
+             patch.object(bt_real_profile.os, "kill", side_effect=ProcessLookupError):
+            cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert cdp is None and err, (cdp, err)
+        assert "PID unknown" in err and "SingletonLock exists but could not be read" in err, err
+        assert "running unknown" in err and f"installed {self.INSTALLED}" in err, err
+        snapshot.assert_not_called()
+        attach.assert_not_called()
+        assert not killed and not launched
+        assert {p.name: p.stat().st_mtime_ns for p in env["copy"].iterdir() if not p.is_symlink()} == before
+
+    def test_copy_lock_classifies_missing_vs_unknown(self, tmp_path):
+        """Only a positively missing lock reads as absent; unreadable/malformed is unknown."""
+        assert bt_real_profile._copy_lock(str(tmp_path)) == (True, None)
+        os.symlink("host.example-4242", tmp_path / "SingletonLock")
+        assert bt_real_profile._copy_lock(str(tmp_path)) == (True, 4242)
+        os.unlink(tmp_path / "SingletonLock")
+        os.symlink("garbage", tmp_path / "SingletonLock")
+        assert bt_real_profile._copy_lock(str(tmp_path)) == (False, None)
+        os.unlink(tmp_path / "SingletonLock")
+        (tmp_path / "SingletonLock").write_text("x")
+        assert bt_real_profile._copy_lock(str(tmp_path)) == (False, None)
+
     @pytest.mark.parametrize("dead", ["owned-exited", "foreign-gone", "no-lock"])
     def test_unreadable_endpoint_of_confirmed_dead_browser_launches(self, env, dead):
         """Control: a crashed browser leaves DevToolsActivePort behind; once its PID is proven
