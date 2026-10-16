@@ -213,7 +213,8 @@ def test_cli_sweep_clones_dry_run_then_apply(root, monkeypatch, capsys):
 
 def test_host_root_is_never_swept_under_test_isolation(monkeypatch):
     """Fake browser handles leaked by other tests reach the atexit terminate hook; it must
-    not touch the developer's real clone dir (2 leaked FakeChrome handles observed)."""
+    not touch the developer's real clone dir. Before this guard, a suite run with 2 leaked
+    FakeChrome handles swept the host and removed a real unreferenced orphan clone."""
     monkeypatch.setenv("HERMES_TEST_ISOLATION", "1")
     called = []
     monkeypatch.setattr(ccs, "default_clone_root", lambda: called.append(1))
