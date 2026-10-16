@@ -464,6 +464,52 @@ class TestRealProfileVersionGate:
         attach.assert_not_called()
         assert not killed and not launched
 
+    def test_unreadable_installed_names_pid_and_both_versions(self, env):
+        env["plist"].write_bytes(b"not a plist")
+        cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert cdp is None and not snapshot.called and not attach.called and not killed and not launched
+        assert "PID 4242" in err and "running 155.0.8059.80" in err and "installed unknown" in err, err
+
+    @pytest.mark.parametrize("failure", ["timeout", "refused", "invalid-json"])
+    @pytest.mark.parametrize("owner", ["owned-live", "foreign-live"])
+    def test_unreadable_endpoint_of_live_survivor_fails_closed(self, env, failure, owner):
+        """No answer from /json/version is not proof the browser exited: with its PID alive,
+        never snapshot over its profile, never kill it, never attach."""
+        import requests
+        if owner == "owned-live":
+            self._own()
+        if failure == "invalid-json":
+            bad = Mock(**{"json.side_effect": ValueError("not json")})
+            get = patch("requests.get", return_value=bad)
+        else:
+            exc = requests.exceptions.Timeout if failure == "timeout" else requests.exceptions.ConnectionError
+            get = patch("requests.get", side_effect=exc("fixture"))
+        before = sorted(p.name for p in env["copy"].iterdir())
+        with get, patch.object(bt_real_profile.os, "kill", return_value=None):
+            cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert cdp is None and "PID 4242" in err and "running unknown" in err, err
+        snapshot.assert_not_called()
+        attach.assert_not_called()
+        assert not killed and not launched
+        assert sorted(p.name for p in env["copy"].iterdir()) == before
+
+    @pytest.mark.parametrize("dead", ["owned-exited", "foreign-gone", "no-lock"])
+    def test_unreadable_endpoint_of_confirmed_dead_browser_launches(self, env, dead):
+        """Control: a crashed browser leaves DevToolsActivePort behind; once its PID is proven
+        gone (our Popen exited / no such process / no SingletonLock) the normal launch runs."""
+        import requests
+        import tools.browser_tool as bt
+        if dead == "owned-exited":
+            bt._real_profile_chrome_procs.append(Mock(pid=4242, **{"poll.return_value": 0}))
+        elif dead == "no-lock":
+            os.unlink(env["copy"] / "SingletonLock")
+        with patch("requests.get", side_effect=requests.exceptions.ConnectionError("fixture")), \
+             patch.object(bt_real_profile.os, "kill", side_effect=ProcessLookupError):
+            cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert (cdp, err) == ("http://127.0.0.1:5555", None)
+        snapshot.assert_called_once()
+        assert launched == [env["exe"]] and not killed
+
 
 class TestConsentConfigRead:
     """Unmocked config read: _use_real_profile against a real config.yaml."""
