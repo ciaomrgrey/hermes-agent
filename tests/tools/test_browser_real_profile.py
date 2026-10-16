@@ -273,6 +273,14 @@ class TestRealProfileCdpLaunch:
             bt_real_profile._real_profile_cdp()
         # The chrome launch itself is headless (no window, no focus steal).
         assert "--headless=new" in captured["chrome_argv"]
+        # macOS Google Chrome otherwise clones its ~1.4 GiB bundle into
+        # /var/folders/.../X per launch and only removes it on an orderly exit, so a
+        # Hermes SIGKILL fallback leaves it until reboot. Disabling the feature stops
+        # the clone from being created at all (no deletion code is needed).
+        disabled = [a.split("=", 1)[1].split(",") for a in captured["chrome_argv"]
+                    if a.startswith("--disable-features=")]
+        assert len(disabled) == 1, "Chrome honours only the last --disable-features switch"
+        assert {"Translate", "MacAppCodeSignClone"} <= set(disabled[0])
         # agent-browser attaches, it does not launch.
         assert "--headless" not in captured["argv"]
         assert "--profile" not in captured["argv"]
@@ -335,6 +343,7 @@ class TestRealProfileCdpLaunch:
              patch("hermes_cli.browser_connect.snapshot_real_profile", return_value=(None, "boom")) as snapshot, \
              patch("requests.get", return_value=version), \
              patch.object(bt_real_profile, "_agent_browser_get_cdp", return_value=None), \
+             patch.object(bt_real_profile, "_installed_bundle_version", return_value=None), \
              patch.object(bt_real_profile, "_attach_agent_browser_to_real_profile",
                           return_value=("http://127.0.0.1:41000", None)) as attach:
             cdp, err = bt_real_profile._real_profile_cdp()
@@ -464,6 +473,284 @@ class TestAgentBrowserCliCapture:
 
         assert not (tmp_path / "_stdout_rp-timeout").exists()
         assert not (tmp_path / "_stderr_rp-timeout").exists()
+
+
+class TestRealProfileVersionGate:
+    """With MacAppCodeSignClone disabled, a browser running across a staged update execs the new
+    bundle's helpers and fails code-signature checks: no reuse path may hand it out. A real
+    loopback server plays CDP ``/json/version``; a real temp ``Info.plist`` is the installed bundle."""
+
+    INSTALLED = "155.0.8059.80"
+
+    @pytest.fixture
+    def env(self, tmp_path):
+        import http.server
+        import plistlib
+        import threading
+
+        import tools.browser_tool as bt
+        state = {"browser": "Chrome/155.0.8059.80"}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = {"webSocketDebuggerUrl": f"ws://127.0.0.1:{port}/devtools/browser/x"}
+                if state["browser"] is not None:
+                    body["Browser"] = state["browser"]
+                data = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        app = tmp_path / "Google Chrome.app" / "Contents"
+        (app / "MacOS").mkdir(parents=True)
+        (app / "MacOS" / "Google Chrome").write_text("")
+        with open(app / "Info.plist", "wb") as fh:
+            plistlib.dump({"CFBundleShortVersionString": self.INSTALLED}, fh)
+        copy = tmp_path / "copy"
+        copy.mkdir()
+        (copy / "DevToolsActivePort").write_text(f"{port}\n/devtools/browser/x\n")
+        os.symlink("host.example-4242", copy / "SingletonLock")
+        bt._real_profile_cdp_cache.clear()
+        bt._real_profile_chrome_procs.clear()
+        state.update(cdp=f"http://127.0.0.1:{port}", copy=copy, plist=app / "Info.plist",
+                     exe=str(app / "MacOS" / "Google Chrome"))
+        try:
+            yield state
+        finally:
+            server.shutdown()
+            server.server_close()
+            bt._real_profile_cdp_cache.clear()
+            bt._real_profile_chrome_procs.clear()
+
+    def _run(self, env, existing=None):
+        """Drive _real_profile_cdp with the OS/process edges faked; a fresh launch lands on :5555."""
+        killed, launched = [], []
+        with patch.object(bt_cloud, "_use_real_profile", return_value=True), \
+             patch.object(bt_real_profile, "_on_macos", return_value=True), \
+             patch("hermes_cli.browser_connect.detect_default_chromium", return_value="chrome"), \
+             patch("hermes_cli.browser_connect.chromium_executable", return_value=env["exe"]), \
+             patch("hermes_cli.browser_connect.real_profile_copy_dir", return_value=str(env["copy"])), \
+             patch("hermes_cli.browser_connect.snapshot_real_profile",
+                   return_value=(str(env["copy"]), None)) as snapshot, \
+             patch("tools.browser_lightpanda._terminate",
+                   side_effect=lambda proc, what="": (killed.append(proc.pid), proc.poll.configure_mock(return_value=0),
+                                                     (env["copy"] / "DevToolsActivePort").unlink())), \
+             patch.object(bt_real_profile, "_agent_browser_get_cdp", return_value=existing), \
+             patch.object(bt_real_profile, "_agent_browser_close_session"), \
+             patch.object(bt_real_profile, "_launch_real_profile_chrome",
+                          side_effect=lambda b, d: (launched.append(b), (5555, None))[1]), \
+             patch.object(bt_real_profile, "_attach_agent_browser_to_real_profile",
+                          side_effect=lambda port, d: (f"http://127.0.0.1:{port}", None)) as attach:
+            cdp, err = bt_real_profile._real_profile_cdp()
+        return cdp, err, snapshot, attach, killed, launched
+
+    def _own(self, pid=4242):
+        import tools.browser_tool as bt
+        bt._real_profile_chrome_procs.append(Mock(pid=pid, **{"poll.return_value": None}))
+
+    @pytest.mark.parametrize("path", ["cache", "existing", "surviving"])
+    def test_matching_version_is_reused_on_every_path(self, env, path):
+        import tools.browser_tool as bt
+        if path == "cache":
+            bt._real_profile_cdp_cache.update(cdp=env["cdp"], browser="chrome")
+        cdp, err, snapshot, attach, killed, launched = self._run(
+            env, existing=env["cdp"] if path == "existing" else None)
+        assert (cdp, err) == (env["cdp"], None)
+        snapshot.assert_not_called()
+        assert not killed and not launched
+        assert attach.called == (path == "surviving")
+
+    @pytest.mark.parametrize("path", ["cache", "existing", "surviving"])
+    def test_mismatch_on_browser_we_launched_restarts_it(self, env, path):
+        import tools.browser_tool as bt
+        env["browser"] = "Chrome/155.0.8059.40"
+        self._own()
+        if path == "cache":
+            bt._real_profile_cdp_cache.update(cdp=env["cdp"], browser="chrome")
+        cdp, err, snapshot, attach, killed, launched = self._run(
+            env, existing=env["cdp"] if path in ("cache", "existing") else None)
+        assert (cdp, err) == ("http://127.0.0.1:5555", None)
+        assert killed == [4242]
+        snapshot.assert_called_once()
+        assert launched == [env["exe"]]
+        attach.assert_called_once_with(5555, str(env["copy"]))
+
+    @pytest.mark.parametrize("path", ["existing", "surviving"])
+    def test_mismatch_on_browser_we_did_not_launch_fails_closed(self, env, path):
+        env["browser"] = "Chrome/155.0.8059.40"
+        self._own(pid=9999)  # we own SOME browser, but not the one holding the copy
+        before = sorted(p.name for p in env["copy"].iterdir())
+        cdp, err, snapshot, attach, killed, launched = self._run(
+            env, existing=env["cdp"] if path == "existing" else None)
+        assert cdp is None
+        assert "PID 4242" in err and "155.0.8059.40" in err and self.INSTALLED in err
+        snapshot.assert_not_called()
+        attach.assert_not_called()
+        assert not killed and not launched
+        assert sorted(p.name for p in env["copy"].iterdir()) == before
+
+    @pytest.mark.parametrize("unreadable", ["running", "installed"])
+    def test_unreadable_version_fails_closed_even_when_owned(self, env, unreadable):
+        if unreadable == "running":
+            env["browser"] = None
+        else:
+            env["plist"].write_bytes(b"not a plist")
+        self._own()
+        cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert cdp is None and "could not be read" in err
+        snapshot.assert_not_called()
+        attach.assert_not_called()
+        assert not killed and not launched
+
+    def test_unreadable_installed_names_pid_and_both_versions(self, env):
+        env["plist"].write_bytes(b"not a plist")
+        cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert cdp is None and not snapshot.called and not attach.called and not killed and not launched
+        assert "PID 4242" in err and "running 155.0.8059.80" in err and "installed unknown" in err, err
+
+    @pytest.mark.parametrize("failure", ["timeout", "refused", "invalid-json"])
+    @pytest.mark.parametrize("owner", ["owned-live", "foreign-live"])
+    def test_unreadable_endpoint_of_live_survivor_fails_closed(self, env, failure, owner):
+        """No answer from /json/version is not proof the browser exited: with its PID alive,
+        never snapshot over its profile, never kill it, never attach."""
+        import requests
+        if owner == "owned-live":
+            self._own()
+        if failure == "invalid-json":
+            bad = Mock(**{"json.side_effect": ValueError("not json")})
+            get = patch("requests.get", return_value=bad)
+        else:
+            exc = requests.exceptions.Timeout if failure == "timeout" else requests.exceptions.ConnectionError
+            get = patch("requests.get", side_effect=exc("fixture"))
+        before = sorted(p.name for p in env["copy"].iterdir())
+        with get, patch.object(bt_real_profile.os, "kill", return_value=None):
+            cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert cdp is None and "PID 4242" in err and "running unknown" in err, err
+        assert f"installed {self.INSTALLED}" in err, err
+        snapshot.assert_not_called()
+        attach.assert_not_called()
+        assert not killed and not launched
+        assert sorted(p.name for p in env["copy"].iterdir()) == before
+
+    @pytest.mark.parametrize("discovery", ["empty-json", "json-without-ws-url", "json-list", "non-ws-url",
+                                           "malformed-port-file", "missing-port-file", "recycled-port"])
+    @pytest.mark.parametrize("owner", ["owned-live", "foreign-live"])
+    def test_unidentified_discovery_of_live_browser_fails_closed(self, env, discovery, owner):
+        """Discovery that does not POSITIVELY identify our browser (incomplete JSON, malformed or missing
+        DevToolsActivePort, a recycled port answering for another browser id) is not confirmed absence:
+        while the SingletonLock PID is alive, no snapshot, launch, attach or kill."""
+        if owner == "owned-live":
+            self._own()
+        payloads = {"empty-json": {}, "json-without-ws-url": {"Browser": "Chrome/155.0.8059.40"},
+                    "json-list": [], "non-ws-url": {"webSocketDebuggerUrl": "/devtools/browser/x"},
+                    "recycled-port": {"webSocketDebuggerUrl": "ws://127.0.0.1:1/devtools/browser/other"}}
+        if discovery == "malformed-port-file":
+            (env["copy"] / "DevToolsActivePort").write_text("invalid\n")
+        elif discovery == "missing-port-file":
+            (env["copy"] / "DevToolsActivePort").unlink()
+        get = patch("requests.get", return_value=Mock(**{"json.return_value": payloads.get(discovery, {})}))
+        before = {p.name: p.stat().st_mtime_ns for p in env["copy"].iterdir() if not p.is_symlink()}
+        with get, patch.object(bt_real_profile.os, "kill", return_value=None):
+            cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert cdp is None and err, (cdp, err)
+        assert "PID 4242" in err and "running unknown" in err and f"installed {self.INSTALLED}" in err, err
+        snapshot.assert_not_called()
+        attach.assert_not_called()
+        assert not killed and not launched
+        assert {p.name: p.stat().st_mtime_ns for p in env["copy"].iterdir() if not p.is_symlink()} == before
+
+    def test_held_live_popen_on_copy_dir_without_lock_fails_closed(self, env):
+        """No SingletonLock, but a Popen we hold is still running on the copy dir: not absent."""
+        import tools.browser_tool as bt
+        os.unlink(env["copy"] / "SingletonLock")
+        bt._real_profile_chrome_procs.append(Mock(pid=4242, args=["chrome", f"--user-data-dir={env['copy']}"],
+                                                  **{"poll.return_value": None}))
+        with patch("requests.get", return_value=Mock(**{"json.return_value": {}})):
+            cdp, err, snapshot, _attach, killed, launched = self._run(env)
+        assert cdp is None and err
+        snapshot.assert_not_called()
+        assert not killed and not launched
+
+    @pytest.mark.parametrize("discovery", ["empty-json", "malformed-port-file", "recycled-port"])
+    def test_unidentified_discovery_of_confirmed_dead_browser_launches(self, env, discovery):
+        """Control: same unidentified discovery, but the lock PID is gone -> normal snapshot+launch."""
+        if discovery == "malformed-port-file":
+            (env["copy"] / "DevToolsActivePort").write_text("invalid\n")
+        payload = {"webSocketDebuggerUrl": "ws://127.0.0.1:1/devtools/browser/other"} if discovery == "recycled-port" else {}
+        with patch("requests.get", return_value=Mock(**{"json.return_value": payload})), \
+             patch.object(bt_real_profile.os, "kill", side_effect=ProcessLookupError):
+            cdp, err, snapshot, _attach, killed, launched = self._run(env)
+        assert (cdp, err) == ("http://127.0.0.1:5555", None)
+        snapshot.assert_called_once()
+        assert launched == [env["exe"]] and not killed
+
+    @pytest.mark.parametrize("lock_state", ["permission-denied", "malformed-target", "not-a-symlink"])
+    def test_unreadable_lock_with_unidentified_discovery_fails_closed(self, env, lock_state):
+        """A SingletonLock that exists but cannot be read or parsed is unknown ownership, not absence:
+        with discovery unavailable and no Popen of ours, no snapshot, launch, attach or kill."""
+        lock = env["copy"] / "SingletonLock"
+        if lock_state == "malformed-target":
+            lock.unlink()
+            lock.symlink_to("host-unreadable-pid")
+        elif lock_state == "not-a-symlink":
+            lock.unlink()
+            lock.write_text("x")
+        real_readlink = os.readlink
+
+        def readlink(path, *a, **kw):
+            if str(path) == str(lock) and lock_state == "permission-denied":
+                raise PermissionError("fixture denied")
+            return real_readlink(path, *a, **kw)
+
+        before = {p.name: p.stat().st_mtime_ns for p in env["copy"].iterdir() if not p.is_symlink()}
+        with patch("requests.get", return_value=Mock(**{"json.return_value": {}})), \
+             patch.object(bt_real_profile.os, "readlink", side_effect=readlink), \
+             patch.object(bt_real_profile.os, "kill", side_effect=ProcessLookupError):
+            cdp, err, snapshot, attach, killed, launched = self._run(env)
+        assert cdp is None and err, (cdp, err)
+        assert "PID unknown" in err and "SingletonLock exists but could not be read" in err, err
+        assert "running unknown" in err and f"installed {self.INSTALLED}" in err, err
+        snapshot.assert_not_called()
+        attach.assert_not_called()
+        assert not killed and not launched
+        assert {p.name: p.stat().st_mtime_ns for p in env["copy"].iterdir() if not p.is_symlink()} == before
+
+    def test_copy_lock_classifies_missing_vs_unknown(self, tmp_path):
+        """Only a positively missing lock reads as absent; unreadable/malformed is unknown."""
+        assert bt_real_profile._copy_lock(str(tmp_path)) == (True, None)
+        os.symlink("host.example-4242", tmp_path / "SingletonLock")
+        assert bt_real_profile._copy_lock(str(tmp_path)) == (True, 4242)
+        os.unlink(tmp_path / "SingletonLock")
+        os.symlink("garbage", tmp_path / "SingletonLock")
+        assert bt_real_profile._copy_lock(str(tmp_path)) == (False, None)
+        os.unlink(tmp_path / "SingletonLock")
+        (tmp_path / "SingletonLock").write_text("x")
+        assert bt_real_profile._copy_lock(str(tmp_path)) == (False, None)
+
+    @pytest.mark.parametrize("dead", ["owned-exited", "foreign-gone", "no-lock"])
+    def test_unreadable_endpoint_of_confirmed_dead_browser_launches(self, env, dead):
+        """Control: a crashed browser leaves DevToolsActivePort behind; once its PID is proven
+        gone (our Popen exited / no such process / no SingletonLock) the normal launch runs."""
+        import requests
+        import tools.browser_tool as bt
+        if dead == "owned-exited":
+            bt._real_profile_chrome_procs.append(Mock(pid=4242, **{"poll.return_value": 0}))
+        elif dead == "no-lock":
+            os.unlink(env["copy"] / "SingletonLock")
+        with patch("requests.get", side_effect=requests.exceptions.ConnectionError("fixture")), \
+             patch.object(bt_real_profile.os, "kill", side_effect=ProcessLookupError):
+            cdp, err, snapshot, _attach, killed, launched = self._run(env)
+        assert (cdp, err) == ("http://127.0.0.1:5555", None)
+        snapshot.assert_called_once()
+        assert launched == [env["exe"]] and not killed
 
 
 class TestConsentConfigRead:
@@ -976,6 +1263,7 @@ class TestReviewRound3:
              patch.object(bt_real_profile, "_agent_browser_get_cdp", return_value="http://127.0.0.1:9251"), \
              patch.object(bt_real_profile, "_cdp_http_ready", return_value=True), \
              patch.object(bt_real_profile, "_cdp_on_data_dir", return_value=True), \
+             patch.object(bt_real_profile, "_installed_bundle_version", return_value=None), \
              patch("hermes_cli.browser_connect.snapshot_real_profile") as snap:
             cdp, err = bt_real_profile._real_profile_cdp()
         assert cdp == "http://127.0.0.1:9251" and err is None
