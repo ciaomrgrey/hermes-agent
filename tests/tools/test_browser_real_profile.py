@@ -240,6 +240,14 @@ class TestRealProfileCdpLaunch:
             bt_real_profile._real_profile_cdp()
         # The chrome launch itself is headless (no window, no focus steal).
         assert "--headless=new" in captured["chrome_argv"]
+        # macOS Google Chrome otherwise clones its ~1.4 GiB bundle into
+        # /var/folders/.../X per launch and only removes it on an orderly exit, so a
+        # Hermes SIGKILL fallback leaves it until reboot. Disabling the feature stops
+        # the clone from being created at all (no deletion code is needed).
+        disabled = [a.split("=", 1)[1].split(",") for a in captured["chrome_argv"]
+                    if a.startswith("--disable-features=")]
+        assert len(disabled) == 1, "Chrome honours only the last --disable-features switch"
+        assert {"Translate", "MacAppCodeSignClone"} <= set(disabled[0])
         # agent-browser attaches, it does not launch.
         assert "--headless" not in captured["argv"]
         assert "--profile" not in captured["argv"]
@@ -990,31 +998,3 @@ class TestWindowsLockedProfileCopy:
         dst, err = bc.snapshot_real_profile("chrome", src=str(root))
         assert dst is None
         assert err
-
-
-class TestRealProfileCodeSignCloneSweep:
-    """Terminating a Hermes-launched real browser reaps orphaned macOS Chrome clones
-    (its SIGKILL fallback skips Chrome's own cleanup); nothing to terminate, no sweep."""
-
-    def _run(self, monkeypatch, procs, platform="darwin"):
-        from tools import browser_tool as bt
-        from tools import chrome_code_sign_clones as ccs
-        calls = []
-        monkeypatch.setattr(bt, "_real_profile_chrome_procs", list(procs))
-        monkeypatch.setattr(bt_real_profile.sys, "platform", platform)
-        monkeypatch.setattr("tools.browser_lightpanda._terminate", lambda p, what="": calls.append(("term", p)))
-        monkeypatch.setattr(ccs, "sweep_code_sign_clones",
-                            lambda **kw: calls.append(("sweep", kw)) or ccs.SweepResult(root=None, applied=True))
-        bt_real_profile._terminate_real_profile_chrome()
-        return calls
-
-    def test_sweeps_after_terminating(self, monkeypatch):
-        p = Mock()
-        assert self._run(monkeypatch, [p]) == [("term", p), ("sweep", {"apply": True})]
-
-    def test_no_sweep_when_nothing_terminated(self, monkeypatch):
-        assert self._run(monkeypatch, []) == []
-
-    def test_no_sweep_off_macos(self, monkeypatch):
-        p = Mock()
-        assert self._run(monkeypatch, [p], platform="linux") == [("term", p)]

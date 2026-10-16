@@ -27,26 +27,8 @@ def _terminate_real_profile_chrome() -> None:
     agent-browser only ATTACHED to them, so its own session cleanup never kills them."""
     from tools.browser_lightpanda import _terminate
     _bt = _origin()
-    terminated = False
     while _bt._real_profile_chrome_procs:
         _terminate(_bt._real_profile_chrome_procs.pop(), what="real-profile chrome")
-        terminated = True
-    if terminated:
-        _sweep_orphaned_code_sign_clones()
-
-
-def _sweep_orphaned_code_sign_clones() -> None:
-    """macOS Google Chrome clones its ~1.4 GiB app bundle per launch and only deletes it on an
-    orderly exit; the SIGKILL fallback in ``_terminate`` (or a terminate racing startup) leaves
-    it behind until reboot. Reap ORPHANED clones only (gated: age, exact structure, no open
-    file/mapping/executable) — never a live browser's, ours or the user's."""
-    if sys.platform != "darwin":
-        return
-    from tools.chrome_code_sign_clones import sweep_code_sign_clones
-    res = sweep_code_sign_clones(apply=True)
-    if res.removed or res.error:
-        _origin().logger.info("real-profile: code-sign clone sweep removed=%s error=%s host_free_delta=%s",
-                              res.removed, res.error, res.host_free_delta_bytes)
 
 
 def _cdp_http_ready(http_cdp: str) -> bool:
@@ -136,7 +118,12 @@ _REAL_PROFILE_CHROME_FLAGS = (
     "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
     "--disable-background-networking", "--disable-component-update", "--disable-default-apps",
     "--disable-hang-monitor", "--disable-popup-blocking", "--disable-prompt-on-repost",
-    "--disable-sync", "--disable-features=Translate", "--no-startup-window",
+    # MacAppCodeSignClone: macOS Google Chrome copies its whole app bundle (~1.4 GiB logical)
+    # into /var/folders/<user>/X/com.google.Chrome.code_sign_clone per launch and deletes it
+    # only on an orderly exit; a SIGKILL (our _terminate fallback) leaves it until reboot.
+    # This short-lived headless copy never needs to outlive an app update, so skip the clone.
+    # Unknown feature names are ignored by other Chromium browsers.
+    "--disable-sync", "--disable-features=Translate,MacAppCodeSignClone", "--no-startup-window",
 )
 
 
