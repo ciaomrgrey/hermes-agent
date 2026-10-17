@@ -262,3 +262,95 @@ def test_worker_reason_stays_unprefixed(orch, monkeypatch):
     monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run))
     out = _schedule({"reason": "SCHEDULED_UNTIL=x"})
     assert out["ok"] is True and out["reason"] == "SCHEDULED_UNTIL=x"
+
+
+# --- Atomicity: authorization is bound to the mutation (Gurney P1) ---------
+#
+# A competing writer lands between the guard read and schedule_task's UPDATE
+# (deterministically, by interleaving inside the patched schedule_task before
+# it opens its transaction). The approved episode must no longer authorize.
+
+def _interleave(kb, monkeypatch, competing):
+    original = kb.schedule_task
+
+    def wrapped(conn, task_id, **kwargs):
+        with _conn() as other:
+            competing(kb, other, task_id)
+        return original(conn, task_id, **kwargs)
+
+    monkeypatch.setattr(kb, "schedule_task", wrapped)
+
+
+def _to_human_hold(kb, other, tid):
+    assert kb.unblock_task(other, tid)
+    assert kb.claim_task(other, tid)
+    assert kb.block_task(other, tid, reason="Human approval required", kind="needs_input")
+
+
+def _to_live_claim(kb, other, tid):
+    assert kb.unblock_task(other, tid)
+    assert kb.claim_task(other, tid)
+
+
+def _to_ready(kb, other, tid):
+    assert kb.unblock_task(other, tid)
+
+
+def _to_new_transient_episode(kb, other, tid):
+    # Same kind, but a new episode the orchestrator never inspected.
+    assert kb.unblock_task(other, tid)
+    assert kb.claim_task(other, tid)
+    assert kb.block_task(other, tid, reason="new wait", kind="transient")
+
+
+@pytest.mark.parametrize("competing", [
+    _to_human_hold, _to_live_claim, _to_ready, _to_new_transient_episode,
+], ids=["human_hold", "live_claim", "unblocked_ready", "new_episode"])
+def test_concurrent_change_after_guard_is_refused(orch, monkeypatch, competing):
+    kb = orch
+    tid = _blocked(kb, kind="transient")
+    _interleave(kb, monkeypatch, competing)
+    out = _schedule({"task_id": tid, "reason": "park old transient wait"})
+    assert "error" in out, out
+    assert "changed after the hold check" in out["error"]
+    assert "Nothing changed" in out["error"]
+    with _conn() as conn:
+        task = kb.get_task(conn, tid)
+        assert task.status != "scheduled"
+        assert not [e for e in kb.list_events(conn, tid) if e.kind == "scheduled"]
+        assert not [r for r in kb.list_runs(conn, tid) if r.outcome == "scheduled"]
+        if competing is _to_live_claim:
+            assert task.status == "running" and task.claim_lock, "live claim must survive"
+        if competing is _to_human_hold:
+            assert (task.status, task.block_kind) == ("blocked", "needs_input")
+        # No TEMP trigger leaks onto other connections (it is connection-local).
+        assert not conn.execute(
+            "SELECT 1 FROM sqlite_temp_master WHERE type='trigger'").fetchall()
+
+
+def test_concurrent_exact_snapshot_hold_replacement_refused(orch, monkeypatch):
+    """Hold replaced by raw writes with no episode event: block_kind change alone refuses."""
+    kb = orch
+    tid = _blocked(kb, kind="dependency")  # rekinded needs_input
+    def flip(kb, other, t):
+        other.execute("UPDATE tasks SET block_kind='capability' WHERE id=?", (t,))
+        other.commit()
+    _interleave(kb, monkeypatch, flip)
+    out = _schedule({"task_id": tid, "reason": "park"})
+    assert "changed after the hold check" in out.get("error", "")
+    with _conn() as conn:
+        assert kb.get_task(conn, tid).status == "blocked"
+
+
+def test_benign_concurrent_event_still_schedules(orch, monkeypatch):
+    """A comment between guard and UPDATE does not change the episode."""
+    kb = orch
+    tid = _blocked(kb, kind="transient")
+    def comment(kb, other, t):
+        kb.add_comment(other, t, "gabriel", "still waiting on cron")
+    _interleave(kb, monkeypatch, comment)
+    out = _schedule({"task_id": tid, "reason": "park"})
+    assert out.get("ok") is True and out["status"] == "scheduled"
+    with _conn() as conn:
+        assert not conn.execute(
+            "SELECT 1 FROM sqlite_temp_master WHERE type='trigger'").fetchall()
