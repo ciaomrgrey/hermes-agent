@@ -7,10 +7,12 @@ shlex quoting of JSON metadata, structured-JSON failures). Humans use CLI/dashbo
 """
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import logging
 import os
+import sqlite3
 import time
 from contextlib import contextmanager
 from typing import Any, Callable, Optional
@@ -869,9 +871,10 @@ _BLOCK_EPISODE_BREAKERS = (
 )
 
 
-def _schedulable_block_hold(conn, tid: str, block_kind: Optional[str]) -> Optional[str]:
-    """None when the card's current block is a time/dependency wait an
-    orchestrator may park in ``scheduled``; else the refusal detail.
+def _schedulable_block_hold(conn, tid: str, block_kind: Optional[str]) -> tuple[Optional[str], Optional[int]]:
+    """``(None, blocked_event_id)`` when the card's current block is a
+    time/dependency wait an orchestrator may park in ``scheduled``; else
+    ``(refusal detail, None)``.
 
     Reads the newest ``blocked`` event: allowed for ``kind`` dependency/transient,
     or the kernel re-kind of a dependency wait with no open parent
@@ -884,7 +887,7 @@ def _schedulable_block_hold(conn, tid: str, block_kind: Optional[str]) -> Option
         "ORDER BY id DESC LIMIT 1", (tid,),
     ).fetchone()
     if row is None:
-        return "no blocked event records why this card is blocked"
+        return "no blocked event records why this card is blocked", None
     placeholders = ", ".join("?" for _ in _BLOCK_EPISODE_BREAKERS)
     newer = conn.execute(
         f"SELECT kind FROM task_events WHERE task_id = ? AND id > ? "
@@ -893,27 +896,28 @@ def _schedulable_block_hold(conn, tid: str, block_kind: Optional[str]) -> Option
     ).fetchone()
     if newer is not None:
         return (f"the latest blocked event is stale (a newer {newer['kind']!r} event "
-                "followed it), so the current hold is unclassified")
+                "followed it), so the current hold is unclassified"), None
     try:
         payload = json.loads(row["payload"]) if row["payload"] else None
     except (TypeError, ValueError):
         payload = None
     if not isinstance(payload, dict) or not payload.get("kind"):
-        return "the blocked event carries no kind"
+        return "the blocked event carries no kind", None
     kind = payload.get("kind")
     if kind != block_kind:
-        return f"blocked event kind {kind!r} disagrees with the card's block_kind {block_kind!r}"
+        return f"blocked event kind {kind!r} disagrees with the card's block_kind {block_kind!r}", None
     if kind in _SCHEDULABLE_BLOCK_KINDS:
-        return None
+        return None, int(row["id"])
     if (kind == "needs_input" and payload.get("requested_kind") == "dependency"
             and payload.get("rekind_reason") == "no_open_parent"):
-        return None
-    return f"kind {kind!r} is a human/capability hold"
+        return None, int(row["id"])
+    return f"kind {kind!r} is a human/capability hold", None
 
 
-def _orchestrator_schedule_guard(kb, conn, tid: str, reason: Optional[str]) -> None:
+def _orchestrator_schedule_guard(kb, conn, tid: str, reason: Optional[str]) -> tuple[str, int]:
     """Orchestrator path (no HERMES_KANBAN_TASK): only a time/dependency-gated
-    ``blocked`` card may be parked; holds and live/queued cards are refused."""
+    ``blocked`` card may be parked; holds and live/queued cards are refused.
+    Returns the authorized episode ``(block_kind, blocked_event_id)``."""
     _check(reason is not None,
            "kanban_schedule refused: reason is required when scheduling a card you do "
            "not run (name the time/event gate). Nothing changed.")
@@ -922,12 +926,56 @@ def _orchestrator_schedule_guard(kb, conn, tid: str, reason: Optional[str]) -> N
     _check(task.status == "blocked",
            f"kanban_schedule refused: {tid} is {task.status!r}; an orchestrator may only "
            "schedule a blocked card. Nothing changed.")
-    detail = _schedulable_block_hold(conn, tid, task.block_kind)
+    detail, event_id = _schedulable_block_hold(conn, tid, task.block_kind)
     _check(detail is None,
            f"kanban_schedule refused: {tid} is held, not time-gated — {detail}. Only "
            "dependency/transient blocks or a kernel re-kinded dependency wait "
            "(needs_input, requested_kind=dependency, rekind_reason=no_open_parent) "
            "can be scheduled; a human must clear other holds. Nothing changed.")
+    return task.block_kind, event_id
+
+
+_SCHEDULE_CAS_MARKER = "hermes_kanban_schedule_episode_changed"
+
+
+def _sql_str(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+@contextlib.contextmanager
+def _schedule_episode_cas(conn, tid: str, block_kind: str, event_id: int):
+    """Bind the orchestrator's authorization to ``schedule_task``'s UPDATE.
+
+    A connection-local TEMP trigger re-checks, inside schedule_task's own
+    IMMEDIATE transaction and at the moment of the UPDATE, that the card is
+    still in the exact blocked episode the guard approved: status ``blocked``,
+    same ``block_kind``, and no newer ``blocked``/episode-breaking event than
+    the approved one. Otherwise it aborts, schedule_task's txn rolls back
+    (nothing changed). Handler-only: kanban_db stays untouched, and a TEMP
+    trigger is invisible to every other connection.
+    """
+    name = f"hermes_sched_cas_{os.urandom(8).hex()}"
+    kinds = ", ".join(_sql_str(k) for k in ("blocked", *_BLOCK_EPISODE_BREAKERS))
+    conn.execute(
+        f"CREATE TEMP TRIGGER {name} BEFORE UPDATE OF status ON main.tasks "
+        f"WHEN NEW.status = 'scheduled' AND OLD.id = {_sql_str(tid)} AND NOT ("
+        f" OLD.status = 'blocked' AND OLD.block_kind IS {_sql_str(block_kind)}"
+        f" AND (SELECT MAX(id) FROM main.task_events WHERE task_id = OLD.id"
+        f"      AND kind IN ({kinds})) = {int(event_id)}) "
+        f"BEGIN SELECT RAISE(ABORT, '{_SCHEDULE_CAS_MARKER}'); END"
+    )
+    try:
+        yield
+    except sqlite3.IntegrityError as exc:
+        if _SCHEDULE_CAS_MARKER not in str(exc):
+            raise
+        raise _Reject(
+            f"kanban_schedule refused: {tid} changed after the hold check (it was "
+            "unblocked, claimed or re-blocked concurrently), so the approved "
+            "time/dependency wait no longer describes it. Nothing changed; re-read "
+            "the card before retrying.")
+    finally:
+        conn.execute(f"DROP TRIGGER IF EXISTS temp.{name}")
 
 
 @_kanban_handler("kanban_schedule")
@@ -947,18 +995,21 @@ def _handle_schedule(args: dict, **kw) -> str:
         reason = f"[{_persisted_identity()}] {reason}"
     reason = _redact(reason) if reason is not None else None
     with _board(args.get("board")) as (kb, conn):
-        if orchestrator:
-            _orchestrator_schedule_guard(kb, conn, tid, reason)
-        # The goal loop treats ``scheduled`` as terminal like ``blocked``, so
-        # parking would bypass the completion judge (see kanban_block, #38696).
-        task = kb.get_task(conn, tid)
-        _check(not (task and task.goal_mode),
-               "goal_mode tasks cannot be scheduled: use kanban_block with kind "
-               f"in {sorted(_GOAL_MODE_BLOCK_ALLOWED_KINDS)} for a genuine external "
-               "blocker, or kanban_complete so the completion judge can evaluate it.")
-        ok = kb.schedule_task(
-            conn, tid, reason=reason, expected_run_id=_worker_run_id(tid))
-        _check(ok, f"could not schedule {tid} (unknown id or not in todo/ready/running/blocked)")
+        episode = _orchestrator_schedule_guard(kb, conn, tid, reason) if orchestrator else None
+        # Orchestrator: the approved episode is re-verified atomically inside
+        # schedule_task's UPDATE, so a concurrent unblock/claim/re-block between
+        # the guard read and the mutation is refused, not scheduled.
+        with (_schedule_episode_cas(conn, tid, *episode) if episode else contextlib.nullcontext()):
+            # The goal loop treats ``scheduled`` as terminal like ``blocked``, so
+            # parking would bypass the completion judge (see kanban_block, #38696).
+            task = kb.get_task(conn, tid)
+            _check(not (task and task.goal_mode),
+                   "goal_mode tasks cannot be scheduled: use kanban_block with kind "
+                   f"in {sorted(_GOAL_MODE_BLOCK_ALLOWED_KINDS)} for a genuine external "
+                   "blocker, or kanban_complete so the completion judge can evaluate it.")
+            ok = kb.schedule_task(
+                conn, tid, reason=reason, expected_run_id=_worker_run_id(tid))
+            _check(ok, f"could not schedule {tid} (unknown id or not in todo/ready/running/blocked)")
         return _ok_landed(kb, conn, tid, "scheduled", reason=reason)
 
 
