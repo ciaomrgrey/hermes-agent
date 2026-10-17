@@ -854,14 +854,101 @@ def _handle_block(args: dict, **kw) -> str:
         return _ok_landed(kb, conn, tid, "blocked", **extra)
 
 
+# Blocked-event kinds an orchestrator may convert to ``scheduled``: waits on
+# time/other work, not on a human. Anything else is a human/account/release hold.
+_SCHEDULABLE_BLOCK_KINDS = frozenset({"dependency", "transient"})
+# Events that move a card out of (or re-enter) the blocked episode a ``blocked``
+# event opened. If one is newer than the latest ``blocked`` event, that payload
+# no longer describes why the card is blocked (e.g. a breaker ``gave_up`` park
+# after an earlier transient block was unblocked), so the guard fails closed.
+_BLOCK_EPISODE_BREAKERS = (
+    "unblocked", "gave_up", "block_loop_detected", "dependency_wait", "claimed",
+    "spawned", "scheduled", "reclaimed", "status", "completed", "archived",
+    "review_requested", "changes_requested", "review_reopened", "promoted_manual",
+    "crashed", "timed_out", "stale", "spawn_failed", "rate_limited",
+)
+
+
+def _schedulable_block_hold(conn, tid: str, block_kind: Optional[str]) -> Optional[str]:
+    """None when the card's current block is a time/dependency wait an
+    orchestrator may park in ``scheduled``; else the refusal detail.
+
+    Reads the newest ``blocked`` event: allowed for ``kind`` dependency/transient,
+    or the kernel re-kind of a dependency wait with no open parent
+    (``needs_input`` + ``requested_kind=dependency`` + ``rekind_reason=no_open_parent``).
+    Genuine needs_input/capability holds, a missing/unknown payload, a stale
+    episode or a payload disagreeing with ``tasks.block_kind`` are refused.
+    """
+    row = conn.execute(
+        "SELECT id, payload FROM task_events WHERE task_id = ? AND kind = 'blocked' "
+        "ORDER BY id DESC LIMIT 1", (tid,),
+    ).fetchone()
+    if row is None:
+        return "no blocked event records why this card is blocked"
+    placeholders = ", ".join("?" for _ in _BLOCK_EPISODE_BREAKERS)
+    newer = conn.execute(
+        f"SELECT kind FROM task_events WHERE task_id = ? AND id > ? "
+        f"AND kind IN ({placeholders}) ORDER BY id DESC LIMIT 1",
+        (tid, row["id"], *_BLOCK_EPISODE_BREAKERS),
+    ).fetchone()
+    if newer is not None:
+        return (f"the latest blocked event is stale (a newer {newer['kind']!r} event "
+                "followed it), so the current hold is unclassified")
+    try:
+        payload = json.loads(row["payload"]) if row["payload"] else None
+    except (TypeError, ValueError):
+        payload = None
+    if not isinstance(payload, dict) or not payload.get("kind"):
+        return "the blocked event carries no kind"
+    kind = payload.get("kind")
+    if kind != block_kind:
+        return f"blocked event kind {kind!r} disagrees with the card's block_kind {block_kind!r}"
+    if kind in _SCHEDULABLE_BLOCK_KINDS:
+        return None
+    if (kind == "needs_input" and payload.get("requested_kind") == "dependency"
+            and payload.get("rekind_reason") == "no_open_parent"):
+        return None
+    return f"kind {kind!r} is a human/capability hold"
+
+
+def _orchestrator_schedule_guard(kb, conn, tid: str, reason: Optional[str]) -> None:
+    """Orchestrator path (no HERMES_KANBAN_TASK): only a time/dependency-gated
+    ``blocked`` card may be parked; holds and live/queued cards are refused."""
+    _check(reason is not None,
+           "kanban_schedule refused: reason is required when scheduling a card you do "
+           "not run (name the time/event gate). Nothing changed.")
+    task = kb.get_task(conn, tid)
+    _check(task is not None, f"kanban_schedule refused: unknown task {tid}. Nothing changed.")
+    _check(task.status == "blocked",
+           f"kanban_schedule refused: {tid} is {task.status!r}; an orchestrator may only "
+           "schedule a blocked card. Nothing changed.")
+    detail = _schedulable_block_hold(conn, tid, task.block_kind)
+    _check(detail is None,
+           f"kanban_schedule refused: {tid} is held, not time-gated — {detail}. Only "
+           "dependency/transient blocks or a kernel re-kinded dependency wait "
+           "(needs_input, requested_kind=dependency, rekind_reason=no_open_parent) "
+           "can be scheduled; a human must clear other holds. Nothing changed.")
+
+
 @_kanban_handler("kanban_schedule")
 def _handle_schedule(args: dict, **kw) -> str:
-    """Park the current task until an orchestrator re-gates it."""
+    """Park a task in ``scheduled`` until an orchestrator re-gates it.
+
+    Worker path (``HERMES_KANBAN_TASK``): own task only, upstream behaviour.
+    Orchestrator path: explicit task_id + reason, blocked source, hold guard,
+    reason prefixed with the acting profile.
+    """
     tid = _worker_guard("kanban_schedule", args)
+    orchestrator = not os.environ.get("HERMES_KANBAN_TASK")
     raw_reason = args.get("reason")
     _check(raw_reason is None or isinstance(raw_reason, str), "reason must be a string")
-    reason = _redact(raw_reason.strip()) if raw_reason and raw_reason.strip() else None
+    reason = raw_reason.strip() if raw_reason and raw_reason.strip() else None
+    if orchestrator and reason is not None:
+        reason = f"[{_persisted_identity()}] {reason}"
+    reason = _redact(reason) if reason is not None else None
     with _board(args.get("board")) as (kb, conn):
+        if orchestrator:
+            _orchestrator_schedule_guard(kb, conn, tid, reason)
         # The goal loop treats ``scheduled`` as terminal like ``blocked``, so
         # parking would bypass the completion judge (see kanban_block, #38696).
         task = kb.get_task(conn, tid)
