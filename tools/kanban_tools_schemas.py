@@ -209,13 +209,19 @@ KANBAN_SCHEDULE_SCHEMA = _schema(
         "time or an external event. This ends the current run and makes the "
         "task non-dispatchable until an orchestrator unblocks it; it does not "
         "create a timer. Put any wake-up marker such as "
-        "``SCHEDULED_UNTIL=<ISO8601>`` in ``reason``."
+        "``SCHEDULED_UNTIL=<ISO8601>`` in ``reason``. An orchestrator (no "
+        "dispatcher-assigned task) must pass task_id and reason, and may only "
+        "schedule a blocked card whose block is a dependency/transient wait "
+        "(or a kernel re-kinded dependency wait); human, capability and "
+        "unclassified holds are refused and nothing changes."
     ),
     {
         "task_id": _prop("string", _DESC_TASK_ID_DEFAULT),
         "reason": _prop("string", (
-            "Optional reason or machine-readable wake-up marker recorded on "
-            "the completed run and scheduled event."
+            "Reason or machine-readable wake-up marker recorded on the "
+            "completed run and scheduled event. Optional for a worker parking "
+            "its own task; required for an orchestrator, whose profile name "
+            "is prefixed to it."
         )),
     },
     [],
