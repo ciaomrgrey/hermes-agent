@@ -127,7 +127,7 @@ def test_iteration_summary_filters_each_attempt_only(api_mode, behavior, middlew
     )
     monkeypatch.setattr(helpers, "sanitize_outbound_kwargs", lambda *a: None)
     monkeypatch.setattr(helpers, "bypass_chat_sdk_request_transform", lambda request, client: request)
-    monkeypatch.setattr(helpers, "_merge_nous_portal_messages_extra_body", lambda a, kw: kw)
+    monkeypatch.setattr(helpers, "_merge_nous_portal_messages_extra_body", lambda a, kw, msgs: kw)
     monkeypatch.setattr("agent.relay_llm.execute_current", lambda request, callback, **kw: callback(request))
     messages = history()
     original = deepcopy(messages)
