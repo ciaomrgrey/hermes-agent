@@ -574,7 +574,7 @@ class TestDeliverResultWrapFooter:
 
     def test_markdown_style_yuanbao_and_compressor(self):
         from agent.context_compressor import _synthetic_user_row
-        from gateway.platforms.yuanbao import MessageSender
+        from plugins.platforms.yuanbao.adapter import MessageSender
 
         for cfg in ({"wrap_style": "markdown"}, {"wrap_style": "markdown", "wrap_footer": False}):
             text = self._sent_text(cfg)
@@ -582,7 +582,7 @@ class TestDeliverResultWrapFooter:
             assert _synthetic_user_row(text)
 
     def test_yuanbao_strips_header_only_wrapper(self):
-        from gateway.platforms.yuanbao import MessageSender
+        from plugins.platforms.yuanbao.adapter import MessageSender
 
         body = "🔧 marker\nApply SPF."
         header_only = self._sent_text({"wrap_footer": False})
