@@ -136,9 +136,10 @@ def _spawn_detached_update(hermes_cmd, output_path, exit_code_path) -> None:
     import subprocess
     if sys.platform == "win32":
         from hermes_cli._subprocess_compat import windows_detach_popen_kwargs
+        from hermes_constants import hermes_cli_module_argv
         subprocess.Popen(
             [sys.executable, "-c", _WINDOWS_UPDATE_HELPER, str(output_path), str(exit_code_path),
-             sys.executable, "-m", "hermes_cli.main", "update", "--gateway"],
+             *hermes_cli_module_argv(), "update", "--gateway"],
             # detached-spawn: ok — /update runs `hermes update`, which must outlive the gateway it restarts
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **windows_detach_popen_kwargs())
         return

@@ -329,7 +329,8 @@ def process_state(pid: int, creation_time_ns: int, hermes_path: str, spawn_nonce
     is_python = os.path.basename(arg0).startswith("python")
     from gateway.status_inline_source import inline_bootstrap_argv
     logical_argv = inline_bootstrap_argv(argv) or argv
-    launches_module = logical_argv[1:3] == ["-m", "hermes_cli.main"]
+    launches_module = (logical_argv[1:3] == ["-m", "hermes_cli.main"]
+                       or logical_argv[1:4] == ["-P", "-m", "hermes_cli.main"])
     executable_match = arg0 == expected or (is_python and launches_module)
     try:
         serve = logical_argv.index("serve")
