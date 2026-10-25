@@ -2961,7 +2961,8 @@ def _resolve_hermes_bin() -> Optional[list[str]]:
     try:
         import importlib.util
         if importlib.util.find_spec("hermes_cli") is not None:
-            return [sys.executable, "-m", "hermes_cli.main"]
+            from hermes_constants import hermes_cli_module_argv
+            return hermes_cli_module_argv()
     except Exception:
         pass
     import shutil

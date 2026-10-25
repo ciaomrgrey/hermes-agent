@@ -109,6 +109,20 @@ def _warn_profile_fallback_once() -> None:
             sys.stderr.flush()
 
 
+def hermes_cli_module_argv(python: str | os.PathLike[str] | None = None) -> list[str]:
+    """``<python> -P -m hermes_cli.main``: the interpreter-bound Hermes CLI launcher.
+
+    ``-m`` puts the child's cwd first on ``sys.path``, so a child started inside a
+    hermes-agent checkout/worktree (Kanban task workspaces, review worktrees) would import
+    *that* tree instead of the install it was meant to run.  ``-P`` (Python >= 3.11, the
+    project floor) drops the cwd entry for this process only.  It is a flag, not
+    ``PYTHONSAFEPATH`` in the env, so the child's own tool subprocesses (user scripts that
+    rely on the cwd import) keep normal semantics.  Every spawner of the module form must
+    use this helper; ``cwd=`` stays free for tool semantics.
+    """
+    return [os.fspath(python) if python is not None else sys.executable, "-P", "-m", "hermes_cli.main"]
+
+
 def get_hermes_home() -> Path:
     """Hermes home: context-local override → ``HERMES_HOME`` env var → platform default."""
     override = get_hermes_home_override()

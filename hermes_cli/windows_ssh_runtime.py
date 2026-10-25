@@ -325,7 +325,7 @@ def process_state(pid: int, creation_time_ns: int, hermes_path: str, spawn_nonce
     # is anchored by the unforgeable creation-time + secret owner-nonce below.
     is_python = os.path.basename(arg0).startswith("python")
     launches_module = (
-        argv[1:3] == ["-m", "hermes_cli.main"]
+        argv[1:3] == ["-m", "hermes_cli.main"] or argv[1:4] == ["-P", "-m", "hermes_cli.main"]
         or (len(argv) > 2 and argv[1] == "-c" and "hermes_cli.main" in argv[2]))
     executable_match = arg0 == expected or (is_python and launches_module)
     try:

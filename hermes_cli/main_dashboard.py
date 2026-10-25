@@ -905,8 +905,9 @@ def _route_named_profile_dashboard(
         f"Routing to the machine dashboard (profile '{_launch_profile}' "
         f"preselected). Use --isolated for a dedicated per-profile server."
     )
+    from hermes_constants import hermes_cli_module_argv
     reexec_argv = [
-        sys.executable, "-m", "hermes_cli.main",
+        *hermes_cli_module_argv(),
         "-p", "default",
         # Preserve the lean serve path so a named-profile `serve` doesn't
         # silently rebuild the UI as `dashboard`.

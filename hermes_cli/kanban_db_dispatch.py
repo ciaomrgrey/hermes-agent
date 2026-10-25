@@ -2444,8 +2444,14 @@ def _rotate_worker_log(
 
 def _module_hermes_argv() -> list[str]:
     """Interpreter-bound Hermes CLI invocation (``hermes_cli.main`` is the
-    console-script target — there is no top-level ``hermes`` package)."""
-    return [sys.executable, "-m", "hermes_cli.main"]
+    console-script target — there is no top-level ``hermes`` package).
+
+    ``-P`` keeps the task workspace (the worker's cwd) off ``sys.path``: a
+    worker dispatched into a hermes-agent worktree must run the installed
+    Hermes, not the candidate tree it is reviewing or building."""
+    from hermes_constants import hermes_cli_module_argv
+
+    return hermes_cli_module_argv()
 
 
 def _absolute_hermes_path(path: str) -> str:

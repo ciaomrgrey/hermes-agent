@@ -277,8 +277,8 @@ def test_recovery_child_restarts_each_profile_with_a_fresh_main(monkeypatch):
         "covered": {},
     }
     assert [call[0] for call in calls] == [
-        [sys.executable, "-m", "hermes_cli.main", "-p", "coder", "gateway", "restart"],
-        [sys.executable, "-m", "hermes_cli.main", "-p", "default", "gateway", "restart"],
+        [sys.executable, "-P", "-m", "hermes_cli.main", "-p", "coder", "gateway", "restart"],
+        [sys.executable, "-P", "-m", "hermes_cli.main", "-p", "default", "gateway", "restart"],
     ]
     for _, kwargs in calls:
         assert kwargs["stdin"] is subprocess.DEVNULL

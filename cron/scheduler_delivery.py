@@ -881,7 +881,8 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str, *, deferred: Opt
     except Exception:
         found = False
     if found:
-        argv = [sys.executable, "-m", "hermes_cli.main"]
+        from hermes_constants import hermes_cli_module_argv
+        argv = hermes_cli_module_argv()
     else:
         hermes_bin = shutil.which("hermes")
         if not hermes_bin:

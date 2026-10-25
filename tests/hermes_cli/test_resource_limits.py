@@ -314,7 +314,7 @@ def test_named_profile_reroute_defers_limit_to_final_process(monkeypatch, tmp_pa
         cli_main.cmd_dashboard(args)
 
     assert calls == []
-    assert exec_call["argv"][1:5] == ["-m", "hermes_cli.main", "-p", "default"]
+    assert exec_call["argv"][1:6] == ["-P", "-m", "hermes_cli.main", "-p", "default"]
     assert exec_call["env"]["HERMES_HOME"] == str(tmp_path)
 
 

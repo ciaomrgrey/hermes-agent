@@ -127,7 +127,8 @@ def _run_profile_restart(profile: str, *, run: Callable[..., Any]) -> bool:
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
     else:
         kwargs["start_new_session"] = True
-    argv = [sys.executable, "-m", "hermes_cli.main", "-p", profile, "gateway", "restart"]
+    from hermes_constants import hermes_cli_module_argv
+    argv = [*hermes_cli_module_argv(), "-p", profile, "gateway", "restart"]
     return _succeeded(_run_quiet(run, argv, timeout=_PROFILE_RESTART_TIMEOUT, **kwargs))
 
 
