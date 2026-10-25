@@ -104,7 +104,11 @@ def build_relaunch_argv(
 ) -> list[str]:
     """Construct an argv list for replacing the current process with hermes."""
     bin_path = resolve_hermes_bin()
-    argv = [bin_path] if bin_path else [sys.executable, "-m", "hermes_cli.main"]
+    if bin_path:
+        argv = [bin_path]
+    else:
+        from hermes_constants import hermes_cli_module_argv
+        argv = hermes_cli_module_argv()
     src = list(original_argv) if original_argv is not None else list(sys.argv[1:])
     if preserve_inherited:
         argv.extend(_extract_inherited_flags(src))
