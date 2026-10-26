@@ -141,3 +141,16 @@ def test_sibling_module_spawners_pin_safe_path(monkeypatch, build):
     i = argv.index("-m")
     assert argv[i + 1] == "hermes_cli.main"
     assert argv[i - 1] == "-P"
+
+
+def test_codex_hermes_tools_mcp_entry_pins_safe_path():
+    """Codex launches this MCP child with its own cwd (the task workspace)."""
+    from hermes_cli.codex_runtime_plugin_migration import _build_hermes_tools_mcp_entry
+
+    assert _build_hermes_tools_mcp_entry()["args"][:3] == ["-P", "-m", "agent.transports.hermes_tools_mcp_server"]
+
+
+def test_generic_module_argv_pins_safe_path():
+    from hermes_constants import hermes_module_argv
+
+    assert hermes_module_argv("tui_gateway.slash_worker") == [sys.executable, "-P", "-m", "tui_gateway.slash_worker"]

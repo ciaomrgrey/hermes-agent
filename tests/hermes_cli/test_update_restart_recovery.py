@@ -85,7 +85,7 @@ def test_abort_recovery_hands_managed_profiles_to_a_fresh_process(monkeypatch):
     assert len(calls) == 1
     argv, kwargs = calls[0]
     assert argv[0] == sys.executable
-    assert argv[1:4] == ["-m", "hermes_cli.update_restart_recovery", "--stdin"]
+    assert argv[1:5] == ["-P", "-m", "hermes_cli.update_restart_recovery", "--stdin"]
     payload = json.loads(kwargs["input"])
     assert payload["profiles"] == ["coder", "default"]
     assert payload["supervisors"] == {"coder": "launchd", "default": "systemd"}
