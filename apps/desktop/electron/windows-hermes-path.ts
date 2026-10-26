@@ -28,6 +28,8 @@
  * mocking Electron or the filesystem, same pattern as backend-probes.ts.
  */
 
+import { hermesCliModuleArgs } from './backend-module-args'
+
 /**
  * Build the ordered list of extensions findOnPath() should try when
  * resolving a bare command name off PATH.
@@ -173,7 +175,7 @@ export async function resolveVenvHermesCommand(
   return {
     label: `existing Hermes Python at ${python}`,
     command: python,
-    args: ['-m', 'hermes_cli.main', ...backendArgs],
+    args: hermesCliModuleArgs(backendArgs),
     bootstrap: false,
     env: buildDesktopBackendEnv(),
     kind: 'python',

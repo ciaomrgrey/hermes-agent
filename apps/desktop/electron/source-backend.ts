@@ -4,6 +4,7 @@ import path from 'node:path'
 import { buildDesktopBackendEnv } from './backend-env'
 import { execProbe, PROBE_TIMEOUT_MS } from './backend-probes'
 import { resolveInstallationLauncher } from './updater-process'
+import { hermesCliModuleArgs } from './backend-module-args'
 
 export interface SourceBackend {
   kind: 'command' | 'python'
@@ -95,7 +96,8 @@ export function createSourcePythonBackend(
     kind: 'python',
     label: `Hermes source at ${root}`,
     command,
-    args: ['-m', 'hermes_cli.main', ...args],
+    // -P: the workspace cwd must not shadow the root named on PYTHONPATH below.
+    args: hermesCliModuleArgs(args),
     // The backend runs in the user's workspace cwd, and the selected
     // interpreter need not have this checkout installed: name it explicitly.
     // (The scrubbed inherited value could point at another checkout.)
