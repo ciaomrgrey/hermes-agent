@@ -120,7 +120,17 @@ def hermes_cli_module_argv(python: str | os.PathLike[str] | None = None) -> list
     rely on the cwd import) keep normal semantics.  Every spawner of the module form must
     use this helper; ``cwd=`` stays free for tool semantics.
     """
-    return [os.fspath(python) if python is not None else sys.executable, "-P", "-m", "hermes_cli.main"]
+    return hermes_module_argv("hermes_cli.main", python)
+
+
+def hermes_module_argv(module: str, python: str | os.PathLike[str] | None = None) -> list[str]:
+    """``<python> -P -m <module>`` for any Hermes module child whose cwd is inherited or arbitrary.
+
+    Same shadow as :func:`hermes_cli_module_argv`: without ``-P`` a cwd holding a hermes-agent
+    checkout supplies ``<module>`` itself (and everything it imports) from that checkout.
+    Children with a fixed install-root cwd or a persisted service definition may keep bare ``-m``.
+    """
+    return [os.fspath(python) if python is not None else sys.executable, "-P", "-m", module]
 
 
 def get_hermes_home() -> Path:

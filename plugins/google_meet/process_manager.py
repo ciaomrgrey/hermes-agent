@@ -13,7 +13,6 @@ import json
 import os
 import signal
 import subprocess
-import sys
 import time
 import uuid
 from pathlib import Path
@@ -91,7 +90,8 @@ def start(url: str, *, out_dir: Optional[Path] = None, headed: bool = False,
     log_path = out / "bot.log"
     # Detach: stdout/stderr → log file, new session so parent signals don't propagate.
     with open(log_path, "ab", buffering=0) as log_fh:
-        proc = subprocess.Popen([sys.executable, "-m", "plugins.google_meet.meet_bot"], stdin=subprocess.DEVNULL,
+        from hermes_constants import hermes_module_argv  # -P: inherited cwd may be a checkout
+        proc = subprocess.Popen(hermes_module_argv("plugins.google_meet.meet_bot"), stdin=subprocess.DEVNULL,
                                 stdout=log_fh, stderr=subprocess.STDOUT, env=env, start_new_session=True,
                                 close_fds=True)
     record = {"pid": proc.pid, "meeting_id": meeting_id, "out_dir": str(out), "url": url,

@@ -94,7 +94,9 @@ def _run_fresh_recovery_process(
 ) -> "subprocess.CompletedProcess | None":
     """Spawn ``hermes_cli.update_restart_recovery --stdin`` detached from this process; None when it
     could not run (no systemd-run in gateway mode, OSError, timeout) — the caller fails closed."""
-    command = [sys.executable, "-m", "hermes_cli.update_restart_recovery", "--stdin"]
+    from hermes_constants import hermes_module_argv
+    # Inherits the updater's cwd (any directory): -P keeps a checkout there off sys.path.
+    command = [*hermes_module_argv("hermes_cli.update_restart_recovery"), "--stdin"]
     env = os.environ.copy()
     env["HERMES_UPDATE_RESTART_RECOVERY"] = "1"
     for marker in ("_HERMES_GATEWAY", "HERMES_GATEWAY", "HERMES_GATEWAY_MODE"):

@@ -527,8 +527,10 @@ def _(rid, params: dict) -> dict:
         return _ok(rid, {"blocked": True, "hint": hint, "code": -1, "output": ""})
 
     # Can drive the agent → needs provider credentials; tier-1 secrets still stripped.
+    # -P: the child runs in this process's cwd, which may be a hermes-agent checkout.
+    from hermes_constants import hermes_cli_module_argv
     return _captured_exec(
-        rid, [sys.executable, "-m", "hermes_cli.main", *argv], min(int(params.get("timeout", 240)), 600),
+        rid, [*hermes_cli_module_argv(), *argv], min(int(params.get("timeout", 240)), 600),
         on_result=lambda r: _ok(rid, {
             "blocked": False, "code": r.returncode, "output": (_joined_output(r) or "(no output)")[:48_000]}),
         timeout_err=(5016, "cli.exec: timeout"), fail_code=5017,

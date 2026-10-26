@@ -232,7 +232,10 @@ class _SlashWorker:
         self._seq = 0
         self.stderr_tail: list[str] = []
         self.stdout_queue: queue.Queue[dict | None] = queue.Queue()
-        argv = [sys.executable, "-m", "tui_gateway.slash_worker", "--session-key", session_key] + (["--model", model] if model else [])
+        # -P: cwd=os.getcwd() below may be a hermes-agent checkout; harden_import_path runs too
+        # late to stop -m resolving tui_gateway.slash_worker itself from it.
+        from hermes_constants import hermes_module_argv
+        argv = [*hermes_module_argv("tui_gateway.slash_worker"), "--session-key", session_key] + (["--model", model] if model else [])
         self._closed = False
         from hermes_cli._subprocess_compat import windows_hide_flags
         # slash_worker runs the Hermes agent → needs provider credentials. Tier-1 secrets

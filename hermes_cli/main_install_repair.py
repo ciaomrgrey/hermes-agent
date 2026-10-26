@@ -440,10 +440,11 @@ def _reexec_dependency_sync_off_windows_shim(gateway_resume: dict | None = None)
     shim = _windows_shim_in_process_chain()
     if shim is None:
         return False
-    from hermes_constants import venv_python_path
+    from hermes_constants import hermes_cli_module_argv, venv_python_path
     from hermes_cli.update_handoff import detached_shim_child_env
     python_exe = venv_python_path(shim.parent.parent, windows=True)
-    cmd = [str(python_exe), "-m", "hermes_cli.main", *sys.argv[1:]]
+    # Inherits the shell's cwd, which may be any checkout: -P keeps it off sys.path.
+    cmd = [*hermes_cli_module_argv(python_exe), *sys.argv[1:]]
     if python_exe.is_file():
         try:
             subprocess.Popen(
