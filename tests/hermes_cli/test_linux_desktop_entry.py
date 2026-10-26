@@ -1170,3 +1170,50 @@ def test_deferred_install_skips_heal_after_exit_without_reveal():
     deferred.finish()
     assert calls == []
     assert not deferred._thread.is_alive()
+
+
+def test_rendered_module_fallback_runs_installed_hermes_from_a_checkout_cwd(
+    tmp_path, xdg_home, monkeypatch
+):
+    """The persisted fallback ``Exec=`` has no ``Path=``: the DE picks the cwd.
+
+    Render the real entry through the no-wrapper module fallback, parse its ``Exec`` back into
+    argv, swap only the trailing ``desktop`` verb for a harmless ``--version``, and run it as a
+    real subprocess whose cwd is a decoy hermes-agent checkout. Bare ``-m`` imports the decoy.
+    """
+    import shlex
+    import subprocess
+
+    root = _make_project(tmp_path)
+    _argv0_context(monkeypatch, str(tmp_path / "nowhere" / "python"))
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr("hermes_cli.relaunch.resolve_hermes_bin", lambda: None)
+    monkeypatch.setattr(lde, "_resolve_hermes_bin_for_desktop_entry", lambda *a, **k: None)
+    monkeypatch.setattr(lde, "_can_import_hermes_cli", lambda p: False)
+    monkeypatch.setattr(lde, "_running_interpreter_fallback", lambda: os.path.abspath(sys.executable))
+    monkeypatch.setattr(lde, "refresh_desktop_databases", lambda _dir: [])
+
+    entry = lde.install_desktop_entry(root)
+    text = entry.read_text(encoding="utf-8")
+    assert "\nPath=" not in text  # no working-directory binding: cwd is the launcher's choice
+    argv = shlex.split(_parse(text)["Exec"])
+    assert argv[-1] == "desktop"
+
+    marker = tmp_path / "decoy-imported"
+    decoy = tmp_path / "decoy-checkout" / "hermes_cli"
+    decoy.mkdir(parents=True)
+    hit = f"import pathlib, sys\npathlib.Path({str(marker)!r}).write_text(__file__)\nsys.exit(97)\n"
+    (decoy / "__init__.py").write_text(hit, encoding="utf-8")
+    (decoy / "main.py").write_text(hit, encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONSAFEPATH", "PYTHONPATH")}
+    env["HERMES_HOME"] = str(tmp_path / "hermes-home")
+
+    r = subprocess.run([*argv[:-1], "--version"], cwd=decoy.parent, env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert not marker.exists(), f"desktop entry imported the cwd checkout: {marker.read_text()}"
+    assert r.returncode == 0, (r.returncode, r.stdout[-500:], r.stderr[-500:])
+
+    bare = [a for a in argv[:-1] if a != "-P"]
+    control = subprocess.run([*bare, "--version"], cwd=decoy.parent, env=env,
+                             capture_output=True, text=True, timeout=120)
+    assert control.returncode == 97 and marker.exists()  # the same argv without -P is shadowed

@@ -32,6 +32,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { hermesCliModuleArgs } from './backend-command'
+
 /**
  * Build the ordered list of extensions findOnPath() should try when
  * resolving a bare command name off PATH.
@@ -279,7 +281,7 @@ export async function resolveVenvHermesCommand(
   return {
     label: `existing Hermes Python at ${python}`,
     command: python,
-    args: ['-m', 'hermes_cli.main', ...backendArgs],
+    args: hermesCliModuleArgs(backendArgs),
     bootstrap: false,
     env: buildDesktopBackendEnv({
       hermesHome,

@@ -47,3 +47,16 @@ test('a probe that fails by timeout is not cached, so the next check re-probes',
     probe.mockRestore()
   }
 })
+
+test('the serve probe keeps a pinned module launcher (-P -m hermes_cli.main) intact', async () => {
+  const probe = vi.spyOn(probes, 'execProbe').mockResolvedValueOnce(undefined)
+  const supportsServe = createBackendServeSupportResolver('/unused', () => {})
+  const backend = { command: '/unused/python', args: ['-P', '-m', 'hermes_cli.main', 'serve'] }
+
+  try {
+    assert.equal(await supportsServe(backend), true)
+    assert.deepEqual(probe.mock.calls[0][1], ['-P', '-m', 'hermes_cli.main', 'serve', '--help'])
+  } finally {
+    probe.mockRestore()
+  }
+})

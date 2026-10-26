@@ -58,7 +58,10 @@ export function createBackendServeSupportResolver(hermesHome: string, rememberLo
 
       if (supported === null) {
         try {
-          const prefix = backend.args && backend.args[0] === '-m' ? backend.args.slice(0, 2) : []
+          // Interpreter flags + `-m <module>` (e.g. `-P -m hermes_cli.main`); empty for a launcher.
+          const args = backend.args ?? []
+          const m = args.indexOf('-m')
+          const prefix = m >= 0 && m + 1 < args.length ? args.slice(0, m + 2) : []
           // Same cold-Windows Python-startup class as the runtime probes
           // (#61764/#72632/#72707): `serve --help` imports at least as much as
           // `hermes --version` (~10.5s measured cold), and a false negative here

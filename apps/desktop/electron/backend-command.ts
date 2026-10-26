@@ -22,6 +22,19 @@ export function serveBackendArgs(profile?: string) {
 }
 
 /**
+ * Interpreter args for a module-form Hermes backend: `-P -m hermes_cli.main <backendArgs>`.
+ *
+ * The backend is spawned with the user's project as cwd (the app's `hermesCwd`, or the
+ * open-in-terminal script's `cd <project>`). Bare `-m` puts that cwd first on `sys.path`,
+ * so a project that is itself a hermes-agent checkout would supply `hermes_cli` ahead of
+ * the selected runtime root on PYTHONPATH. `-P` (Python >= 3.11, the supported floor)
+ * drops only that entry; the child's own tool subprocesses keep normal cwd imports.
+ */
+export function hermesCliModuleArgs(backendArgs: string[] = []) {
+  return ['-P', '-m', 'hermes_cli.main', ...backendArgs]
+}
+
+/**
  * Rewrite a resolved backend argv from `serve` to the legacy
  * `dashboard --no-open` form, preserving every other argument (incl. a leading
  * `-m hermes_cli.main` and any `--profile <name>`). Returns a copy; if there is
