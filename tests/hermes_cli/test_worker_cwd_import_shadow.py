@@ -118,11 +118,47 @@ def test_kanban_worker_spawned_in_hermes_worktree_imports_installed_package(monk
     assert not marker.exists(), f"worker imported the workspace tree: {marker.read_text()}"
 
 
+_NESTED_TOOL = (
+    "import os, subprocess, sys\n"
+    "r = subprocess.run([sys.executable, '-c', 'import cwd_tool_mod; print(cwd_tool_mod.VALUE)'],\n"
+    "                   cwd=os.getcwd(), capture_output=True, text=True)\n"
+    "print('SELF_SAFE_PATH', sys.flags.safe_path)\n"
+    "print('CHILD', r.returncode, r.stdout.strip())\n"
+)
+
+
+def _run_nested(launcher_flags: list[str], ws: Path, env: dict) -> dict:
+    """Launch a Python child with ``launcher_flags`` in ``ws``; it spawns its own plain tool child."""
+    r = subprocess.run([sys.executable, *launcher_flags, "-c", _NESTED_TOOL], cwd=ws, env=env,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    return dict(line.split(" ", 1) for line in r.stdout.strip().splitlines())
+
+
 def test_child_tools_keep_cwd_import_semantics(tmp_path):
-    """``-P`` is a flag, not ``PYTHONSAFEPATH``: the worker's own tool subprocesses are unaffected."""
+    """``-P`` is a flag, not ``PYTHONSAFEPATH``: the worker's own tool subprocesses still import from cwd.
+
+    Real nested processes: a launcher child started with exactly the shared helper's interpreter
+    flags spawns a plain ``python -c`` tool in the workspace, which imports a harmless module that
+    exists only in that cwd. The negative control launches the same child with
+    ``PYTHONSAFEPATH=1`` (the env alternative): the setting is inherited and the tool's cwd import fails.
+    """
     from hermes_constants import hermes_cli_module_argv
 
-    assert "PYTHONSAFEPATH" not in " ".join(hermes_cli_module_argv())
+    flags = hermes_cli_module_argv()[1:-2]  # interpreter flags ahead of ``-m hermes_cli.main``
+    assert flags == ["-P"]
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "cwd_tool_mod.py").write_text("VALUE = 'from-cwd'\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONSAFEPATH", "PYTHONPATH")}
+
+    pinned = _run_nested(flags, ws, env)
+    assert pinned["SELF_SAFE_PATH"] == "True"  # the launched child itself is pinned
+    assert pinned["CHILD"] == "0 from-cwd"  # its tool subprocess keeps normal cwd imports
+
+    control = _run_nested([], ws, {**env, "PYTHONSAFEPATH": "1"})
+    assert control["SELF_SAFE_PATH"] == "True"
+    assert control["CHILD"].split(" ", 1)[0] == "1"  # inherited env setting breaks the tool's cwd import
 
 
 @pytest.mark.parametrize(

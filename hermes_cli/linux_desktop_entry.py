@@ -115,7 +115,7 @@ def _running_interpreter_fallback() -> str:
 def resolve_exec_command(project_root: Optional[Path] = None) -> str:
     """Build the absolute ``Exec=`` command line for ``hermes desktop``.
 
-    Prefer the real ``hermes`` launcher; fall back to ``<python> -m hermes_cli.main desktop``.
+    Prefer the real ``hermes`` launcher; fall back to ``<python> -P -m hermes_cli.main desktop``.
     """
     from hermes_cli.relaunch import resolve_hermes_bin
 
@@ -131,7 +131,10 @@ def resolve_exec_command(project_root: Optional[Path] = None) -> str:
         # lineage, commit 4150501f641) — cached here per-process so a desktop launch pays the subprocess
         # cost at most once.
         interpreter = _running_interpreter_fallback()
-    argv = [interpreter, "-m", "hermes_cli.main", *_desktop_argv_tail(project_root)]
+    # -P: the entry has no Path= and the DE/launcher chooses the cwd, so a cwd that is a
+    # hermes-agent checkout must not supply hermes_cli ahead of this interpreter's install.
+    from hermes_constants import hermes_cli_module_argv
+    argv = [*hermes_cli_module_argv(interpreter), *_desktop_argv_tail(project_root)]
     if bin_path:
         resolved = Path(bin_path).resolve()
         # A Python launcher whose shebang points OUTSIDE the venv (e.g. the repo's `hermes` script
