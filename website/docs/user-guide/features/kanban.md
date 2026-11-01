@@ -30,7 +30,7 @@ checkpoint; their iteration warning remains opt-in.
 
 The board has two front doors, both backed by the same `~/.hermes/kanban.db`:
 
-- **Agents drive the board through a dedicated `kanban_*` toolset** — `kanban_show`, `kanban_list`, `kanban_complete`, `kanban_request_review`, `kanban_request_changes`, `kanban_block`, `kanban_heartbeat`, `kanban_comment`, `kanban_attach`, `kanban_attach_url`, `kanban_attachments`, `kanban_create`, `kanban_link`, `kanban_unblock`, `kanban_unlink`, `kanban_promote`, `kanban_archive`. The dispatcher spawns each worker with these tools already in its schema; orchestrator profiles can also enable the `kanban` toolset explicitly. The model reads and routes tasks by calling tools directly, *not* by shelling out to `hermes kanban`. See [How workers interact with the board](#how-workers-interact-with-the-board) below.
+- **Agents drive the board through a dedicated `kanban_*` toolset** — `kanban_show`, `kanban_list`, `kanban_complete`, `kanban_request_review`, `kanban_request_changes`, `kanban_block`, `kanban_heartbeat`, `kanban_comment`, `kanban_attach`, `kanban_attach_url`, `kanban_attachments`, `kanban_create`, `kanban_link`, `kanban_unblock`, `kanban_unlink`, `kanban_promote`, `kanban_archive`, `kanban_reassign`. The dispatcher spawns each worker with these tools already in its schema; orchestrator profiles can also enable the `kanban` toolset explicitly. The model reads and routes tasks by calling tools directly, *not* by shelling out to `hermes kanban`. See [How workers interact with the board](#how-workers-interact-with-the-board) below.
 - **You (and scripts, and cron) drive the board through `hermes kanban …`** on the CLI, `/kanban …` as a slash command, or the dashboard. These are for humans and automation — the places without a tool-calling model behind them.
 
 Both surfaces route through the same `kanban_db` layer, so reads see a consistent view and writes can't drift. The rest of this page shows CLI examples because they're easy to copy-paste, but every CLI verb has a tool-call equivalent the model uses.
@@ -463,6 +463,13 @@ Dispatcher-owned workers receive their task lifecycle tools automatically.
 | `kanban_unlink` | (Orchestrators) remove a `parent_id → child_id` edge; the child is re-gated at once and the `unlinked` event records the acting profile. | `parent_id`, `child_id` |
 | `kanban_promote` | (Orchestrators) release a `triage` card. `to="todo"` (default) stays parent-gated; `to="ready"` is refused while any parent is open. Refused for cards not in `triage`. | `task_id`, `to?` |
 | `kanban_archive` | (Orchestrators) archive a withdrawn card; `reason` is recorded as a comment. Refused while the card runs under a live worker claim. | `task_id`, `reason` |
+| `kanban_reassign` | (Orchestrators) hand an idle card to an existing Hermes profile without changing status, reclaiming a worker, or touching runs/review provenance/dependencies/model overrides. Resets the old failure streak on change. Refuses running/review/done/archived cards, any worker claim, unassigning and the current assignee. Actor and reason are recorded atomically in an `assigned` event and a comment. | `task_id`, `assignee`, `reason` |
+
+For a blocked card still assigned to its reviewer after review PASS, call
+`kanban_reassign(task_id="t_…", assignee="sophia", reason="review PASS; return to owner")`
+**before** calling `kanban_unblock`. Reassign keeps the card blocked; unblocking
+first could dispatch the old reviewer again. Review-phase routing remains owned
+by `kanban_request_review` / `kanban_request_changes`, not reassign.
 
 A typical worker turn looks like:
 
@@ -499,7 +506,7 @@ kanban_create(
 kanban_complete(summary="decomposed into 2 research tasks + 1 writer; linked dependencies")
 ```
 
-The "(Orchestrators)" tools — `kanban_list`, `kanban_create`, `kanban_link`, `kanban_unblock`, `kanban_unlink`, `kanban_promote`, `kanban_archive`, and `kanban_comment` on foreign tasks — are available through the same toolset; the convention (encoded in the auto-injected kanban guidance) is that worker profiles don't fan out or route unrelated work, and orchestrator profiles don't execute implementation work. Dispatcher-spawned workers are still task-scoped for destructive lifecycle operations and cannot mutate unrelated tasks.
+The "(Orchestrators)" tools — `kanban_list`, `kanban_create`, `kanban_link`, `kanban_unblock`, `kanban_unlink`, `kanban_promote`, `kanban_archive`, `kanban_reassign`, and `kanban_comment` on foreign tasks — are available through the same toolset; the convention (encoded in the auto-injected kanban guidance) is that worker profiles don't fan out or route unrelated work, and orchestrator profiles don't execute implementation work. Dispatcher-spawned workers are still task-scoped for destructive lifecycle operations and cannot mutate unrelated tasks.
 
 ### Why tools instead of shelling to `hermes kanban`
 

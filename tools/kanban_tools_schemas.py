@@ -581,3 +581,22 @@ KANBAN_ARCHIVE_SCHEMA = _schema(
     },
     ["task_id", "reason"],
 )
+
+KANBAN_REASSIGN_SCHEMA = _schema(
+    "kanban_reassign",
+    (
+        "Reassign an idle card to an existing Hermes profile with a required reason. "
+        "Only its assignee changes (and the old failure streak resets); status, runs, "
+        "review provenance and dependencies stay intact. A blocked card stays blocked: "
+        "unblock separately after routing it. Never reclaims. Refused for running, "
+        "review, done or archived cards, any worker claim, or the current assignee. "
+        "The acting profile and reason are recorded atomically in an assigned event "
+        "and a comment. Orchestrator-only; hidden from dispatcher-spawned task workers."
+    ),
+    {
+        "task_id": _prop("string", "Task id to reassign."),
+        "assignee": _prop("string", "Existing Hermes profile name; cannot unassign."),
+        "reason": _prop("string", "Non-empty reason for the handoff (shown on the card)."),
+    },
+    ["task_id", "assignee", "reason"],
+)
