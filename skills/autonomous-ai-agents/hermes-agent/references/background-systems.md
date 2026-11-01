@@ -87,8 +87,10 @@ sessions still have zero `kanban_*` schema footprint unless configured.
   `kanban_block`, `kanban_heartbeat`, `kanban_comment`, `kanban_create`,
   `kanban_link`; profiles that explicitly enable the `kanban` toolset
   outside a dispatcher-spawned task also get `kanban_list`,
-  `kanban_unblock`, `kanban_unlink`, `kanban_promote` and `kanban_archive`
-  for board routing.
+  `kanban_unblock`, `kanban_unlink`, `kanban_promote`, `kanban_archive` and
+  `kanban_reassign` for board routing. Reassign requires an existing profile and a
+  reason; it never reclaims or changes status (route a blocked card first, then
+  unblock separately). Running/review/terminal cards and any claim are refused.
 - **Dispatcher** runs inside the gateway by default
   (`kanban.dispatch_in_gateway: true`) — reclaims stale claims,
   promotes ready tasks, atomically claims, spawns assigned profiles.

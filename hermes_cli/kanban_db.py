@@ -1549,8 +1549,23 @@ def list_tasks(
     return [Task.from_row(r) for r in rows]
 
 
-def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) -> bool:
-    """Assign/reassign; raises RuntimeError while the task is running under a claim."""
+_ANY_ASSIGNEE = object()
+
+
+def assign_task(
+    conn: sqlite3.Connection, task_id: str, profile: Optional[str], *,
+    reason: Optional[str] = None, actor: Optional[str] = None,
+    refuse_statuses: Iterable[str] = (), refuse_live_claim: bool = False,
+    refuse_same_assignee: bool = False, expected_assignee=_ANY_ASSIGNEE,
+) -> bool:
+    """Assign/reassign; legacy callers still refuse running+claimed tasks.
+
+    Opt-in orchestrator guards run INSIDE the write transaction. A claim in any
+    phase is protected by ``refuse_live_claim`` (no reclaim is attempted).
+    ``expected_assignee`` pins the caller's handoff snapshot. When supplied,
+    ``reason`` and ``actor`` are recorded on the assigned event and in a comment
+    atomically with the assignment; notification still fires only after commit.
+    """
     profile = _canonical_assignee(profile)
     with write_txn(conn):
         row = conn.execute(
@@ -1558,6 +1573,14 @@ def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) 
         ).fetchone()
         if not row:
             return False
+        if refuse_live_claim and row["claim_lock"] is not None:
+            raise ValueError(f"cannot reassign {task_id}: worker claim present. Nothing changed.")
+        if row["status"] in refuse_statuses:
+            raise ValueError(f"cannot reassign {task_id}: status is {row['status']!r}. Nothing changed.")
+        if expected_assignee is not _ANY_ASSIGNEE and row["assignee"] != expected_assignee:
+            raise ValueError(f"cannot reassign {task_id}: assignment changed concurrently. Nothing changed.")
+        if refuse_same_assignee and row["assignee"] == profile:
+            raise ValueError(f"{task_id} is already assigned to {profile}. Nothing changed.")
         if row["claim_lock"] is not None and row["status"] == "running":
             raise RuntimeError(
                 f"cannot reassign {task_id}: currently running (claimed). "
@@ -1573,9 +1596,14 @@ def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) 
             conn.execute("UPDATE tasks SET assignee = ? WHERE id = ?", (profile, task_id))
         # ``from`` lets the respawn guard tell a real handoff (dev→closer) from
         # a no-op re-assign or an unassign, which must not lift ``active_pr``.
-        _append_event(
-            conn, task_id, "assigned", {"assignee": profile, "from": row["assignee"]},
-        )
+        payload = {"assignee": profile, "from": row["assignee"]}
+        if actor is not None:
+            payload["actor"] = actor
+        if reason is not None:
+            payload["reason"] = reason
+            add_comment(conn, task_id, actor or "kanban",
+                        f"Reassigned {row['assignee']} -> {profile}: {reason}")
+        _append_event(conn, task_id, "assigned", payload)
     # Observer fires AFTER commit so subscribers see durable state.
     notify_task_updated(conn, task_id, ("assignee",))
     return True

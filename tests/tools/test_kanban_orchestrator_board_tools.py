@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-_NEW_TOOLS = ("kanban_archive", "kanban_promote", "kanban_unlink")
+_NEW_TOOLS = ("kanban_archive", "kanban_promote", "kanban_unlink", "kanban_reassign")
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def board(monkeypatch, tmp_path):
 def _call(name, args):
     from tools import kanban_tools as kt
     handler = {"kanban_archive": kt._handle_archive, "kanban_promote": kt._handle_promote,
-               "kanban_unlink": kt._handle_unlink}[name]
+               "kanban_unlink": kt._handle_unlink, "kanban_reassign": kt._handle_reassign}[name]
     return json.loads(handler(args))
 
 
@@ -71,6 +71,7 @@ def test_gate_off_for_task_worker_and_on_for_orchestrator(monkeypatch, tmp_path)
 @pytest.mark.parametrize("name,args", [
     ("kanban_archive", {"task_id": "X", "reason": "withdrawn"}),
     ("kanban_promote", {"task_id": "X"}),
+    ("kanban_reassign", {"task_id": "X", "assignee": "sophia", "reason": "handoff"}),
     ("kanban_unlink", {"parent_id": "P", "child_id": "X"}),
 ])
 def test_worker_is_refused_at_runtime_and_nothing_changes(board, monkeypatch, name, args):
@@ -88,6 +89,7 @@ def test_worker_is_refused_at_runtime_and_nothing_changes(board, monkeypatch, na
 @pytest.mark.parametrize("name,args", [
     ("kanban_archive", {"task_id": "t_x", "reason": "r"}),
     ("kanban_promote", {"task_id": "t_x"}),
+    ("kanban_reassign", {"task_id": "t_x", "assignee": "sophia", "reason": "handoff"}),
     ("kanban_unlink", {"parent_id": "a", "child_id": "b"}),
 ])
 def test_delegate_child_is_refused(board, monkeypatch, name, args):
@@ -307,3 +309,280 @@ def test_unlink_db_actor_is_optional_for_existing_callers(board):
     assert kb.unlink_tasks(conn, parent, child) is True
     [ev] = _events(kb, conn, child, "unlinked")
     assert ev.payload == {"parent": parent, "child": child}
+
+
+# --- kanban_reassign --------------------------------------------------------
+
+@pytest.fixture
+def reassign_board(board, monkeypatch, tmp_path):
+    from hermes_cli import profiles
+    home = tmp_path / ".hermes"
+    monkeypatch.setattr(profiles, "_get_default_hermes_home", lambda: home)
+    for name in ("gurney", "sophia", "none", "unassign"):
+        profile = home / "profiles" / name
+        profile.mkdir(parents=True)
+        (profile / "config.yaml").write_text("{}\n")
+    return board
+
+
+def _snapshot(conn):
+    """Compare all relevant rows AND the serialized SQLite image on refusal."""
+    tables = ("tasks", "task_events", "task_comments", "task_runs", "task_links")
+    return ({table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+             for table in tables}, conn.serialize())
+
+
+def _reassign(tid, **overrides):
+    from tools.registry import registry
+    args = {"task_id": tid, "assignee": "sophia", "reason": "review PASS; return to owner"}
+    args.update(overrides)
+    return json.loads(registry.dispatch("kanban_reassign", args))
+
+
+def test_reassign_blocked_preserves_history_and_only_changes_assignment(reassign_board):
+    kb, conn = reassign_board
+    parent = kb.create_task(conn, title="parent", assignee="gurney")
+    tid = kb.create_task(conn, title="reviewed", assignee="sophia")
+    assert kb.claim_task(conn, tid)
+    assert kb.request_review(conn, tid, summary="Implementation verified", reviewer="gurney")
+    assert kb.claim_review_task(conn, tid)
+    assert kb.block_task(conn, tid, reason="review PASS; handoff pending")
+    kb.add_comment(conn, tid, "gurney", "Existing review evidence")
+    child = kb.create_task(conn, title="child", assignee="gurney", parents=[tid])
+    kb.link_tasks(conn, parent, tid)
+    kb.set_model_override(conn, tid, "owner-model", "owner-provider")
+    conn.execute("UPDATE tasks SET consecutive_failures=3, last_failure_error='old' WHERE id=?", (tid,))
+    conn.commit()
+    before, _ = _snapshot(conn)
+    task_before = dict(conn.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone())
+    out = _reassign(tid)
+    assert out == {"ok": True, "task_id": tid, "assignee": "sophia",
+                   "previous_assignee": "gurney", "status": "blocked"}
+    task_after = dict(conn.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone())
+    assert task_after == {**task_before, "assignee": "sophia", "consecutive_failures": 0,
+                          "last_failure_error": None}
+    after, _ = _snapshot(conn)
+    assert after["task_runs"] == before["task_runs"]
+    assert after["task_links"] == before["task_links"]
+    assert after["task_comments"][:-1] == before["task_comments"]
+    assert after["task_events"][:-2] == before["task_events"]
+    [event] = _events(kb, conn, tid, "assigned")
+    assert event.payload == {"assignee": "sophia", "from": "gurney", "actor": "orchestrator",
+                             "reason": "review PASS; return to owner"}
+    comment = kb.list_comments(conn, tid)[-1]
+    assert (comment.author, comment.body) == (
+        "orchestrator", "Reassigned gurney -> sophia: review PASS; return to owner")
+    assert kb.parent_ids(conn, child) == [tid]
+
+
+@pytest.mark.parametrize("status", ["triage", "todo", "ready", "blocked"])
+def test_reassign_allowed_statuses_stay_unchanged(reassign_board, status):
+    kb, conn = reassign_board
+    tid = kb.create_task(conn, title="card", assignee="gurney")
+    conn.execute("UPDATE tasks SET status=? WHERE id=?", (status, tid))
+    conn.commit()
+    assert _reassign(tid)["status"] == status
+    assert kb.get_task(conn, tid).status == status
+
+
+@pytest.mark.parametrize("case,changes,expected", [
+    ("unknown", {}, "unknown task"),
+    ("running", {}, "running"),
+    ("review", {}, "review"),
+    ("done", {}, "done"),
+    ("archived", {}, "archived"),
+    ("live_claim", {}, "claim"),
+    ("empty_assignee", {"assignee": " "}, "assignee"),
+    ("null_assignee", {"assignee": None}, "assignee"),
+    ("none", {"assignee": "none"}, "assignee"),
+    ("unassign", {"assignee": "unassign"}, "assignee"),
+    ("unknown_profile", {"assignee": "not-a-profile"}, "profile"),
+    ("invalid_profile", {"assignee": "../sophia"}, "profile"),
+    ("same", {"assignee": "gurney"}, "already assigned"),
+    ("empty_reason", {"reason": " "}, "reason"),
+    ("null_reason", {"reason": None}, "reason"),
+    ("unknown_arg", {"actor": "forged"}, "unknown parameter"),
+])
+def test_reassign_refusals_change_no_rows_or_database_bytes(reassign_board, monkeypatch, case, changes, expected):
+    kb, conn = reassign_board
+    tid = kb.create_task(conn, title="card", assignee="gurney")
+    if case in {"running", "review", "done", "archived"}:
+        conn.execute("UPDATE tasks SET status=? WHERE id=?", (case, tid))
+    if case == "live_claim":
+        # A claim on a NON-running card must also be protected.
+        conn.execute("UPDATE tasks SET status='blocked', claim_lock='claimed', worker_pid=? WHERE id=?",
+                     (os.getpid(), tid))
+        monkeypatch.setattr(kb, "_worker_alive", lambda *a, **k: True)
+    conn.commit()
+    before = _snapshot(conn)
+    out = _reassign("t_missing" if case == "unknown" else tid, **changes)
+    assert expected in out.get("error", ""), out
+    assert out["error"].endswith("Nothing changed."), out
+    assert _snapshot(conn) == before
+
+
+@pytest.mark.parametrize("field", ["task_id", "assignee", "reason"])
+def test_reassign_requires_string_parameters(reassign_board, field):
+    kb, conn = reassign_board
+    tid = kb.create_task(conn, title="card", assignee="gurney")
+    before = _snapshot(conn)
+    out = _reassign(tid, **{field: 123}) if field != "task_id" else _reassign(123)
+    assert field in out.get("error", "")
+    assert out["error"].endswith("Nothing changed.")
+    assert _snapshot(conn) == before
+
+
+def test_reassign_refuses_claim_landing_at_transaction_boundary(reassign_board, monkeypatch):
+    from contextlib import contextmanager
+    kb, conn = reassign_board
+    tid = kb.create_task(conn, title="race", assignee="gurney")
+    real_txn = kb.write_txn
+    snapshot_after_claim = []
+
+    @contextmanager
+    def claim_then_begin(c, **kw):
+        # Another writer lands a claim just BEFORE BEGIN IMMEDIATE.
+        with real_txn(conn):
+            conn.execute("UPDATE tasks SET status='blocked', claim_lock='interleaved', worker_pid=? WHERE id=?",
+                         (os.getpid(), tid))
+        snapshot_after_claim.append(_snapshot(conn))
+        with real_txn(c, **kw):
+            yield c
+
+    monkeypatch.setattr(kb, "write_txn", claim_then_begin)
+    out = _reassign(tid)
+    assert "claim" in out.get("error", ""), out
+    assert out["error"].endswith("Nothing changed.")
+    assert snapshot_after_claim and _snapshot(conn) == snapshot_after_claim[0]
+
+
+@pytest.mark.parametrize("failure", ["comment", "event"])
+def test_reassign_provenance_failure_rolls_back_assignment(reassign_board, monkeypatch, failure):
+    kb, conn = reassign_board
+    tid = kb.create_task(conn, title="atomic", assignee="gurney")
+    before = _snapshot(conn)
+    real_event = kb._append_event
+
+    def boom(*a, **k):
+        raise OSError("injected provenance failure")
+
+    def fail_assigned(c, task_id, kind, *a, **k):
+        if kind == "assigned":
+            return boom()
+        return real_event(c, task_id, kind, *a, **k)
+
+    monkeypatch.setattr(kb, "add_comment" if failure == "comment" else "_append_event",
+                        boom if failure == "comment" else fail_assigned)
+    assert "injected provenance failure" in _reassign(tid)["error"]
+    assert _snapshot(conn) == before
+
+
+def test_reassign_explicit_board(reassign_board):
+    kb, conn = reassign_board
+    from hermes_cli import kanban_db_connect as kbc
+    kb.init_db(board="other")
+    with kbc.connect(board="other") as other:
+        tid = kb.create_task(other, title="other board", assignee="gurney")
+        assert _reassign(tid, board="other")["ok"]
+        assert kb.get_task(other, tid).assignee == "sophia"
+    assert kb.get_task(conn, tid) is None
+
+
+def test_assign_task_defaults_keep_existing_behavior(reassign_board):
+    kb, conn = reassign_board
+    tid = kb.create_task(conn, title="legacy", assignee="gurney")
+    assert kb.assign_task(conn, tid, "gurney")  # Legacy no-op still records an event.
+    assert kb.assign_task(conn, tid, None)      # CLI/dashboard can still unassign.
+    assert kb.assign_task(conn, tid, "unknown-profile")
+    assert [event.payload for event in _events(kb, conn, tid, "assigned")] == [
+        {"assignee": "gurney", "from": "gurney"},
+        {"assignee": None, "from": "gurney"},
+        {"assignee": "unknown-profile", "from": None}]
+    assert kb.list_comments(conn, tid) == []
+    assert kb.claim_task(conn, tid)
+    before = _snapshot(conn)
+    with pytest.raises(RuntimeError, match="currently running"):
+        kb.assign_task(conn, tid, "sophia")
+    assert _snapshot(conn) == before
+
+
+def test_reassign_registry_toolset_mcp_and_metrics_consistency():
+    from pathlib import Path
+    from tools import kanban_tools as kt
+    from tools.registry import registry
+    from toolsets import _HERMES_CORE_TOOLS
+    from agent.transports.hermes_tools_mcp_server import EXPOSED_TOOLS
+    assert "kanban_reassign" in kt._ORCHESTRATOR_TOOLS
+    assert "kanban_reassign" in _HERMES_CORE_TOOLS
+    assert "kanban_reassign" in EXPOSED_TOOLS
+    schema = registry.get_schema("kanban_reassign")
+    assert schema["parameters"]["required"] == ["task_id", "assignee", "reason"]
+    assert set(schema["parameters"]["properties"]) == {"task_id", "assignee", "reason", "board"}
+    schema_path = Path(__file__).resolve().parents[2] / "hermes_cli/observability/schemas/hermes.shared_metrics.v2.schema.json"
+    metrics = json.loads(schema_path.read_text())
+    # This checkout exports bounded tool categories, NOT raw tool-name enums.
+    from hermes_cli.observability.relay_shared_metrics import _with_runtime_toolset
+    from hermes_cli.observability.shared_metrics_contract import tool_category
+    event = _with_runtime_toolset({"tool_name": "kanban_reassign"})
+    assert event["toolset"] == "kanban"
+    categories = metrics["$defs"]["tool_call_counter"]["properties"]["dimensions"]["properties"]["tool_category"]["enum"]
+    assert tool_category(event) in categories
+
+
+@pytest.mark.parametrize("context", ["worker", "delegate"])
+def test_reassign_runtime_gate_keeps_database_identical(reassign_board, monkeypatch, context):
+    from contextlib import nullcontext
+    from agent.delegation_context import delegated_child_context
+    kb, conn = reassign_board
+    tid = kb.create_task(conn, title="protected", assignee="gurney")
+    before = _snapshot(conn)
+    if context == "worker":
+        monkeypatch.setenv("HERMES_KANBAN_TASK", tid)
+    with delegated_child_context() if context == "delegate" else nullcontext():
+        out = _reassign(tid)
+    assert ("delegate_task child" if context == "delegate" else "orchestrator-only") in out["error"]
+    assert _snapshot(conn) == before
+
+
+@pytest.mark.parametrize("interleave", ["assignee", "status"])
+def test_reassign_rechecks_handoff_snapshot_and_status_in_transaction(reassign_board, monkeypatch, interleave):
+    from contextlib import contextmanager
+    kb, conn = reassign_board
+    tid = kb.create_task(conn, title="race", assignee="gurney")
+    real_txn = kb.write_txn
+    snapshots = []
+
+    @contextmanager
+    def change_then_begin(c, **kw):
+        with real_txn(conn):
+            if interleave == "assignee":
+                conn.execute("UPDATE tasks SET assignee='default' WHERE id=?", (tid,))
+            else:
+                conn.execute("UPDATE tasks SET status='review' WHERE id=?", (tid,))
+        snapshots.append(_snapshot(conn))
+        with real_txn(c, **kw):
+            yield c
+
+    monkeypatch.setattr(kb, "write_txn", change_then_begin)
+    out = _reassign(tid)
+    assert ("assignment changed concurrently" if interleave == "assignee" else "review") in out["error"]
+    assert out["error"].endswith("Nothing changed.")
+    assert _snapshot(conn) == snapshots[0]
+
+
+def test_reassign_notifies_only_after_provenance_commits(reassign_board, monkeypatch):
+    kb, conn = reassign_board
+    from hermes_cli import kanban_db_connect as kbc
+    tid = kb.create_task(conn, title="notify", assignee="gurney")
+    notifications = []
+
+    def observe(c, task_id, fields):
+        with kbc.connect() as observer:
+            assert kb.get_task(observer, tid).assignee == "sophia"
+            assert len(_events(kb, observer, tid, "assigned")) == 1
+            assert len(kb.list_comments(observer, tid)) == 1
+        notifications.append((task_id, fields))
+
+    monkeypatch.setattr(kb, "notify_task_updated", observe)
+    assert _reassign(tid)["ok"]
+    assert notifications == [(tid, ("assignee",))]

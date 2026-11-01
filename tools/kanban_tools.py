@@ -23,7 +23,7 @@ from tools.kanban_tools_schemas import (
     KANBAN_ARCHIVE_SCHEMA, KANBAN_ATTACH_SCHEMA,
     KANBAN_ATTACH_URL_SCHEMA, KANBAN_ATTACHMENTS_SCHEMA, KANBAN_BLOCK_SCHEMA, KANBAN_COMMENT_SCHEMA,
     KANBAN_COMPLETE_SCHEMA, KANBAN_CREATE_SCHEMA, KANBAN_HEARTBEAT_SCHEMA, KANBAN_LINK_SCHEMA,
-    KANBAN_LIST_SCHEMA, KANBAN_PROMOTE_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA,
+    KANBAN_LIST_SCHEMA, KANBAN_PROMOTE_SCHEMA, KANBAN_REASSIGN_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA,
     KANBAN_REQUEST_REVIEW_SCHEMA, KANBAN_SHOW_SCHEMA,
     KANBAN_UNBLOCK_SCHEMA, KANBAN_UNLINK_SCHEMA)
 
@@ -99,7 +99,7 @@ def _check_kanban_mode() -> bool:
 
 @no_cache_check_fn
 def _check_kanban_orchestrator_mode() -> bool:
-    """Board-routing tools (kanban_list/unblock/archive/promote/unlink): hidden from task workers."""
+    """Board-routing tools: hidden from task workers."""
     return _visible(to_env_worker=False)
 
 
@@ -1265,11 +1265,43 @@ def _handle_unlink(args: dict, **kw) -> str:
                    status=child.status if child else None)
 
 
+@_kanban_handler("kanban_reassign")
+def _handle_reassign(args: dict, **kw) -> str:
+    """Route an idle card without unblocking, reclaiming, or touching its runs."""
+    _orchestrator_mutation("kanban_reassign")
+    from hermes_cli.profiles import normalize_profile_name, profile_exists
+
+    for name in ("task_id", "assignee", "reason"):
+        _check(isinstance(args.get(name), str) and args[name].strip(),
+               f"{name} is required and must be a non-empty string. Nothing changed.")
+    tid = args["task_id"].strip()
+    assignee = normalize_profile_name(args["assignee"])
+    _check(assignee not in {"none", "unassign"},
+           "assignee must name a profile; unassigning is not supported. Nothing changed.")
+    _check(profile_exists(assignee), f"unknown Hermes profile {assignee!r}. Nothing changed.")
+    reason = _redact(args["reason"]).strip()
+    _check(reason, "reason is required. Nothing changed.")
+    with _board(args.get("board")) as (kb, conn):
+        task = kb.get_task(conn, tid)
+        _check(task, f"unknown task {tid}. Nothing changed.")
+        # All state guards and provenance writes belong to assign_task's txn.
+        assigned = kb.assign_task(
+            conn, tid, assignee, reason=reason, actor=_persisted_identity(),
+            refuse_statuses={"running", "review", "done", "archived"},
+            refuse_live_claim=True, refuse_same_assignee=True,
+            expected_assignee=task.assignee,
+        )
+        _check(assigned, f"unknown task {tid}. Nothing changed.")
+        return _ok(task_id=tid, assignee=assignee, previous_assignee=task.assignee,
+                   status=kb.get_task(conn, tid).status)
+
+
 # --- Registration (order preserved: it is the order tools appear in the schema) ---
 
 # Board-routing tools: hidden from (and refused for) dispatcher-spawned task workers.
 _ORCHESTRATOR_TOOLS = frozenset({
-    "kanban_list", "kanban_unblock", "kanban_archive", "kanban_promote", "kanban_unlink"})
+    "kanban_list", "kanban_unblock", "kanban_archive", "kanban_promote", "kanban_unlink",
+    "kanban_reassign"})
 _TOOLS = (
     ("kanban_show", KANBAN_SHOW_SCHEMA, _handle_show, "📋"),
     ("kanban_list", KANBAN_LIST_SCHEMA, _handle_list, "📋"),
@@ -1287,7 +1319,8 @@ _TOOLS = (
     ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"),
     ("kanban_unlink", KANBAN_UNLINK_SCHEMA, _handle_unlink, "✂"),
     ("kanban_promote", KANBAN_PROMOTE_SCHEMA, _handle_promote, "⏫"),
-    ("kanban_archive", KANBAN_ARCHIVE_SCHEMA, _handle_archive, "🗄"))
+    ("kanban_archive", KANBAN_ARCHIVE_SCHEMA, _handle_archive, "🗄"),
+    ("kanban_reassign", KANBAN_REASSIGN_SCHEMA, _handle_reassign, "↪"))
 
 for _name, _sch, _handler, _emoji in _TOOLS:
     _gate = _check_kanban_orchestrator_mode if _name in _ORCHESTRATOR_TOOLS else _check_kanban_mode
