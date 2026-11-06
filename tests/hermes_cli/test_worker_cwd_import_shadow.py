@@ -24,7 +24,7 @@ def _installed_pkg(env: dict, neutral_cwd: Path) -> Path:
     (The pytest process itself may import the tree under test via rootdir insertion, so its own
     ``hermes_cli.__file__`` is not the reference.)"""
     r = subprocess.run([sys.executable, "-I", "-c", "import hermes_cli; print(hermes_cli.__file__)"],
-                       cwd=neutral_cwd, env=env, capture_output=True, text=True, timeout=60)
+                       cwd=neutral_cwd, env=env, capture_output=True, text=True, timeout=60, check=False)
     assert r.returncode == 0, r.stderr
     return Path(r.stdout.strip()).resolve().parent
 
@@ -65,7 +65,7 @@ def test_decoy_shadows_the_unpinned_form(tmp_path):
     ws = _decoy_workspace(tmp_path, marker)
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONSAFEPATH", "PYTHONPATH")}
     r = subprocess.run([sys.executable, "-m", "hermes_cli.main", "--version"], cwd=ws, env=env,
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, check=False)
     assert r.returncode == 97
     assert marker.exists()
 
@@ -109,7 +109,7 @@ def test_kanban_worker_spawned_in_hermes_worktree_imports_installed_package(monk
     probe = ("import importlib.util as u, hermes_cli; "
              "print(u.find_spec('hermes_cli.kanban_worker_client').origin)")
     r = subprocess.run([*launcher[:2], "-c", probe], cwd=captured["cwd"], env=captured["env"],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, check=False)
     assert not marker.exists(), f"worker imported the workspace tree: {marker.read_text()}"
     assert r.returncode == 0, r.stderr
     imported = Path(r.stdout.strip()).resolve().parent
@@ -129,7 +129,7 @@ _NESTED_TOOL = (
 def _run_nested(launcher_flags: list[str], ws: Path, env: dict) -> dict:
     """Launch a Python child with ``launcher_flags`` in ``ws``; it spawns its own plain tool child."""
     r = subprocess.run([sys.executable, *launcher_flags, "-c", _NESTED_TOOL], cwd=ws, env=env,
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, check=False)
     assert r.returncode == 0, r.stderr
     return dict(line.split(" ", 1) for line in r.stdout.strip().splitlines())
 
@@ -169,7 +169,7 @@ def test_child_tools_keep_cwd_import_semantics(tmp_path):
     ],
 )
 def test_sibling_module_spawners_pin_safe_path(monkeypatch, build):
-    import hermes_cli.relaunch as relaunch
+    from hermes_cli import relaunch
 
     monkeypatch.setattr(relaunch, "resolve_hermes_bin", lambda: None)
     argv = build()

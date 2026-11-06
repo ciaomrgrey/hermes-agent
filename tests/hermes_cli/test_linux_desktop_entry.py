@@ -1557,11 +1557,11 @@ def test_rendered_module_fallback_runs_installed_hermes_from_a_checkout_cwd(
     env["HERMES_HOME"] = str(tmp_path / "hermes-home")
 
     r = subprocess.run([*argv[:-1], "--version"], cwd=decoy.parent, env=env,
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, check=False)
     assert not marker.exists(), f"desktop entry imported the cwd checkout: {marker.read_text()}"
     assert r.returncode == 0, (r.returncode, r.stdout[-500:], r.stderr[-500:])
 
     bare = [a for a in argv[:-1] if a != "-P"]
     control = subprocess.run([*bare, "--version"], cwd=decoy.parent, env=env,
-                             capture_output=True, text=True, timeout=120)
+                             capture_output=True, text=True, timeout=120, check=False)
     assert control.returncode == 97 and marker.exists()  # the same argv without -P is shadowed
