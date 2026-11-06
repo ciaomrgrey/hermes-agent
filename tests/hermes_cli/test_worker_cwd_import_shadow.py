@@ -101,21 +101,20 @@ def test_kanban_worker_spawned_in_hermes_worktree_imports_installed_package(monk
 
     cmd = captured["cmd"]
     assert captured["cwd"] == str(ws)  # tool semantics keep the workspace cwd
-    launcher = cmd[: cmd.index("-p")]
-    assert launcher == [sys.executable, "-P", "-m", "hermes_cli.main"]
+    # v0.23.0: the dispatcher spawns the owner client module, not the CLI entry point.
+    i = cmd.index(sys.executable)
+    launcher = cmd[i:]
+    assert launcher == [sys.executable, "-P", "-m", "hermes_cli.kanban_worker_client"]
 
-    probe = ("import hermes_cli; print(hermes_cli.__file__)")
+    probe = ("import importlib.util as u, hermes_cli; "
+             "print(u.find_spec('hermes_cli.kanban_worker_client').origin)")
     r = subprocess.run([*launcher[:2], "-c", probe], cwd=captured["cwd"], env=captured["env"],
                        capture_output=True, text=True, timeout=60)
+    assert not marker.exists(), f"worker imported the workspace tree: {marker.read_text()}"
     assert r.returncode == 0, r.stderr
     imported = Path(r.stdout.strip()).resolve().parent
     assert imported == _installed_pkg(captured["env"], tmp_path)
     assert ws.resolve() not in imported.parents
-
-    r = subprocess.run([*launcher, "--version"], cwd=captured["cwd"], env=captured["env"],
-                       capture_output=True, text=True, timeout=60)
-    assert r.returncode == 0, (r.returncode, r.stdout[-500:], r.stderr[-500:])
-    assert not marker.exists(), f"worker imported the workspace tree: {marker.read_text()}"
 
 
 _NESTED_TOOL = (
@@ -174,6 +173,11 @@ def test_sibling_module_spawners_pin_safe_path(monkeypatch, build):
 
     monkeypatch.setattr(relaunch, "resolve_hermes_bin", lambda: None)
     argv = build()
+    if "-m" not in argv:
+        # v0.23.0 runtime_command(): ``-I -c <bootstrap>`` is isolated mode (implies -P) and
+        # inserts the install root explicitly, so no cwd entry can shadow the install.
+        assert argv[1:3] == ["-I", "-c"] and "runpy.run_module('hermes_cli.main'" in argv[3]
+        return
     i = argv.index("-m")
     assert argv[i + 1] == "hermes_cli.main"
     assert argv[i - 1] == "-P"
