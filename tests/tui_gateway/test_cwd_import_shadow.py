@@ -39,7 +39,7 @@ def isolated_home(tmp_path, monkeypatch):
 
 def test_cli_exec_in_checkout_cwd_runs_installed_hermes(isolated_home, tmp_path, monkeypatch):
     """The real ``cli.exec`` handler, real subprocess, cwd = decoy checkout."""
-    import tui_gateway.server as server
+    from tui_gateway import server
 
     marker = tmp_path / "imported"
     ws = _decoy(tmp_path, "hermes_cli", marker)
@@ -55,7 +55,7 @@ def test_cli_exec_in_checkout_cwd_runs_installed_hermes(isolated_home, tmp_path,
 
 def test_slash_worker_in_checkout_cwd_resolves_installed_module(isolated_home, tmp_path, monkeypatch):
     """The real ``_SlashWorker`` argv/env/cwd; the child resolves ``tui_gateway.slash_worker`` as launched."""
-    import tui_gateway.server as server
+    from tui_gateway import server
 
     marker = tmp_path / "imported"
     ws = _decoy(tmp_path, "tui_gateway", marker)
@@ -84,7 +84,7 @@ def test_slash_worker_in_checkout_cwd_resolves_installed_module(isolated_home, t
     flags = argv[:i]  # interpreter + its flags exactly as launched
     probe = "import importlib.util as u; print(u.find_spec('tui_gateway.slash_worker').origin)"
     r = subprocess.run([*flags, "-c", probe], cwd=captured["cwd"], env=captured["env"],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, check=False)
     assert not marker.exists(), f"slash worker imported the cwd checkout: {marker.read_text()}"
     assert r.returncode == 0, r.stderr
     origin = Path(r.stdout.strip()).resolve()
@@ -98,5 +98,5 @@ def test_bare_module_form_is_shadowed_control(tmp_path):
     ws = _decoy(tmp_path, "tui_gateway", marker)
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONSAFEPATH", "PYTHONPATH")}
     r = subprocess.run([sys.executable, "-m", "tui_gateway.slash_worker"], cwd=ws, env=env,
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, check=False)
     assert r.returncode == 97 and marker.exists()
