@@ -984,7 +984,9 @@ class TestReviewRound3:
              patch.object(browser_lightpanda, "using_lightpanda_engine", return_value=False), \
              patch("hermes_cli.browser_connect.detect_default_chromium", return_value="chrome"), \
              patch("hermes_cli.browser_connect.real_profile_copy_dir", return_value=str(tmp_path)), \
+             patch.object(rp, "_installed_bundle_version", return_value=None), \
              patch("hermes_cli.browser_connect.snapshot_real_profile") as snap:
+            # Version gate off (host-independent; covered by test_browser_real_profile_version_gate.py).
             cdp, err = rp.real_profile_cdp()
         assert cdp == "ws://127.0.0.1:9251/devtools/browser/rp" and err is None
         snap.assert_not_called()  # ← the fix: no overlay while a live browser owns the dir

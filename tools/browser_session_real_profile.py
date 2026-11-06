@@ -10,6 +10,9 @@ Chromiums on one copy dir); it is terminated at exit or when THAT profile turns 
 from __future__ import annotations
 
 import logging
+import os
+import plistlib
+import sys
 import threading
 from typing import Optional
 
@@ -25,7 +28,18 @@ _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 # Extra flags on top of the launcher's base set: no hang monitor / popup blocking / repost prompts on an
 # unattended browser driving the user's own sessions.
-_REAL_PROFILE_EXTRA_FLAGS = ("--disable-hang-monitor", "--disable-popup-blocking", "--disable-prompt-on-repost")
+# MacAppCodeSignClone: macOS Google Chrome copies its whole app bundle (~1.4 GiB logical) into
+# /var/folders/<user>/X/com.google.Chrome.code_sign_clone per launch and deletes it only on an orderly
+# exit; a SIGKILL leaves it until reboot. Tradeoff: the clone exists so a running Chrome survives an update
+# staged on disk; without it a browser running across an update hits code-signature errors
+# (code_sign_clone_manager.mm). Gate: ``_version_mismatch`` compares /json/version with the installed
+# bundle before every reuse (``_gate``). Chromium keeps the LAST ``--disable-features``, so this one
+# restates the launcher's base ``Translate``. Unknown feature names are ignored by other Chromium browsers.
+_REAL_PROFILE_EXTRA_FLAGS = ("--disable-hang-monitor", "--disable-popup-blocking", "--disable-prompt-on-repost",
+                             "--disable-features=Translate,MacAppCodeSignClone")
+# Browsers whose macOS app-bundle CFBundleShortVersionString is the Chromium version /json/version reports
+# (Brave/Edge bundles carry their own product versions: not comparable).
+_VERSION_GATED_BROWSERS = ("chrome", "chromium")
 
 
 def real_profile_fallback_note(err: str) -> str:
@@ -90,6 +104,86 @@ def _consent_revoked() -> tuple[None, None]:
     return None, None
 
 
+def _on_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def _installed_bundle_version(browser: Optional[str]) -> Optional[str]:
+    """``CFBundleShortVersionString`` of the .app holding ``chromium_executable(browser)``.
+    None when the gate does not apply (not macOS, ungated browser, no bundle/Info.plist);
+    "" when the plist exists but its version cannot be read (callers fail closed)."""
+    from hermes_cli.browser_connect import chromium_executable
+    if not _on_macos() or browser not in _VERSION_GATED_BROWSERS:
+        return None
+    exe = chromium_executable(browser) or ""
+    cut = exe.find(".app/Contents/MacOS/")
+    plist = exe[:cut + 4] + "/Contents/Info.plist" if cut > 0 else ""
+    if not plist or not os.path.isfile(plist):
+        return None
+    try:
+        with open(plist, "rb") as fh:
+            version = plistlib.load(fh).get("CFBundleShortVersionString")
+    except Exception:  # health: allow BLE001 -- an unreadable plist is "unknown", which fails closed
+        return ""
+    return version.strip() if isinstance(version, str) else ""
+
+
+def _running_browser_version(http_url: str) -> str:
+    """Version from ``/json/version`` ``Browser`` (``Chrome/155.0.8059.40`` -> ``155.0.8059.40``); "" if unreadable."""
+    try:
+        import requests
+        from agent.proxy_bypass import loopback_request_kwargs
+        url = f"{http_url}/json/version"
+        product = requests.get(url, timeout=2, **loopback_request_kwargs(url)).json().get("Browser")
+    except Exception:  # health: allow BLE001 -- unreadable is "unknown", which fails closed
+        return ""
+    return product.rsplit("/", 1)[-1].strip() if isinstance(product, str) and "/" in product else ""
+
+
+def _version_mismatch(http_url: str, browser: Optional[str]) -> Optional[tuple[str, str]]:
+    """``(running, installed)`` when the browser at ``http_url`` must not be reused because the installed
+    bundle changed under it (or either version is unreadable); None when reuse is safe. With
+    MacAppCodeSignClone disabled, a browser running across an update execs the NEW bundle for its
+    helper/renderer processes and fails code-signature validation."""
+    installed = _installed_bundle_version(browser)
+    if installed is None:
+        return None
+    running = _running_browser_version(http_url)
+    return None if installed and running == installed else (running or "unknown", installed or "unknown")
+
+
+def _gate(launched, browser: Optional[str]) -> tuple[Optional[str], bool]:
+    """Version gate for a launcher browser about to be reused: ``(error, restart)``. ``restart`` means the
+    outdated browser is this process's own launch and was stopped, so a fresh launch may follow. A browser
+    this process did not launch is never stopped here (ownership unproven) and is refused instead; an
+    unreadable version is refused too (restarting cannot cure it: it would loop)."""
+    mismatch = _version_mismatch(launched.http_url, browser)
+    if mismatch is None:
+        return None, False
+    running, installed = mismatch
+    where = f"the real-profile {browser} on {launched.user_data_dir} (PID {launched.pid or 'unknown'})"
+    if "unknown" in mismatch:
+        return (f"{_RP}the version of {where} or of the installed {browser} could not be read (running "
+                f"{running}, installed {installed}), so it is not reused and was left running. Quit that process "
+                "(and check the browser install), then retry."), False
+    if launched.owned:
+        logger.info("real-profile: restarting %s PID %s (running %s, installed %s)", browser, launched.pid, *mismatch)
+        terminate_real_profile_browser()
+        from tools.browser_launcher import get_browser, running_instance
+        if get_browser(real_profile_key()) is None and running_instance(launched.user_data_dir) is None:
+            return None, True
+        return f"{_RP}the outdated real-profile browser did not exit. Retry, or turn the toggle off.", False
+    return (f"{_RP}{where} is version {running}, but the installed {browser} is {installed}. A browser running "
+            "across an update fails code-signature checks, so it is not reused. It was not started by this Hermes "
+            "process, so it was left running: quit that process, then retry."), False
+
+
+def _unreadable_install_error(browser: str) -> str:
+    return (f"{_RP}the installed {browser} version could not be read from its Info.plist (installed unknown), so a "
+            f"real-profile {browser} cannot be checked against it: none is reused or snapshotted over. Reinstall the "
+            "browser (quit it if it is running), then retry, or turn the toggle off.")
+
+
 def _launch(browser_name: str) -> tuple[Optional[str], Optional[str]]:
     from hermes_cli.browser_connect import chromium_executable, real_profile_copy_dir, snapshot_real_profile
     from tools.browser_launcher import launch_chromium
@@ -116,6 +210,11 @@ def _launch(browser_name: str) -> tuple[Optional[str], Optional[str]]:
                                     prepare=overlay)
     if launched is None:
         return None, snapshot_failure[0] if snapshot_failure else f"{_RP}the real-profile browser failed to start: {err}"
+    # The launcher may have ATTACHED to a browser already on the copy dir (an earlier Hermes process's):
+    # reused only while its version matches the installed bundle.
+    gate_err, _ = _gate(launched, browser_name) if not launched.owned else (None, False)
+    if gate_err:
+        return None, gate_err
     logger.info("real-profile browser ready for %s at %s (%s)", browser_name, launched.http_url, launched.user_data_dir)
     return launched.cdp_url, None
 
@@ -141,11 +240,17 @@ def real_profile_cdp() -> tuple[Optional[str], Optional[str]]:
                       "finished. Retry after that call completes, or restart Hermes if it was abandoned.")
     try:
         from tools.browser_launcher import get_browser
-        running = get_browser(real_profile_key())
-        if running is not None:
-            return running.cdp_url, None
         from hermes_cli.browser_connect import detect_default_chromium
+        running = get_browser(real_profile_key())
         browser_name = detect_default_chromium()
+        if _installed_bundle_version(browser_name) == "":
+            return None, _unreadable_install_error(browser_name)
+        if running is not None:
+            gate_err, restart = _gate(running, browser_name)
+            if gate_err:
+                return None, gate_err
+            if not restart:
+                return running.cdp_url, None
         unsupported = _unsupported_reason(browser_name)
         if unsupported:
             return None, unsupported
