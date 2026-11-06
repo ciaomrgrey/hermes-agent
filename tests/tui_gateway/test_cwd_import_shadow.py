@@ -66,6 +66,7 @@ def test_slash_worker_in_checkout_cwd_resolves_installed_module(isolated_home, t
             captured.update(argv=list(argv), env=dict(kw["env"]), cwd=kw.get("cwd"))
             self.stdout = self.stderr = iter(())
             self.stdin = None
+            self.pid = 4243
 
         def poll(self):
             return 0

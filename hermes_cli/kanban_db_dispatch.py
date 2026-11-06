@@ -2702,8 +2702,10 @@ def _retag_legacy_worker_sessions(workspaces_root_path: str) -> None:
 
 def _worker_argv(task: Task, profile_arg: str, hermes_home: Optional[str]) -> list[str]:
     """The profile owner executes; this subprocess only waits for its receipt."""
-    import sys
-    return [sys.executable, "-m", "hermes_cli.kanban_worker_client"]
+    # -P: the worker's cwd is the task workspace; a hermes-agent worktree there must not
+    # supply hermes_cli ahead of the install (v0.23.0 moved the spawn to this client module).
+    from hermes_constants import hermes_module_argv
+    return hermes_module_argv("hermes_cli.kanban_worker_client")
 
 
 def _open_worker_log(task: Task, board: Optional[str]):
