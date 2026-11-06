@@ -373,13 +373,17 @@ def finish_text_response(
         messages.pop()
 
     from agent.turn_end_hooks import before_turn_end, prepare_response
-    final_response = prepare_response(agent, final_response)
-    # Same row contract as the stock transform below: a promoted reasoning-only reply
-    # keeps ``content`` empty and carries the text in the ``api_content`` sidecar.
-    if _promoted:
-        final_msg["api_content"] = final_response
-    else:
-        final_msg["content"] = final_response
+    _prepared = prepare_response(agent, final_response)
+    # Same row contract as the stock transform below: only a rewrite touches the row (a promoted
+    # reasoning-only reply keeps ``content`` empty and carries the text in ``api_content``). An
+    # unchanged stitched continuation keeps its last piece so publish_held_final_row can preserve
+    # it for replay instead of resending the earlier fragments.
+    if _prepared != final_response:
+        final_response = _prepared
+        if _promoted:
+            final_msg["api_content"] = final_response
+        else:
+            final_msg["content"] = final_response
     if before_turn_end(
         agent, final_response, final_msg, messages, user_message=user_message,
         can_continue=(api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0),
