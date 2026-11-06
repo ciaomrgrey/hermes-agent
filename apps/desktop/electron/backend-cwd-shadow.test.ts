@@ -42,10 +42,19 @@ function fixture() {
   return { base, runtime, project, marker, home }
 }
 
+// v0.23.0's backend env scrubs PYTHONPATH: the selected interpreter owns its install (a venv).
+// Model that install as an interpreter whose own site path holds the fake runtime root.
+function runtimeInterpreter(python: string, fx: ReturnType<typeof fixture>): string {
+  const wrapper = path.join(fx.base, 'runtime-python')
+  fs.writeFileSync(wrapper, `#!/bin/sh\nPYTHONPATH=${JSON.stringify(fx.runtime)} exec ${JSON.stringify(python)} "$@"\n`)
+  fs.chmodSync(wrapper, 0o755)
+  return wrapper
+}
+
 function runTerminalScript(python: string, args: string[], fx: ReturnType<typeof fixture>) {
-  const env = buildDesktopBackendEnv({ hermesHome: fx.home, pythonPathEntries: [fx.runtime], currentEnv: {} })
+  const env = buildDesktopBackendEnv({ currentEnv: {} })
   const script = buildTerminalScript({
-    command: python,
+    command: runtimeInterpreter(python, fx),
     args,
     cwd: fx.project,
     env: terminalScriptEnv(env, fx.home),
