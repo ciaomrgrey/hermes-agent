@@ -8,7 +8,11 @@ of the profile whose gateway owns the estate Slack bot.
 
 At-most-once: a durable receipt is reserved in the target profile home BEFORE the send. A
 reservation that never resolved (timeout, crash) reads back ``unverified`` and is never
-re-sent; only a definite platform refusal is recorded ``unavailable``.
+re-sent. ``unavailable`` (which re-arms the gate's per-reason dedup) is recorded only for
+a POSITIVELY established non-delivery: the native send returned an error before any
+platform I/O was dispatched, or Slack itself answered with an API refusal. Every other
+outcome (lost response, dropped connection, timeout, unknown shape) is ``unverified``: the
+POST may have been accepted, so nothing is re-sent.
 """
 import fcntl
 import hashlib
@@ -104,12 +108,55 @@ def _result(record, key):
     return out
 
 
+# Prefix the native Slack sender gives a parsed ``ok: false`` chat.postMessage answer: Slack
+# received the request and refused it, so no message exists. Transport/response failures use
+# a different envelope ("Slack send failed: ...") and stay unverified.
+SLACK_API_REFUSAL = "Slack API error: "
+
+
 def _post(channel, text):
-    """Exactly ``hermes send -t slack:<channel>``: profile env, gateway config, send_message_tool."""
+    """Exactly ``hermes send -t slack:<channel>``: profile env, gateway config, send_message_tool.
+
+    Returns ``(result, dispatched)``. ``dispatched`` is True once platform I/O may have
+    started (the native platform dispatcher was entered), or when that cannot be observed.
+    """
     from hermes_cli.send_cmd import _load_hermes_env
-    from tools.send_message_tool import send_message_tool
+    import tools.send_message_tool as native
     _load_hermes_env()
-    return json.loads(send_message_tool({"action": "send", "target": "slack:" + channel, "message": text}))
+    dispatcher = getattr(native, "_send_to_platform", None)
+    if dispatcher is None:
+        # Cannot observe dispatch: assume it happened (fail towards no re-send).
+        return json.loads(native.send_message_tool(
+            {"action": "send", "target": "slack:" + channel, "message": text})), True
+    entered = []
+
+    async def observed(*args, **kwargs):
+        entered.append(True)
+        return await dispatcher(*args, **kwargs)
+
+    native._send_to_platform = observed
+    try:
+        raw = native.send_message_tool({"action": "send", "target": "slack:" + channel, "message": text})
+    finally:
+        native._send_to_platform = dispatcher
+    return json.loads(raw), bool(entered)
+
+
+def classify(result, dispatched, channel):
+    """``sent`` | ``unavailable`` (positively not posted) | ``unverified`` (may have posted)."""
+    result = result if isinstance(result, dict) else {}
+    if (result.get("success") is True and not result.get("skipped") and result.get("message_id")
+            and str(result.get("chat_id") or channel) == channel):
+        return "sent"
+    error = result.get("error")
+    if not error or result.get("success") or result.get("partial_success"):
+        return "unverified"
+    if not dispatched:
+        # Refused before any platform I/O: target, config, token, relay authorization.
+        return "unavailable"
+    if str(error).startswith(SLACK_API_REFUSAL):
+        return "unavailable"
+    return "unverified"
 
 
 def _send(event, deadline=None):
@@ -136,16 +183,12 @@ def _send(event, deadline=None):
         _write_receipt(path, record)
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError()
-        result = _post(channel, text)
-        result = result if isinstance(result, dict) else {}
-        if (result.get("success") is True and not result.get("skipped") and result.get("message_id")
-                and str(result.get("chat_id") or channel) == channel):
+        result, dispatched = _post(channel, text)
+        status = classify(result, dispatched, channel)
+        if status == "sent":
             record.update(status="sent", message_id=str(result["message_id"]), sent_at=time.time())
-        elif result.get("error") and not result.get("success") and not result.get("partial_success"):
-            # A definite refusal (not configured, channel_not_found, auth): nothing was posted.
-            record.update(status="unavailable", resolved_at=time.time())
         else:
-            record.update(status="unverified", resolved_at=time.time())
+            record.update(status=status, resolved_at=time.time())
         _write_receipt(path, record)
         return _result(record, key)
 

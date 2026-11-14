@@ -199,8 +199,12 @@ lane returned `escalation_unavailable` for every escalation ever raised.)
 
 At-most-once: a receipt is reserved durably in the TARGET profile home
 (`runtime/completion_gate_escalations/<sha256(channel, message)>.json`) before the
-POST and resolved to `sent` (with the Slack message ts), `unavailable` (a definite
-platform refusal: nothing posted) or `unverified`. An identical escalation returns
+POST and resolved to `sent` (with the Slack message ts), `unavailable` or
+`unverified`. `unavailable` requires positive proof nothing was posted: the native
+send refused before the platform dispatcher was entered (target, config, token,
+relay authorization), or Slack answered `ok: false` (`Slack API error: ...`). Any
+other failure after dispatch (lost response, dropped connection, timeout, unknown
+result) is `unverified`, because Slack may have accepted the POST. An identical escalation returns
 the stored receipt and is never re-posted; a reservation left unresolved by a
 timeout/crash reads back `unverified`, not a retry. Within the block window a
 reason is deduplicated unless its prior attempt is provably undelivered

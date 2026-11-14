@@ -4,7 +4,9 @@ Only the outermost network seam is replaced: aiohttp's POST answers like Slack's
 chat.postMessage and records the request to ``<HERMES_HOME>/slack-requests.jsonl``.
 Everything above it (profile env load, gateway config, target resolution, relay
 authorization, the Slack plugin's standalone sender, receipts) is production code.
-argv: escalation.py path, mode (ok | refused | lock).
+argv: escalation.py path, mode (ok | refused | lost | reset).
+``lost``: Slack accepts the POST but the response read times out (the native sender
+returns an error). ``reset``: the connection drops after the request was written.
 """
 import importlib.util
 import json
@@ -30,6 +32,8 @@ class _Response:
         self._payload = payload
 
     async def json(self, *args, **kwargs):
+        if mode == 'lost':
+            raise TimeoutError('response lost after Slack accepted the POST')
         return self._payload
 
     async def __aenter__(self):
@@ -43,6 +47,8 @@ def post(self, url, *args, headers=None, json=None, **kwargs):
     record = {'url': str(url), 'bearer': (headers or {}).get('Authorization', ''), 'json': json, 'pid': os.getpid()}
     with (home / 'slack-requests.jsonl').open('a') as handle:
         handle.write(__import__('json').dumps(record) + '\n')
+    if mode == 'reset':
+        raise aiohttp.ServerDisconnectedError()
     if mode == 'refused':
         return _Response({'ok': False, 'error': 'channel_not_found'})
     return _Response({'ok': True, 'channel': (json or {}).get('channel'), 'ts': '1794700000.000100'})
