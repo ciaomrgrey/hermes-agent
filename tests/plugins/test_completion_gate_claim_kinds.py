@@ -1,7 +1,9 @@
 """t_21de283f: non-claim extraction, non-deficit kinds, card/path/hash checks, HTTP auth codes."""
 import hashlib
+import json
 import sqlite3
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -89,30 +91,114 @@ def test_card_found_on_any_board_and_pinned_db(board, tmp_path, monkeypatch):
     assert checks.check("card", {"id": "t_aaaaaaaa"}) == ("reproduced", "")
 
 
-def test_card_recent_transition_and_current_run_holder_count(board):
-    """A dispatcher may claim the card between the agent's action and the gate check:
-    a stated status/holder reached within the recent window is still the agent's action."""
-    import time
+def _claimed(db, card, run, profile, at, source_status=None):
+    """Native dispatcher claim: tasks -> running on run `run`; assignee unchanged."""
+    payload = {"lock": "host:1", "expires": at + 900, "run_id": run}
+    if source_status:
+        payload["source_status"] = source_status
+    db.execute("INSERT INTO task_runs VALUES(?,?,?,?)", (run, card, profile, at))
+    db.execute("INSERT INTO task_events(task_id,run_id,kind,payload,created_at) VALUES(?,?,'claimed',?,?)",
+               (card, run, json.dumps(payload), at))
+
+
+def test_card_dispatcher_claim_race_keeps_the_pre_claim_state(board):
+    """request_review sets status=review + assignee=reviewer; the dispatcher may then claim
+    review -> running before the gate checks. The pre-claim state is the CLAIMED run's source state,
+    joined with the unchanged assignee, and only while that claim is the current run and recent."""
     checks = module("checks")
     now = int(time.time())
     with sqlite3.connect(board) as db:
-        db.execute("INSERT INTO tasks VALUES('t_11111111','running','cody',7)")
-        db.execute("INSERT INTO task_runs VALUES(7,'t_11111111','gurney',?)", (now,))
-        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_11111111','review_requested','{}',?)", (now - 5,))
-        db.execute("INSERT INTO tasks VALUES('t_22222222','ready','cody',NULL)")
-        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_22222222','completed','{}',?)", (now - 86400,))
-        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_22222222','blocked','{}',?)", (now - 10,))
+        db.execute("INSERT INTO tasks VALUES('t_11111111','running','gurney',7)")
+        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_11111111','review_requested',?,?)",
+                   ('{"reviewer": "gurney", "implementer": "cody"}', now - 20))
+        _claimed(db, "t_11111111", 7, "gurney", now - 5, source_status="review")
+        # changes_requested -> ready, then a plain claim (no source_status) on run 8.
+        db.execute("INSERT INTO tasks VALUES('t_44444444','running','cody',8)")
+        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_44444444','changes_requested','{}',?)",
+                   (now - 20,))
+        _claimed(db, "t_44444444", 8, "cody", now - 5)
     assert checks.check("card", {"id": "t_11111111", "status": "review", "assignee": "gurney"}) == ("reproduced", "")
-    # The reviewer named on a recent review handoff holds the card before any run starts.
+    assert checks.check("card", {"id": "t_11111111", "status": "review"}) == ("reproduced", "")
+    assert checks.check("card", {"id": "t_11111111", "status": "running", "assignee": "gurney"}) == ("reproduced", "")
+    # The race never changes the assignee: the implementer does not hold a card in review.
+    assert checks.check("card", {"id": "t_11111111", "status": "review", "assignee": "cody"})[0] == "failed"
+    assert checks.check("card", {"id": "t_11111111", "assignee": "cody"})[0] == "failed"
+    assert checks.check("card", {"id": "t_11111111", "status": "ready"})[0] == "failed"
+    assert checks.check("card", {"id": "t_44444444", "status": "ready", "assignee": "cody"}) == ("reproduced", "")
+    assert checks.check("card", {"id": "t_44444444", "status": "review"})[0] == "failed"
+
+
+def test_card_stale_claim_is_not_a_race(board):
+    checks = module("checks")
+    now = int(time.time())
     with sqlite3.connect(board) as db:
-        db.execute("INSERT INTO tasks VALUES('t_33333333','ready','cody',NULL)")
-        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_33333333','review_requested',?,?)",
-                   ('{"reviewer": "gurney", "implementer": "cody"}', now - 5))
-    assert checks.check("card", {"id": "t_33333333", "assignee": "Gurney"}) == ("reproduced", "")
-    assert checks.check("card", {"id": "t_33333333", "assignee": "emma"})[0] == "failed"
-    assert checks.check("card", {"id": "t_22222222", "status": "blocked"}) == ("reproduced", "")
-    # An old transition is not evidence of the present claim.
-    assert checks.check("card", {"id": "t_22222222", "status": "done"})[0] == "failed"
+        db.execute("INSERT INTO tasks VALUES('t_55555555','running','gurney',9)")
+        _claimed(db, "t_55555555", 9, "gurney", now - 3600, source_status="review")
+    assert checks.check("card", {"id": "t_55555555", "status": "review"}) == (
+        "failed", "card status running, expected review")
+
+
+def test_card_claim_of_an_earlier_run_is_not_the_current_race(board):
+    checks = module("checks")
+    now = int(time.time())
+    with sqlite3.connect(board) as db:
+        db.execute("INSERT INTO tasks VALUES('t_66666666','running','cody',11)")
+        _claimed(db, "t_66666666", 10, "gurney", now - 30, source_status="review")
+        db.execute("INSERT INTO task_runs VALUES(11,'t_66666666','cody',?)", (now - 10,))
+    assert checks.check("card", {"id": "t_66666666", "status": "review"})[0] == "failed"
+
+
+def test_card_superseded_completion_and_reviewer_are_failed(board):
+    """Gurney round-1 probe: blocked/cody now; completed 60 s ago, blocked 10 s ago, an earlier gurney
+    run. Historical status/holders are not the present state, and never combine into a state
+    that never existed."""
+    checks = module("checks")
+    now = int(time.time())
+    with sqlite3.connect(board) as db:
+        db.execute("INSERT INTO tasks VALUES('t_1234abcd','blocked','cody',NULL)")
+        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_1234abcd','completed','{}',?)", (now - 60,))
+        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_1234abcd','blocked','{}',?)", (now - 10,))
+        db.execute("INSERT INTO task_runs VALUES(1,'t_1234abcd','gurney',?)", (now - 120,))
+        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_1234abcd','review_requested',?,?)",
+                   ('{"reviewer": "gurney", "implementer": "cody"}', now - 90))
+    assert checks.check("card", {"id": "t_1234abcd", "status": "blocked", "assignee": "cody"}) == ("reproduced", "")
+    assert checks.check("card", {"id": "t_1234abcd", "status": "done"}) == ("failed", "card status blocked, expected done")
+    assert checks.check("card", {"id": "t_1234abcd", "assignee": "gurney"}) == ("failed", "card assignee cody, expected gurney")
+    assert checks.check("card", {"id": "t_1234abcd", "status": "done", "assignee": "gurney"})[0] == "failed"
+    assert checks.check("card", {"id": "t_1234abcd", "status": "review"})[0] == "failed"
+
+
+def test_card_former_run_holder_is_a_board_profile_not_an_alias(tmp_path, monkeypatch):
+    """Gurney's exact probe board: gurney appears only as a former run's profile."""
+    checks = module("checks")
+    monkeypatch.delenv("HERMES_KANBAN_DB", raising=False)
+    monkeypatch.setenv("HERMES_KANBAN_HOME", str(tmp_path))
+    board = _board(tmp_path / "kanban/boards/estate/kanban.db", rows=(("t_1234abcd", "blocked", "cody"),))
+    now = int(time.time())
+    with sqlite3.connect(board) as db:
+        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_1234abcd','completed','{}',?)", (now - 60,))
+        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_1234abcd','blocked','{}',?)", (now - 10,))
+        db.execute("INSERT INTO task_runs VALUES(1,'t_1234abcd','gurney',?)", (now - 120,))
+    assert checks.check("card", {"id": "t_1234abcd", "status": "blocked", "assignee": "cody"}) == ("reproduced", "")
+    assert checks.check("card", {"id": "t_1234abcd", "status": "done"}) == ("failed", "card status blocked, expected done")
+    assert checks.check("card", {"id": "t_1234abcd", "assignee": "gurney"}) == ("failed", "card assignee cody, expected gurney")
+    assert checks.check("card", {"id": "t_1234abcd", "status": "done", "assignee": "gurney"})[0] == "failed"
+    assert checks.check("card", {"id": "t_1234abcd", "assignee": "hermes"}) == ("unverified", "assignee_not_a_board_profile")
+
+
+def test_card_reviewer_handed_back_to_implementer_is_failed(board):
+    checks = module("checks")
+    now = int(time.time())
+    with sqlite3.connect(board) as db:
+        db.execute("INSERT INTO tasks VALUES('t_77777777','ready','cody',NULL)")
+        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_77777777','review_requested',?,?)",
+                   ('{"reviewer": "gurney", "implementer": "cody"}', now - 30))
+        _claimed(db, "t_77777777", 12, "gurney", now - 25, source_status="review")
+        db.execute("INSERT INTO task_events(task_id,kind,payload,created_at) VALUES('t_77777777','changes_requested','{}',?)",
+                   (now - 5,))
+    assert checks.check("card", {"id": "t_77777777", "assignee": "gurney"}) == ("failed", "card assignee cody, expected gurney")
+    assert checks.check("card", {"id": "t_77777777", "status": "review"})[0] == "failed"
+    assert checks.check("card", {"id": "t_77777777", "status": "ready", "assignee": "cody"}) == ("reproduced", "")
 
 
 def test_card_check_does_not_write_the_board(board):

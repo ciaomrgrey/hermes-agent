@@ -111,8 +111,10 @@ Read-only checker children reproduce file existence/nonempty (absolute, `~/` or
 `dropbox:`-relative paths, resolved against the Dropbox client's personal root;
 directories must be nonempty; never cwd-relative), sha256 (full or >=8-hex prefix,
 files <=256 MB), Kanban card existence plus optional status/assignee across the
-native boards (a transition or reviewer handoff within the last 15 minutes also
-counts, so a dispatcher claim racing the check is not a false block), HTTP HEAD
+native boards, compared jointly with the card's present row (the only history
+consulted is a dispatcher claim that opened the current run in the last 15
+minutes: running then also matches its source status, review or ready, with the
+unchanged assignee; superseded transitions and former holders never match), HTTP HEAD
 status (no redirects/credentials/query; 401/403/429 against another expected
 status is `unverifiable_from_client`, not failed), TCP connection, process
 existence, JSON/YAML config equality, exact SQLite/kanban row presence, native

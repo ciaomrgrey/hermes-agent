@@ -94,12 +94,10 @@ def file_hash_check(ref, timeout):
 
 CARD_ID = re.compile(r"t_[0-9a-f]{8}")
 CARD_STATUSES = {"triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"}
-# Recent transitions into a status. The dispatcher may claim a card (review -> running)
-# between the agent's own action and this check; that action remains the claim's evidence.
-EVENT_STATUS = {"review_requested": "review", "completed": "done", "blocked": "blocked",
-                "archived": "archived", "scheduled": "scheduled", "claimed": "running",
-                "changes_requested": "ready"}
-RECENT_SECONDS = 15 * 60
+# A dispatcher claim (review|ready -> running, assignee unchanged) may land between the agent's own
+# handoff and this check. Only that one transition is undone, and only while it is the card's
+# CURRENT run and recent: no other history counts as present state.
+CLAIM_RACE_SECONDS = 15 * 60
 
 
 def kanban_boards():
@@ -128,6 +126,23 @@ def card_row(db, card_id, now):
     return db.execute("SELECT status, assignee, current_run_id FROM tasks WHERE id=?", (card_id,)).fetchone()
 
 
+def pre_claim_status(db, card_id, run_id, now):
+    """Status the card had just before the dispatcher's claim that opened the CURRENT run, if recent."""
+    if run_id is None:
+        return None
+    event = db.execute(
+        "SELECT payload FROM task_events WHERE task_id=? AND kind='claimed' AND created_at BETWEEN ? AND ?"
+        " ORDER BY id DESC LIMIT 1", (card_id, now - CLAIM_RACE_SECONDS, now)).fetchone()
+    try:
+        payload = json.loads(event[0] or "{}") if event else None
+    except ValueError:
+        return None
+    if not isinstance(payload, dict) or payload.get("run_id") != run_id:
+        return None
+    # Native kanban_db: source_status=review marks a reviewer claim; every other claim starts at ready.
+    return "review" if payload.get("source_status") == "review" else "ready"
+
+
 def card_check(ref, timeout):
     if isinstance(ref, str):
         ref = {"id": ref}
@@ -135,15 +150,17 @@ def card_check(ref, timeout):
         return "unverified", "invalid_reference"
     if not isinstance(ref["id"], str) or not CARD_ID.fullmatch(ref["id"]):
         return "unverified", "card_id_required"
-    want = {k: ref[k].strip().casefold() for k in ("status", "assignee") if k in ref}
-    if not all(isinstance(ref[k], str) for k in want) or want.get("status", "ready") not in CARD_STATUSES:
+    want = {k: ref[k] for k in ("status", "assignee") if k in ref}
+    if not all(isinstance(v, str) for v in want.values()):
+        return "unverified", "invalid_reference"
+    want = {k: v.strip().casefold() for k, v in want.items()}
+    if want.get("status", "ready") not in CARD_STATUSES:
         return "unverified", "invalid_reference"
     boards = kanban_boards()
     if not boards:
         return "unverified", "kanban_board_unavailable"
     unreadable = False
     now = time.time()
-    since = now - RECENT_SECONDS
     for path in boards:
         try:
             db = readonly_db(path, timeout)
@@ -155,32 +172,18 @@ def card_check(ref, timeout):
             if row is None:
                 continue
             status, assignee = (row[0] or "").casefold(), (row[1] or "").casefold()
-            if "status" in want and status != want["status"]:
-                recent = {EVENT_STATUS.get(kind) for (kind,) in db.execute(
-                    "SELECT kind FROM task_events WHERE task_id=? AND created_at BETWEEN ? AND ?",
-                    (ref["id"], since, now))}
-                if want["status"] not in recent:
-                    return "failed", f"card status {status}, expected {want['status']}"
             if "assignee" in want and assignee != want["assignee"]:
-                holders = {(p or "").casefold() for (p,) in db.execute(
-                    "SELECT profile FROM task_runs WHERE task_id=? AND (id=? OR started_at BETWEEN ? AND ?)",
-                    (ref["id"], row[2], since, now))}
-                for (payload,) in db.execute(
-                        "SELECT payload FROM task_events WHERE task_id=? AND kind='review_requested'"
-                        " AND created_at BETWEEN ? AND ?", (ref["id"], since, now)):
-                    try:
-                        reviewer = json.loads(payload or "{}").get("reviewer")
-                    except (ValueError, AttributeError):
-                        reviewer = None
-                    if isinstance(reviewer, str):
-                        holders.add(reviewer.casefold())
-                if want["assignee"] not in holders:
-                    known = db.execute("SELECT 1 FROM tasks WHERE lower(assignee)=? LIMIT 1",
-                                       (want["assignee"],)).fetchone()
-                    if known is None:
-                        # Prose alias ("Hermes"), not a profile name this board assigns.
-                        return "unverified", "assignee_not_a_board_profile"
-                    return "failed", f"card assignee {assignee}, expected {want['assignee']}"
+                known = db.execute("SELECT 1 FROM tasks WHERE lower(assignee)=? UNION ALL"
+                                   " SELECT 1 FROM task_runs WHERE lower(profile)=? LIMIT 1",
+                                   (want["assignee"], want["assignee"])).fetchone()
+                if known is None:
+                    # Prose alias ("Hermes"), not a profile name this board assigns.
+                    return "unverified", "assignee_not_a_board_profile"
+                return "failed", f"card assignee {assignee}, expected {want['assignee']}"
+            if "status" in want and status != want["status"]:
+                # Joint state: the assignee already matched the present row, which a claim never changes.
+                if status != "running" or pre_claim_status(db, ref["id"], row[2], now) != want["status"]:
+                    return "failed", f"card status {status}, expected {want['status']}"
             return "reproduced", ""
         except sqlite3.DatabaseError:
             unreadable = True
