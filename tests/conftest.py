@@ -76,6 +76,16 @@ def _hermes_home_points_at_production(value: str) -> bool:
     """
     if not value:
         return True
+    # Estate extension (t_70b901a9): this install serves from a custom root
+    # (tests/estate_live_roots.py), which upstream's check below would honour as
+    # "custom" and so run the suite against the live home. Additive only.
+    try:
+        from tests.estate_live_roots import live_root_for
+
+        if live_root_for(value) is not None:
+            return True
+    except Exception:
+        return True
     try:
         # The platform-default root, not a hardcoded ``~/.hermes``: Windows installs live under
         # ``%LOCALAPPDATA%\hermes``, and a dev shell exporting that path used to be honored as
@@ -842,6 +852,12 @@ def _capture_real_kanban_root() -> Path:
     """
     if _PRE_SANDBOX_KANBAN_OVERRIDE:
         return Path(_PRE_SANDBOX_KANBAN_OVERRIDE).expanduser().resolve()
+    from tests.estate_live_roots import live_root_for
+
+    estate_root = live_root_for(_PRE_SANDBOX_HERMES_HOME)
+    if estate_root is not None:
+        # Sandboxed away above, but the real kanban root is the estate root.
+        return estate_root
     if _PRE_SANDBOX_HERMES_HOME and not _hermes_home_points_at_production(
         _PRE_SANDBOX_HERMES_HOME
     ):
@@ -941,6 +957,15 @@ def _state_db_write_guard(request, monkeypatch):
         monkeypatch.setattr(_hs, "_STATE_DB_GUARD_BYPASS", True)
         yield
         return
+    monkeypatch.setattr(
+        _hs, "_STATE_DB_GUARD_EXTRA_DENY_ROOTS", tuple(_estate_state_deny_roots())
+    )
+    yield
+
+
+def _estate_state_deny_roots():
+    """Extra state.db deny roots: the pre-sandbox CUSTOM root (upstream) plus every
+    estate live root (tests/estate_live_roots.py), which is production here."""
     extra_roots = []
     if _PRE_SANDBOX_HERMES_HOME and not _hermes_home_points_at_production(
         _PRE_SANDBOX_HERMES_HOME
@@ -948,10 +973,10 @@ def _state_db_write_guard(request, monkeypatch):
         extra_roots.append(
             Path(_PRE_SANDBOX_HERMES_HOME).expanduser().resolve()
         )
-    monkeypatch.setattr(
-        _hs, "_STATE_DB_GUARD_EXTRA_DENY_ROOTS", tuple(extra_roots)
-    )
-    yield
+    from tests.estate_live_roots import live_roots
+
+    extra_roots.extend(r for r in live_roots() if r not in extra_roots)
+    return extra_roots
 
 
 # ── Module-level state reset — replaced by per-file process isolation ──────
