@@ -107,12 +107,22 @@ fallback is added. Such responses still produce the existing unverified/error
 fail-open verdict. Reliability recovery is not a promise of zero fail-open
 outcomes, and it does not change blocking or escalation policy.
 
-Read-only checker children reproduce file existence/nonempty, HTTP HEAD status
-(no redirects/credentials/query), TCP connection, process existence, JSON/YAML
-config equality, exact SQLite/kanban row presence, native terminal-result exit
-code, and cron ID presence. The extractor never supplies executable commands.
-File contents/quality, stronger claims, reports from other agents, and references
-not explicitly supplied in the answer are unverified, not reproduced. This is not
+Read-only checker children reproduce file existence/nonempty (absolute, `~/` or
+`dropbox:`-relative paths, resolved against the Dropbox client's personal root;
+directories must be nonempty; never cwd-relative), sha256 (full or >=8-hex prefix,
+files <=256 MB), Kanban card existence plus optional status/assignee across the
+native boards (a transition or reviewer handoff within the last 15 minutes also
+counts, so a dispatcher claim racing the check is not a false block), HTTP HEAD
+status (no redirects/credentials/query; 401/403/429 against another expected
+status is `unverifiable_from_client`, not failed), TCP connection, process
+existence, JSON/YAML config equality, exact SQLite/kanban row presence, native
+terminal-result exit code, and cron ID presence. The extractor never supplies
+executable commands and omits non-claims (plans, in-progress work, negatives and
+no-ops, blockers, analysis, statistics, explanations). `turn_receipt`,
+`agent_report`, `external_state` and `qualitative` are accepted, distinct kinds
+recorded as unverified with mismatch `unverifiable_by_design`; `unknown_kind` is
+reserved for genuine completion claims fitting no kind.
+References not explicitly supplied in the answer are unverified, not reproduced. This is not
 a truth guarantee: extraction can omit/misclassify claims. Live extraction quality
 and unverified rate must be accepted by the owner.
 

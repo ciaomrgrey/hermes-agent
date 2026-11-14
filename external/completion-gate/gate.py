@@ -309,9 +309,10 @@ class Gate:
             verdict, mismatch = checked[:2]
             evidence = checked[2] if len(checked) > 2 and isinstance(checked[2], dict) else {}
             reason = digest([normalized(claim["claim"]), claim["artefact_kind"], claim["artefact_ref"], normalized(mismatch)])
-            from .checks import CHECKERS
+            from .checks import BY_DESIGN, CHECKERS
             internal_kinds = {"chat_telegram_receipt", "inaction_followthrough"}
-            kind = claim["artefact_kind"] if claim["artefact_kind"] in CHECKERS or claim["artefact_kind"] in internal_kinds else "unknown"
+            known = CHECKERS.keys() | BY_DESIGN | internal_kinds
+            kind = claim["artefact_kind"] if claim["artefact_kind"] in known else "unknown"
             results.append({"claim_hash": digest(claim), "artefact_kind": kind,
                             "verdict": verdict, "mismatch": mismatch, "reason_hash": reason,
                             **evidence})

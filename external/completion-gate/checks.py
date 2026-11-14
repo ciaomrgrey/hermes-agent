@@ -1,6 +1,7 @@
 """Deterministic read-only probes. Never execute a claimed command or follow HTTP redirects."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,11 +20,173 @@ def result(ok, mismatch):
     return ("reproduced", "") if ok else ("failed", mismatch)
 
 
+# Accepted, non-deficit kinds: the claim is real but no local read-only probe exists.
+BY_DESIGN = {"agent_report", "external_state", "qualitative", "turn_receipt"}
+MAX_HASH_BYTES = 256 * 1024 * 1024
+DROPBOX_PREFIXES = ("dropbox:", "Dropbox/")
+
+
+def dropbox_root():
+    """The desktop client's personal root (~/.dropbox/info.json), else ~/Dropbox."""
+    home = Path.home()
+    try:
+        info = json.loads((home / ".dropbox/info.json").read_text())
+        path = Path((info.get("personal") or info.get("business") or {})["path"])
+        if path.is_absolute():
+            return path
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return home / "Dropbox"
+
+
+def resolve_path(ref):
+    """Absolute, ``~/``-prefixed or Dropbox-relative; NEVER relative to the cwd."""
+    if not isinstance(ref, str) or not ref.strip():
+        return None
+    ref = ref.strip()
+    for prefix in DROPBOX_PREFIXES:
+        if ref.startswith(prefix):
+            rel = Path(ref[len(prefix):].lstrip("/"))
+            if not rel.parts or ".." in rel.parts:
+                return None
+            return dropbox_root() / rel
+    if ref == "~" or ref.startswith("~/"):
+        path = Path(ref).expanduser()
+        return path if path.is_absolute() and ".." not in path.parts else None
+    path = Path(ref)
+    return path if path.is_absolute() else None
+
+
 def file_check(ref, timeout):
-    p = Path(ref)
-    if not p.is_absolute():
+    p = resolve_path(ref)
+    if p is None:
         return "unverified", "absolute_path_required"
+    if p.is_dir():
+        return result(any(p.iterdir()), "directory missing or empty")
     return result(p.is_file() and p.stat().st_size > 0, "file missing or empty")
+
+
+def file_hash_check(ref, timeout):
+    if not isinstance(ref, dict) or set(ref) != {"path", "sha256"} or not isinstance(ref["sha256"], str):
+        return "unverified", "invalid_reference"
+    expected = ref["sha256"].strip().rstrip("….").casefold()
+    if not re.fullmatch(r"[0-9a-f]{8,64}", expected):
+        return "unverified", "sha256_prefix_required"
+    p = resolve_path(ref["path"])
+    if p is None:
+        return "unverified", "absolute_path_required"
+    if p.is_dir():
+        return "unverified", "not_a_file"
+    if not p.is_file():
+        return "failed", "file missing"
+    if p.stat().st_size > MAX_HASH_BYTES:
+        return "unverified", "file_too_large"
+    digest = hashlib.sha256()
+    deadline = time.monotonic() + timeout
+    with p.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            if time.monotonic() >= deadline:
+                raise TimeoutError()
+            digest.update(block)
+    actual = digest.hexdigest()
+    return result(actual.startswith(expected), f"sha256 mismatch: {actual[:12]}…, expected {expected[:12]}…")
+
+
+CARD_ID = re.compile(r"t_[0-9a-f]{8}")
+CARD_STATUSES = {"triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"}
+# Recent transitions into a status. The dispatcher may claim a card (review -> running)
+# between the agent's own action and this check; that action remains the claim's evidence.
+EVENT_STATUS = {"review_requested": "review", "completed": "done", "blocked": "blocked",
+                "archived": "archived", "scheduled": "scheduled", "claimed": "running",
+                "changes_requested": "ready"}
+RECENT_SECONDS = 15 * 60
+
+
+def kanban_boards():
+    """Native board layout: HERMES_KANBAN_DB pin, legacy default DB, then every named board."""
+    pinned = os.environ.get("HERMES_KANBAN_DB", "").strip()
+    root = os.environ.get("HERMES_KANBAN_HOME", "").strip()
+    if not root:
+        from hermes_constants import get_default_hermes_root
+        root = str(get_default_hermes_root())
+    root = Path(root).expanduser()
+    candidates = ([Path(pinned).expanduser()] if pinned else []) + [root / "kanban.db"]
+    boards = root / "kanban/boards"
+    if boards.is_dir():
+        candidates += sorted(p / "kanban.db" for p in boards.iterdir() if p.is_dir() and not p.name.startswith("_"))
+    seen, found = set(), []
+    for path in candidates:
+        # A zero-byte kanban.db is an unused placeholder, not a board.
+        if path.is_absolute() and path.is_file() and path.stat().st_size > 0 and path.resolve() not in seen:
+            seen.add(path.resolve())
+            found.append(path)
+    return found
+
+
+def card_row(db, card_id, now):
+    """(status, assignee, current_run_id) of a card. Seam for as-of replay."""
+    return db.execute("SELECT status, assignee, current_run_id FROM tasks WHERE id=?", (card_id,)).fetchone()
+
+
+def card_check(ref, timeout):
+    if isinstance(ref, str):
+        ref = {"id": ref}
+    if not isinstance(ref, dict) or "id" not in ref or not set(ref) <= {"id", "status", "assignee"}:
+        return "unverified", "invalid_reference"
+    if not isinstance(ref["id"], str) or not CARD_ID.fullmatch(ref["id"]):
+        return "unverified", "card_id_required"
+    want = {k: ref[k].strip().casefold() for k in ("status", "assignee") if k in ref}
+    if not all(isinstance(ref[k], str) for k in want) or want.get("status", "ready") not in CARD_STATUSES:
+        return "unverified", "invalid_reference"
+    boards = kanban_boards()
+    if not boards:
+        return "unverified", "kanban_board_unavailable"
+    unreadable = False
+    now = time.time()
+    since = now - RECENT_SECONDS
+    for path in boards:
+        try:
+            db = readonly_db(path, timeout)
+        except Exception:
+            unreadable = True
+            continue
+        try:
+            row = card_row(db, ref["id"], now)
+            if row is None:
+                continue
+            status, assignee = (row[0] or "").casefold(), (row[1] or "").casefold()
+            if "status" in want and status != want["status"]:
+                recent = {EVENT_STATUS.get(kind) for (kind,) in db.execute(
+                    "SELECT kind FROM task_events WHERE task_id=? AND created_at BETWEEN ? AND ?",
+                    (ref["id"], since, now))}
+                if want["status"] not in recent:
+                    return "failed", f"card status {status}, expected {want['status']}"
+            if "assignee" in want and assignee != want["assignee"]:
+                holders = {(p or "").casefold() for (p,) in db.execute(
+                    "SELECT profile FROM task_runs WHERE task_id=? AND (id=? OR started_at BETWEEN ? AND ?)",
+                    (ref["id"], row[2], since, now))}
+                for (payload,) in db.execute(
+                        "SELECT payload FROM task_events WHERE task_id=? AND kind='review_requested'"
+                        " AND created_at BETWEEN ? AND ?", (ref["id"], since, now)):
+                    try:
+                        reviewer = json.loads(payload or "{}").get("reviewer")
+                    except (ValueError, AttributeError):
+                        reviewer = None
+                    if isinstance(reviewer, str):
+                        holders.add(reviewer.casefold())
+                if want["assignee"] not in holders:
+                    known = db.execute("SELECT 1 FROM tasks WHERE lower(assignee)=? LIMIT 1",
+                                       (want["assignee"],)).fetchone()
+                    if known is None:
+                        # Prose alias ("Hermes"), not a profile name this board assigns.
+                        return "unverified", "assignee_not_a_board_profile"
+                    return "failed", f"card assignee {assignee}, expected {want['assignee']}"
+            return "reproduced", ""
+        except sqlite3.DatabaseError:
+            unreadable = True
+        finally:
+            db.close()
+    return ("unverified", "kanban_board_unavailable") if unreadable else ("failed", "card absent")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -41,6 +204,9 @@ def http_check(ref, timeout):
             status = response.status
     except urllib.error.HTTPError as exc:
         status = exc.code
+    if status in {401, 403, 429} and status != int(ref["status"]):
+        # Auth walls and rate limits describe this client, not the claimed resource.
+        return "unverified", "unverifiable_from_client"
     return result(status == int(ref["status"]), f"HTTP status {status}, expected {int(ref['status'])}")
 
 
@@ -157,10 +323,13 @@ def cron_check(ref, timeout):
 
 CHECKERS = {"file": file_check, "http": http_check, "socket": socket_check,
             "process": process_check, "config": config_check, "sqlite": sqlite_check,
-            "kanban": sqlite_check, "command_exit": command_exit_check, "cron": cron_check}
+            "kanban": sqlite_check, "command_exit": command_exit_check, "cron": cron_check,
+            "card": card_check, "file_hash": file_hash_check}
 
 
 def check(kind, ref, timeout=10):
+    if kind in BY_DESIGN:
+        return "unverified", "unverifiable_by_design"
     checker = CHECKERS.get(kind)
     if checker is None:
         return "unverified", "unknown_kind"
