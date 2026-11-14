@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 from contextlib import closing
 from datetime import datetime, timezone
@@ -219,7 +220,7 @@ def _install_integrity_check_lease(conn: sqlite3.Connection) -> None:
     conn.set_progress_handler(_on_progress, _INTEGRITY_CHECK_PROGRESS_OPS)
 
 
-def check_state_db_integrity(home: Optional[Path] = None) -> str:
+def check_state_db_integrity(home: Optional[Path] = None, *, hold_startup_lease: bool = True) -> str:
     """``"ok"``, ``"absent"``, or the first ``quick_check`` complaint.  Never raises.
 
     Only after an unclean death — SIGKILL mid-WAL-checkpoint can leave half-written
@@ -227,33 +228,26 @@ def check_state_db_integrity(home: Optional[Path] = None) -> str:
     500MB store): cheap once per unclean boot, too costly every boot.  Opened
     normally: a WAL store needs its -shm sidecar for read-only, and the PRAGMA writes nothing.
 
-    Holds a phase-owned startup-watchdog lease for the check duration
-    (renewed from a SQLite progress handler, #115542) so a long healthy check
-    on a huge store is not mistaken for a parked deadlock.
+    ``hold_startup_lease`` (synchronous callers on the startup path) holds a phase-owned
+    startup-watchdog lease for the check duration (renewed from a SQLite progress
+    handler, #115542) so a long healthy check is not mistaken for a parked deadlock.
+    The deferred background check passes ``False``: it is off the startup path, so a
+    lease from its thread would only counterfeit progress for a genuinely stuck startup.
     """
     path = _home_path(home, "state.db")
     if not path.exists():
         return "absent"
     try:
         with closing(sqlite3.connect(str(path))) as conn:
-            _install_integrity_check_lease(conn)
+            if hold_startup_lease:
+                _install_integrity_check_lease(conn)
             row = conn.execute("PRAGMA quick_check(1)").fetchone()
     except Exception as exc:
         return f"check-failed: {exc}"
     return "check-failed: no result" if not row or row[0] is None else str(row[0])
 
 
-def _report_unclean_exit(evidence: Dict[str, Any], home: Optional[Path]) -> None:
-    """Integrity-check the store, persist the exit-diag record, log at WARNING."""
-    # The death may have torn the store; this is the only moment we know to look.
-    verdict = evidence["state_db_integrity"] = check_state_db_integrity(home=home)
-    if verdict not in ("ok", "absent"):
-        logger.error(
-            "state.db FAILED integrity check after an unclean gateway exit: %s — sessions may read as "
-            "missing until it is repaired. Run `hermes doctor`.",
-            verdict,
-        )
-    _append_exit_diag({"ts": _now_iso(), "tag": "gateway.previous_unclean_exit", "pid": os.getpid(), **evidence}, home)
+def _log_unclean_exit(evidence: Dict[str, Any]) -> None:
     logger.warning(
         "Previous gateway life (pid=%s, started_at=%s) exited UNCLEANLY (no exit path ran — SIGKILL / OOM / "
         "VM death, or a process kill issued by the agent or one of its descendants, e.g. a pkill/taskkill of "
@@ -263,14 +257,112 @@ def _report_unclean_exit(evidence: Dict[str, Any], home: Optional[Path]) -> None
     )
 
 
-def record_startup(home: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+def _record_integrity_verdict(evidence: Dict[str, Any], home: Optional[Path], *, hold_startup_lease: bool) -> None:
+    """Integrity-check the store, ERROR-log a bad verdict, persist the exit-diag record."""
+    # The death may have torn the store; this is the only moment we know to look.
+    verdict = evidence["state_db_integrity"] = check_state_db_integrity(
+        home=home, hold_startup_lease=hold_startup_lease)
+    if verdict not in ("ok", "absent"):
+        logger.error(
+            "state.db FAILED integrity check after an unclean gateway exit: %s — sessions may read as "
+            "missing until it is repaired. Run `hermes doctor`.",
+            verdict,
+        )
+    _append_exit_diag({"ts": _now_iso(), "tag": "gateway.previous_unclean_exit", "pid": os.getpid(), **evidence}, home)
+
+
+def _report_unclean_exit(evidence: Dict[str, Any], home: Optional[Path]) -> None:
+    """Synchronous report: integrity-check under the startup lease, persist, log at WARNING."""
+    _record_integrity_verdict(evidence, home, hold_startup_lease=True)
+    _log_unclean_exit(evidence)
+
+
+# Deferred integrity check (t_7de1b4a4): a cold-cache quick_check of a ~1 GB store took
+# ~12 min after every OS reboot (the OS SIGTERM always reads as an unclean exit) and
+# held platform connect, cron and the kanban dispatcher hostage.  The gateway therefore
+# defers it: record_startup() persists the unclean-exit evidence to a pending file
+# BEFORE re-claiming the sentinel, and start_deferred_integrity_check() runs the check
+# on a daemon thread once startup is done.  The pending file is removed only after the
+# verdict is recorded, so a life that exits (cleanly or not) mid-check leaves it for the
+# next boot to finish — the check is postponed, never skipped.
+_DEFERRED_CHECK_THREAD_NAME = "state-db-integrity-check"
+_deferred_check_thread: Optional[threading.Thread] = None
+
+
+def get_pending_integrity_check_path(home: Optional[Path] = None) -> Path:
+    """Return ``<HERMES_HOME>/state/state_db_check.pending.json``."""
+    return _home_path(home, "state", "state_db_check.pending.json")
+
+
+def _write_pending_integrity_check(evidence: Dict[str, Any], home: Optional[Path]) -> None:
+    try:
+        from utils import atomic_json_write
+        from hermes_constants import mkdir_under_hermes_home
+
+        path = get_pending_integrity_check_path(home)
+        mkdir_under_hermes_home(path.parent)
+        atomic_json_write(path, {"detected_at": _now_iso(), "evidence": evidence}, indent=None)
+    except Exception:
+        logger.debug("Failed to persist pending state.db integrity check", exc_info=True)
+
+
+def _run_deferred_integrity_check(evidence: Dict[str, Any], pending: Path, home: Optional[Path]) -> None:
+    started = time.monotonic()
+    try:
+        _record_integrity_verdict(evidence, home, hold_startup_lease=False)
+        logger.info("Deferred state.db integrity check after unclean exit: %s (%.1fs)",
+                    evidence.get("state_db_integrity"), time.monotonic() - started)
+        pending.unlink(missing_ok=True)
+    except Exception:
+        logger.debug("Deferred state.db integrity check failed", exc_info=True)
+
+
+def start_deferred_integrity_check(home: Optional[Path] = None) -> Optional[threading.Thread]:
+    """Run a pending post-unclean-exit ``state.db`` check on a daemon thread.  Never raises.
+
+    ``None`` when nothing is pending (clean boot) or a check is already running in this
+    process.  Never blocks the caller and never touches the startup watchdog.
+    """
+    global _deferred_check_thread
+    try:
+        if _deferred_check_thread is not None and _deferred_check_thread.is_alive():
+            return None
+        pending = get_pending_integrity_check_path(home)
+        payload = _read_json(pending)
+        if payload is None:
+            return None
+        evidence = payload.get("evidence")
+        evidence = dict(evidence) if isinstance(evidence, dict) else {}
+        if payload.get("detected_at"):
+            evidence.setdefault("unclean_exit_detected_at", payload["detected_at"])
+        thread = threading.Thread(target=_run_deferred_integrity_check, args=(evidence, pending, home),
+                                  daemon=True, name=_DEFERRED_CHECK_THREAD_NAME)
+        thread.start()
+        _deferred_check_thread = thread
+        logger.info("state.db integrity check after unclean exit running in the background")
+        return thread
+    except Exception:
+        logger.debug("Failed to start deferred state.db integrity check", exc_info=True)
+        return None
+
+
+def record_startup(home: Optional[Path] = None, *, defer_integrity_check: bool = False) -> Optional[Dict[str, Any]]:
     """Boot entry point: report any unclean previous exit (evidence dict, also persisted
-    to ``gateway-exit-diag.log`` and logged at WARNING) then claim the sentinel.  Never raises."""
+    to ``gateway-exit-diag.log`` and logged at WARNING) then claim the sentinel.  Never raises.
+
+    ``defer_integrity_check``: log the unclean exit now but only persist the evidence as
+    a pending integrity check; :func:`start_deferred_integrity_check` runs the check and
+    writes the ``gateway.previous_unclean_exit`` record off the startup path.  The returned
+    evidence then carries no ``state_db_integrity`` verdict yet."""
     evidence: Optional[Dict[str, Any]] = None
     try:
         evidence = detect_unclean_exit(home)
         if evidence is not None:
-            _report_unclean_exit(evidence, home)
+            if defer_integrity_check:
+                _write_pending_integrity_check(evidence, home)
+                _log_unclean_exit(evidence)
+            else:
+                _report_unclean_exit(evidence, home)
     except Exception:
         logger.debug("Unclean-exit detection failed", exc_info=True)
     try:

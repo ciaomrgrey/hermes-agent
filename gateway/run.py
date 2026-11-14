@@ -5894,8 +5894,11 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     def _lifecycle_record_startup() -> None:
         # Report if the previous life died uncleanly (SIGKILL / OOM / VM death), then claim the
         # sentinel for this life. After the PID-file claim so a --replace loser can't clobber it.
+        # The state.db integrity check that follows an unclean exit is deferred until startup is
+        # done: every OS reboot reads as unclean, and a cold-cache quick_check held platform
+        # connect for minutes (t_7de1b4a4).
         from gateway.lifecycle_ledger import record_startup
-        record_startup()
+        record_startup(defer_integrity_check=True)
 
     def _start_keepalive() -> None:
         from hermes_cli.nous_auth_keepalive import start_nous_auth_keepalive
@@ -5952,6 +5955,13 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
             return _resolve_gateway_exit_verdict(runner, _signal_initiated_shutdown[0])
         finally:
             _shutdown_gateway_health_export(runner)
+
+    def _start_deferred_integrity_check() -> None:
+        # Startup is done: run the pending post-unclean-exit state.db check on a daemon thread.
+        from gateway.lifecycle_ledger import start_deferred_integrity_check
+        start_deferred_integrity_check()
+
+    _best_effort(_start_deferred_integrity_check, "Deferred state.db integrity check did not start: %s")
 
     cron_stop, cron_provider, cron_thread, housekeeping_thread = (
         _start_gateway_start_cron_and_housekeeping(runner))

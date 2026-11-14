@@ -177,3 +177,101 @@ def test_unclean_exit_check_keeps_the_verdict_contract_under_the_lease(
     assert verdict not in ("ok", "absent") and not verdict.startswith("check-failed")
     assert handle._lease_phase == "state_db_unclean_integrity_check"
     assert check_state_db_integrity(home=tmp_path / "nowhere") == "absent"
+
+
+# ── deferred check: off the startup critical path (t_7de1b4a4) ──────────────
+#
+# Every OS reboot SIGTERMs the gateway past its graceful window, so the next boot reads an
+# unclean exit; a cold-cache quick_check of the 1 GB generalist store then held platform
+# connect for ~12 min (14 Nov 2026).  The gateway defers the check to a background thread.
+
+
+def _pending_path(home: Path) -> Path:
+    from gateway.lifecycle_ledger import get_pending_integrity_check_path
+
+    return get_pending_integrity_check_path(home)
+
+
+def test_deferred_record_startup_does_not_run_the_check(tmp_path: Path, monkeypatch) -> None:
+    import gateway.lifecycle_ledger as ledger
+
+    called = []
+    monkeypatch.setattr(ledger, "check_state_db_integrity", lambda **kw: called.append(1) or "ok")
+    _make_state_db(tmp_path, corrupt=False)
+    _write_sentinel(tmp_path)
+
+    evidence = record_startup(home=tmp_path, defer_integrity_check=True)
+
+    assert evidence is not None and "state_db_integrity" not in evidence
+    assert not called, "integrity check ran on the startup path"
+    assert _pending_path(tmp_path).exists()
+    sentinel = json.loads(get_lifecycle_sentinel_path(tmp_path).read_text())
+    assert sentinel["phase"] == "running" and sentinel["prior_unclean_exit"] is True
+    assert _exit_diag_records(tmp_path) == []
+
+
+def test_deferred_check_records_corruption_verdict_and_errors(tmp_path: Path, caplog) -> None:
+    import logging
+    from gateway.lifecycle_ledger import start_deferred_integrity_check
+
+    _make_state_db(tmp_path, corrupt=True)
+    _write_sentinel(tmp_path)
+    record_startup(home=tmp_path, defer_integrity_check=True)
+
+    with caplog.at_level(logging.ERROR, logger="gateway.lifecycle_ledger"):
+        thread = start_deferred_integrity_check(home=tmp_path)
+        assert thread is not None
+        thread.join(timeout=30)
+
+    records = _exit_diag_records(tmp_path)
+    assert len(records) == 1
+    assert records[0]["tag"] == "gateway.previous_unclean_exit"
+    assert records[0]["prior_pid"] == _DEAD_PID
+    verdict = records[0]["state_db_integrity"]
+    assert verdict not in ("ok", "absent") and not verdict.startswith("check-failed")
+    assert any("FAILED integrity check" in r.getMessage() and r.levelno == logging.ERROR
+               for r in caplog.records)
+    assert not _pending_path(tmp_path).exists()
+
+
+def test_deferred_check_holds_no_startup_lease(tmp_path: Path, monkeypatch) -> None:
+    """Off the startup path the check must not counterfeit startup progress (#115542 semantics)."""
+    from gateway.lifecycle_ledger import start_deferred_integrity_check
+
+    handle = _armed_handle(monkeypatch)
+    _make_state_db(tmp_path, corrupt=False)
+    _write_sentinel(tmp_path)
+    record_startup(home=tmp_path, defer_integrity_check=True)
+    start_deferred_integrity_check(home=tmp_path).join(timeout=30)
+
+    assert _exit_diag_records(tmp_path)[0]["state_db_integrity"] == "ok"
+    assert handle._lease_count == 0 and handle._lease_phase is None
+
+
+def test_clean_boot_starts_no_deferred_check(tmp_path: Path) -> None:
+    from gateway.lifecycle_ledger import start_deferred_integrity_check
+
+    _make_state_db(tmp_path, corrupt=True)
+    _write_sentinel(tmp_path, phase="exited")
+    record_startup(home=tmp_path, defer_integrity_check=True)
+
+    assert start_deferred_integrity_check(home=tmp_path) is None
+    assert not _pending_path(tmp_path).exists()
+
+
+def test_interrupted_deferred_check_is_finished_by_the_next_boot(tmp_path: Path) -> None:
+    """A life that exits cleanly before the check finishes must not erase the obligation:
+    the pending record survives the clean exit and the next boot runs the check."""
+    from gateway.lifecycle_ledger import mark_exited, start_deferred_integrity_check
+
+    _make_state_db(tmp_path, corrupt=True)
+    _write_sentinel(tmp_path)
+    record_startup(home=tmp_path, defer_integrity_check=True)
+    mark_exited(0, home=tmp_path)  # check never started in that life
+
+    assert record_startup(home=tmp_path, defer_integrity_check=True) is None  # clean boot
+    start_deferred_integrity_check(home=tmp_path).join(timeout=30)
+
+    records = _exit_diag_records(tmp_path)
+    assert len(records) == 1 and records[0]["state_db_integrity"] != "ok"
+    assert records[0]["prior_pid"] == _DEAD_PID

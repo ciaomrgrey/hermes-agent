@@ -592,3 +592,85 @@ async def test_token_lock_plus_retryable_peer_stays_alive(monkeypatch, tmp_path)
         assert state["platforms"]["discord"]["state"] == "retrying"
     finally:
         await runner.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_gateway_connects_platforms_before_slow_unclean_exit_db_check(monkeypatch, tmp_path):
+    """t_7de1b4a4: after an OS reboot (always an unclean exit) a cold-cache ``quick_check`` of
+    a 1 GB state.db held platform connect for ~12 minutes. Startup must reach ``runner.start()``
+    (platform connect) and cron while the check is still running; the verdict still lands in
+    gateway-exit-diag.log as ``gateway.previous_unclean_exit`` once the check finishes."""
+    import json
+    import threading
+
+    import gateway.lifecycle_ledger as ledger
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    sentinel = ledger.get_lifecycle_sentinel_path(tmp_path)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.write_text(json.dumps({"phase": "running", "pid": 2 ** 22 + 12345, "start_time": 1000.0,
+                                    "started_at": "2026-11-14T19:31:00+00:00"}), encoding="utf-8")
+    (tmp_path / "state.db").write_bytes(b"")
+
+    check_entered = threading.Event()
+    release_check = threading.Event()
+    check_finished = threading.Event()
+
+    def _slow_check(home=None, **kwargs):
+        # Stands in for a minutes-long cold-cache quick_check; a synchronous caller sits out the wait.
+        check_entered.set()
+        release_check.wait(5)
+        check_finished.set()
+        return "ok"
+
+    monkeypatch.setattr(ledger, "check_state_db_integrity", _slow_check)
+    order = []
+
+    class _RunningRunner:
+        def __init__(self, config):
+            self.config = config
+            self.should_exit_cleanly = False
+            self.exit_reason = None
+            self.exit_code = None
+            self.adapters = {}
+            self._running = False
+
+        async def start(self):
+            # Platform connect: the integrity check must not have been run (or awaited) yet.
+            order.append(("platform_connect", check_finished.is_set()))
+            self._running = True
+            return True
+
+        def _start_systemd_watchdog(self):
+            return False
+
+        async def wait_for_shutdown(self):
+            order.append(("running", check_entered.wait(10), check_finished.is_set()))
+            release_check.set()
+
+    def _fake_cron(runner):
+        order.append(("cron", check_finished.is_set()))
+        return None, None, None, None
+
+    async def _fake_tail(runner, *args):
+        return True
+
+    monkeypatch.setattr("gateway.status.get_running_pid", lambda: None)
+    monkeypatch.setattr("tools.skills_sync.sync_skills", lambda quiet=True: None)
+    monkeypatch.setattr("hermes_logging.setup_logging", lambda hermes_home, mode: tmp_path)
+    monkeypatch.setattr("hermes_logging._add_rotating_handler", lambda *args, **kwargs: None)
+    monkeypatch.setattr("gateway.run.GatewayRunner", _RunningRunner)
+    monkeypatch.setattr("gateway.run._start_gateway_start_cron_and_housekeeping", _fake_cron)
+    monkeypatch.setattr("gateway.run._start_gateway_shutdown_tail", _fake_tail)
+
+    from gateway.run import start_gateway
+
+    assert await start_gateway(config=GatewayConfig(), replace=False, verbosity=None) is True
+    assert order == [("platform_connect", False), ("cron", False), ("running", True, False)]
+
+    ledger._deferred_check_thread.join(timeout=30)
+    log = tmp_path / "logs" / "gateway-exit-diag.log"
+    records = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    assert [r["tag"] for r in records] == ["gateway.previous_unclean_exit"]
+    assert records[0]["state_db_integrity"] == "ok"
+    assert not ledger.get_pending_integrity_check_path(tmp_path).exists()
