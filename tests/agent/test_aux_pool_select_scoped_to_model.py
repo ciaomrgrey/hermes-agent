@@ -57,7 +57,7 @@ def test_entitlement_bench_on_one_model_does_not_block_aux_codex_for_another(ben
     assert raw is not None and raw.api_key == TOKEN and raw_model == OTHER
     assert aux._read_codex_access_token(OTHER) == TOKEN
 
-    # Model A: refused on every path (no singleton token exists in this throwaway home).
+    # Model A: refused on every path (the mirrored-singleton case is covered below).
     assert aux._select_pool_entry("openai-codex", BENCHED) == (True, None)
     assert aux._read_codex_access_token(BENCHED) is None
     assert aux.resolve_provider_client("openai-codex", model=BENCHED) == (None, None)
@@ -100,3 +100,56 @@ def test_anthropic_aux_selects_for_its_own_model(tmp_path, monkeypatch):
         "access_token": "sk-ant-api03-pooled", "model_cooldowns": {aux_model: time.time() + 600},
     }])
     assert aux._try_anthropic() == (None, None)
+
+
+def _write_home(root, *, pool_source="device_code", pool_token=TOKEN, singleton_token=TOKEN, bench=True):
+    from agent.credential_pool_model_cooldowns import MODEL_ENTITLEMENT_BENCH_SECONDS
+    store = {}
+    if pool_source is not None:
+        store["credential_pool"] = {"openai-codex": [{
+            "id": "d69b79", "label": "chatgpt-lars", "auth_type": "oauth", "priority": 0, "source": pool_source,
+            "access_token": pool_token, "refresh_token": "rt-shared", "expires_at_ms": 4_000_000_000_000,
+            "model_cooldowns": {BENCHED: time.time() + MODEL_ENTITLEMENT_BENCH_SECONDS} if bench else {},
+        }]}
+    if singleton_token is not None:
+        store["providers"] = {"openai-codex": {"tokens": {"access_token": singleton_token, "refresh_token": "rt-shared"}}}
+    (root / "auth.json").write_text(json.dumps(store))
+
+
+def test_mirrored_singleton_token_does_not_resurrect_the_benched_credential(benched_home):
+    """The auth.json singleton IS the benched pool credential: falling back to it must not bypass the bench."""
+    import agent.auxiliary_client as aux
+    from agent.credential_pool import load_pool
+
+    _write_home(benched_home)
+    assert load_pool("openai-codex").select(model=BENCHED) is None  # precondition: pool refuses model A
+
+    assert aux._read_codex_access_token(BENCHED) is None
+    assert aux.resolve_provider_client("openai-codex", model=BENCHED) == (None, None)
+    assert aux.resolve_provider_client("openai-codex", model=BENCHED, raw_codex=True) == (None, None)
+
+    # Model B still recovers with the singleton present.
+    assert aux._read_codex_access_token(OTHER) == TOKEN
+    client, model = aux.resolve_provider_client("openai-codex", model=OTHER)
+    assert client is not None and model == OTHER
+    raw, _ = aux.resolve_provider_client("openai-codex", model=OTHER, raw_codex=True)
+    assert raw is not None and raw.api_key == TOKEN
+
+
+def test_distinct_singleton_credential_still_serves_the_benched_model(benched_home):
+    """A different login in the singleton is a different credential: the bench on the pool row does not apply."""
+    import agent.auxiliary_client as aux
+
+    _write_home(benched_home, pool_source="manual", pool_token="tok-other-account", singleton_token=TOKEN)
+    assert aux._read_codex_access_token(BENCHED) == TOKEN
+    raw, _ = aux.resolve_provider_client("openai-codex", model=BENCHED, raw_codex=True)
+    assert raw is not None and raw.api_key == TOKEN
+
+
+def test_no_pool_singleton_fallback_is_kept(benched_home):
+    import agent.auxiliary_client as aux
+
+    _write_home(benched_home, pool_source=None)
+    assert aux._read_codex_access_token(BENCHED) == TOKEN
+    raw, _ = aux.resolve_provider_client("openai-codex", model=BENCHED, raw_codex=True)
+    assert raw is not None and raw.api_key == TOKEN

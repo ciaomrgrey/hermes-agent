@@ -1045,6 +1045,18 @@ def _select_pool_entry(provider: str, model: Optional[str] = None) -> Tuple[bool
         return True, None
 
 
+def _pool_token_blocked(provider: str, token: str, model: str) -> bool:
+    """Whether the pool holds *token* under a cooldown that blocks *model* (unknown tokens fail open)."""
+    pool = _load_pool_with_credentials(provider, " (token check)")
+    if pool is None:
+        return False
+    try:
+        return bool(pool.token_is_blocked(token, model=model))
+    except Exception as exc:
+        logger.debug("Auxiliary client: could not check pool cooldown for %s: %s", provider, exc)
+        return False
+
+
 def _peek_pool_entry(provider: str, pool: Any = None) -> Optional[Any]:
     """Best-effort current/next pool entry without mutating selection order.
 
@@ -2134,7 +2146,12 @@ def _read_codex_access_token(model: Optional[str] = None) -> Optional[str]:
                 return None
         except Exception:
             pass  # Non-JWT token or decode error — use as-is
-        return access_token.strip()
+        access_token = access_token.strip()
+        if pool_present and model and _pool_token_blocked("openai-codex", access_token, model):
+            # The singleton mirrors a pool row benched for *model*: falling back must not bypass the bench.
+            logger.debug("Codex singleton token is benched for %s in the pool; refusing fallback", model)
+            return None
+        return access_token
     except Exception as exc:
         logger.debug("Could not read Codex auth for auxiliary client: %s", exc)
         return None
