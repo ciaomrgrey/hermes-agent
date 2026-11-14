@@ -4,9 +4,13 @@ Only the outermost network seam is replaced: aiohttp's POST answers like Slack's
 chat.postMessage and records the request to ``<HERMES_HOME>/slack-requests.jsonl``.
 Everything above it (profile env load, gateway config, target resolution, relay
 authorization, the Slack plugin's standalone sender, receipts) is production code.
-argv: escalation.py path, mode (ok | refused | lost | reset).
+argv: escalation.py path, mode (ok | refused | lost | reset | malformed | no_ok |
+unknown_error | internal_error).
 ``lost``: Slack accepts the POST but the response read times out (the native sender
-returns an error). ``reset``: the connection drops after the request was written.
+returns an error). ``reset``: the connection drops after the request was written. ``malformed`` (``{}``),
+``no_ok`` (an error without ``ok: false``), ``unknown_error`` (``ok: false`` without an
+error code) and ``internal_error`` (Slack's own may-have-happened code) are responses that
+do not positively prove a refusal.
 """
 import importlib.util
 import json
@@ -25,6 +29,14 @@ def deny(*args, **kwargs):
 
 socket.socket.connect = deny
 import aiohttp  # noqa: E402
+
+
+UNPROVEN = {
+    'malformed': {},
+    'no_ok': {'error': 'channel_not_found'},
+    'unknown_error': {'ok': False},
+    'internal_error': {'ok': False, 'error': 'internal_error'},
+}
 
 
 class _Response:
@@ -51,6 +63,8 @@ def post(self, url, *args, headers=None, json=None, **kwargs):
         raise aiohttp.ServerDisconnectedError()
     if mode == 'refused':
         return _Response({'ok': False, 'error': 'channel_not_found'})
+    if mode in UNPROVEN:
+        return _Response(UNPROVEN[mode])
     return _Response({'ok': True, 'channel': (json or {}).get('channel'), 'ts': '1794700000.000100'})
 
 
