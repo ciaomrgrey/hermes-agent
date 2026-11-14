@@ -108,42 +108,86 @@ def _result(record, key):
     return out
 
 
-# Prefix the native Slack sender gives a parsed ``ok: false`` chat.postMessage answer: Slack
-# received the request and refused it, so no message exists. Transport/response failures use
-# a different envelope ("Slack send failed: ...") and stay unverified.
-SLACK_API_REFUSAL = "Slack API error: "
+# Slack chat.postMessage error codes that mean the request was rejected and no message
+# was created. Anything else (internal_error, fatal_error, request_timeout,
+# service_unavailable, unknown codes, malformed bodies) may have posted.
+SLACK_DEFINITE_REFUSALS = frozenset({
+    "channel_not_found", "not_in_channel", "is_archived", "msg_too_long", "no_text",
+    "invalid_auth", "not_authed", "token_revoked", "token_expired", "account_inactive",
+    "missing_scope", "not_allowed_token_type", "restricted_action", "ratelimited",
+    "rate_limited", "invalid_arguments", "invalid_blocks", "too_many_attachments"})
+
+
+def _slack_responses(native, observed):
+    """Record every parsed chat.postMessage body the native Slack sender sees.
+
+    Returns an undo callable, or None when the seam cannot be found (then no response is
+    observed and no refusal can be proven).
+    """
+    try:
+        from gateway.platform_registry import platform_registry
+        sender = platform_registry.get("slack").standalone_sender_fn
+        namespace = sender.__globals__
+        original = namespace["_slack_json_post"]
+    except Exception:
+        return None
+
+    async def recording(session, token, method, payload, req_kw):
+        data = await original(session, token, method, payload, req_kw)
+        if method == "chat.postMessage":
+            observed.append(data)
+        return data
+
+    namespace["_slack_json_post"] = recording
+    return lambda: namespace.__setitem__("_slack_json_post", original)
 
 
 def _post(channel, text):
     """Exactly ``hermes send -t slack:<channel>``: profile env, gateway config, send_message_tool.
 
-    Returns ``(result, dispatched)``. ``dispatched`` is True once platform I/O may have
-    started (the native platform dispatcher was entered), or when that cannot be observed.
+    Returns ``(result, dispatched, responses)``. ``dispatched`` is True once platform I/O may
+    have started (the native platform dispatcher was entered), or when that cannot be
+    observed. ``responses`` are the parsed chat.postMessage bodies Slack returned.
     """
     from hermes_cli.send_cmd import _load_hermes_env
     import tools.send_message_tool as native
     _load_hermes_env()
+    request = {"action": "send", "target": "slack:" + channel, "message": text}
     dispatcher = getattr(native, "_send_to_platform", None)
     if dispatcher is None:
         # Cannot observe dispatch: assume it happened (fail towards no re-send).
-        return json.loads(native.send_message_tool(
-            {"action": "send", "target": "slack:" + channel, "message": text})), True
-    entered = []
+        return json.loads(native.send_message_tool(request)), True, []
+    entered, responses = [], []
 
     async def observed(*args, **kwargs):
         entered.append(True)
-        return await dispatcher(*args, **kwargs)
+        undo = _slack_responses(native, responses)
+        try:
+            return await dispatcher(*args, **kwargs)
+        finally:
+            if undo is not None:
+                undo()
 
     native._send_to_platform = observed
     try:
-        raw = native.send_message_tool({"action": "send", "target": "slack:" + channel, "message": text})
+        raw = native.send_message_tool(request)
     finally:
         native._send_to_platform = dispatcher
-    return json.loads(raw), bool(entered)
+    return json.loads(raw), bool(entered), responses
 
 
-def classify(result, dispatched, channel):
-    """``sent`` | ``unavailable`` (positively not posted) | ``unverified`` (may have posted)."""
+def _definite_refusal(response):
+    return (isinstance(response, dict) and response.get("ok") is False
+            and response.get("error") in SLACK_DEFINITE_REFUSALS)
+
+
+def classify(result, dispatched, channel, responses=()):
+    """``sent`` | ``unavailable`` (positively not posted) | ``unverified`` (may have posted).
+
+    After dispatch, ``unavailable`` needs Slack's own parsed answer to every
+    chat.postMessage attempt to be an explicit ``ok: false`` with a definite-refusal code.
+    The native error text alone proves nothing: it is the same for ``{}`` and ``ok: false``.
+    """
     result = result if isinstance(result, dict) else {}
     if (result.get("success") is True and not result.get("skipped") and result.get("message_id")
             and str(result.get("chat_id") or channel) == channel):
@@ -154,7 +198,8 @@ def classify(result, dispatched, channel):
     if not dispatched:
         # Refused before any platform I/O: target, config, token, relay authorization.
         return "unavailable"
-    if str(error).startswith(SLACK_API_REFUSAL):
+    responses = list(responses or ())
+    if responses and all(_definite_refusal(r) for r in responses):
         return "unavailable"
     return "unverified"
 
@@ -183,8 +228,8 @@ def _send(event, deadline=None):
         _write_receipt(path, record)
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError()
-        result, dispatched = _post(channel, text)
-        status = classify(result, dispatched, channel)
+        result, dispatched, responses = _post(channel, text)
+        status = classify(result, dispatched, channel, responses)
         if status == "sent":
             record.update(status="sent", message_id=str(result["message_id"]), sent_at=time.time())
         else:

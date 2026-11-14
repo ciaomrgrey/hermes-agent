@@ -202,9 +202,14 @@ At-most-once: a receipt is reserved durably in the TARGET profile home
 POST and resolved to `sent` (with the Slack message ts), `unavailable` or
 `unverified`. `unavailable` requires positive proof nothing was posted: the native
 send refused before the platform dispatcher was entered (target, config, token,
-relay authorization), or Slack answered `ok: false` (`Slack API error: ...`). Any
-other failure after dispatch (lost response, dropped connection, timeout, unknown
-result) is `unverified`, because Slack may have accepted the POST. An identical escalation returns
+relay authorization), or Slack's own parsed answer to every chat.postMessage attempt
+(observed at the native sender's `_slack_json_post` seam) is an explicit `ok: false`
+carrying a definite-refusal code (`SLACK_DEFINITE_REFUSALS`, e.g. `channel_not_found`).
+The native `Slack API error: ...` text alone is not proof: it is emitted for a malformed
+`{}` body too. Any other failure after dispatch (lost response, dropped connection,
+timeout, malformed/missing `ok`, `ok: false` without a code or with a may-have-posted code
+such as `internal_error`, unknown result) is `unverified`, because Slack may have
+accepted the POST. An identical escalation returns
 the stored receipt and is never re-posted; a reservation left unresolved by a
 timeout/crash reads back `unverified`, not a retry. Within the block window a
 reason is deduplicated unless its prior attempt is provably undelivered

@@ -137,6 +137,19 @@ class GateToNativeSenderComposition(unittest.TestCase):
     def test_connection_dropped_after_request_is_unverified_and_never_resent(self):
         self.assert_single_attempt('reset', 'unverified')
 
+    def test_malformed_response_is_unverified_and_never_resent(self):
+        # Native sender reports {} as "Slack API error: unknown": not a proven refusal.
+        self.assert_single_attempt('malformed', 'unverified')
+
+    def test_error_without_explicit_ok_false_is_unverified(self):
+        self.assert_single_attempt('no_ok', 'unverified')
+
+    def test_ok_false_without_error_code_is_unverified(self):
+        self.assert_single_attempt('unknown_error', 'unverified')
+
+    def test_slack_internal_error_is_unverified(self):
+        self.assert_single_attempt('internal_error', 'unverified')
+
     def test_success_control_sends_once(self):
         self.assert_single_attempt('ok', 'sent')
 
@@ -152,18 +165,32 @@ class Classification(unittest.TestCase):
     C = 'C0BTH5ZQH61'
 
     def test_table(self):
+        refused = {'ok': False, 'error': 'channel_not_found'}
+        api = {'error': 'Slack API error: channel_not_found'}
         cases = [
-            ({'success': True, 'chat_id': self.C, 'message_id': '1.2'}, True, 'sent'),
-            ({'success': True, 'chat_id': 'C0OTHER', 'message_id': '1.2'}, True, 'unverified'),
-            ({'success': True, 'skipped': 'empty_text'}, True, 'unverified'),
-            ({'error': 'Slack API error: channel_not_found'}, True, 'unavailable'),
-            ({'error': 'Slack send failed: response lost'}, True, 'unverified'),
-            ({'error': 'Send failed: ServerDisconnectedError'}, True, 'unverified'),
-            ({'error': 'anything at all'}, True, 'unverified'),
-            ({'error': 'Platform slack not configured'}, False, 'unavailable'),
-            ({'error': 'x', 'partial_success': True}, True, 'unverified'),
-            ({}, True, 'unverified'),
-            (None, False, 'unverified'),
+            ({'success': True, 'chat_id': self.C, 'message_id': '1.2'}, True, (), 'sent'),
+            ({'success': True, 'chat_id': 'C0OTHER', 'message_id': '1.2'}, True, (), 'unverified'),
+            ({'success': True, 'skipped': 'empty_text'}, True, (), 'unverified'),
+            (api, True, [refused], 'unavailable'),
+            (api, True, [{'ok': False, 'error': 'invalid_auth'}, refused], 'unavailable'),
+            # The native error envelope alone is not proof of refusal.
+            (api, True, (), 'unverified'),
+            ({'error': 'Slack API error: unknown'}, True, [{}], 'unverified'),
+            (api, True, [{'error': 'channel_not_found'}], 'unverified'),
+            ({'error': 'Slack API error: unknown'}, True, [{'ok': False}], 'unverified'),
+            ({'error': 'Slack API error: internal_error'}, True,
+             [{'ok': False, 'error': 'internal_error'}], 'unverified'),
+            (api, True, [{'ok': 'false', 'error': 'channel_not_found'}], 'unverified'),
+            (api, True, [refused, {'ok': False, 'error': 'fatal_error'}], 'unverified'),
+            (api, True, ['not a dict'], 'unverified'),
+            ({'error': 'Slack send failed: response lost'}, True, (), 'unverified'),
+            ({'error': 'Send failed: ServerDisconnectedError'}, True, (), 'unverified'),
+            ({'error': 'anything at all'}, True, (), 'unverified'),
+            ({'error': 'Platform slack not configured'}, False, (), 'unavailable'),
+            ({'error': 'x', 'partial_success': True}, True, [refused], 'unverified'),
+            ({}, True, (), 'unverified'),
+            (None, False, (), 'unverified'),
         ]
-        for result, dispatched, want in cases:
-            self.assertEqual(escalation.classify(result, dispatched, self.C), want, (result, dispatched))
+        for result, dispatched, responses, want in cases:
+            self.assertEqual(escalation.classify(result, dispatched, self.C, responses), want,
+                             (result, dispatched, responses))
