@@ -118,9 +118,17 @@ SLACK_DEFINITE_REFUSALS = frozenset({
     "rate_limited", "invalid_arguments", "invalid_blocks", "too_many_attachments"})
 
 
-def _slack_responses(native, observed):
-    """Record every parsed chat.postMessage body the native Slack sender sees.
+# Census entry for a chat.postMessage attempt that was started but never returned a parsed
+# body (exception, timeout, cancellation, process exit). It is never a definite refusal.
+INCOMPLETE_ATTEMPT = {"incomplete_attempt": True}
 
+
+def _slack_responses(native, observed):
+    """Census of every chat.postMessage attempt the native Slack sender makes.
+
+    Each attempt is entered as INCOMPLETE_ATTEMPT *before* it is awaited and replaced by
+    the parsed body only if the call returns, so an exception (or token fallback after a
+    refusal followed by a lost response) can never drop an attempt from the evidence.
     Returns an undo callable, or None when the seam cannot be found (then no response is
     observed and no refusal can be proven).
     """
@@ -133,9 +141,12 @@ def _slack_responses(native, observed):
         return None
 
     async def recording(session, token, method, payload, req_kw):
+        if method != "chat.postMessage":
+            return await original(session, token, method, payload, req_kw)
+        index = len(observed)
+        observed.append(INCOMPLETE_ATTEMPT)
         data = await original(session, token, method, payload, req_kw)
-        if method == "chat.postMessage":
-            observed.append(data)
+        observed[index] = data
         return data
 
     namespace["_slack_json_post"] = recording
@@ -185,7 +196,8 @@ def classify(result, dispatched, channel, responses=()):
     """``sent`` | ``unavailable`` (positively not posted) | ``unverified`` (may have posted).
 
     After dispatch, ``unavailable`` needs Slack's own parsed answer to every
-    chat.postMessage attempt to be an explicit ``ok: false`` with a definite-refusal code.
+    chat.postMessage attempt to be an explicit ``ok: false`` with a definite-refusal code;
+    one INCOMPLETE_ATTEMPT (started, never answered) makes the whole send ``unverified``.
     The native error text alone proves nothing: it is the same for ``{}`` and ``ok: false``.
     """
     result = result if isinstance(result, dict) else {}

@@ -205,6 +205,9 @@ send refused before the platform dispatcher was entered (target, config, token,
 relay authorization), or Slack's own parsed answer to every chat.postMessage attempt
 (observed at the native sender's `_slack_json_post` seam) is an explicit `ok: false`
 carrying a definite-refusal code (`SLACK_DEFINITE_REFUSALS`, e.g. `channel_not_found`).
+Every attempt is entered in that census before it is awaited, so with multi-workspace
+token fallback an attempt that raises (e.g. token A refused, token B's response lost)
+stays in the census as incomplete and makes the whole send `unverified`.
 The native `Slack API error: ...` text alone is not proof: it is emitted for a malformed
 `{}` body too. Any other failure after dispatch (lost response, dropped connection,
 timeout, malformed/missing `ok`, `ok: false` without a code or with a may-have-posted code

@@ -11,6 +11,11 @@ returns an error). ``reset``: the connection drops after the request was written
 ``no_ok`` (an error without ``ok: false``), ``unknown_error`` (``ok: false`` without an
 error code) and ``internal_error`` (Slack's own may-have-happened code) are responses that
 do not positively prove a refusal.
+``multi_*`` modes run with two workspace tokens (the native sender falls back to the second
+token after a wrong-workspace refusal): ``multi_lost`` / ``multi_reset`` = token A refused
+``channel_not_found``, token B's POST then loses its response / drops the connection;
+``multi_refused`` = both refused; ``multi_ok`` = token A succeeds; ``multi_refused_ok`` =
+token A refused, token B succeeds.
 """
 import importlib.util
 import json
@@ -39,12 +44,17 @@ UNPROVEN = {
 }
 
 
+REFUSED = {'ok': False, 'error': 'channel_not_found'}
+attempts = []  # POSTs made by this child process (one escalation send)
+
+
 class _Response:
-    def __init__(self, payload):
+    def __init__(self, payload, lost=False):
         self._payload = payload
+        self._lost = lost
 
     async def json(self, *args, **kwargs):
-        if mode == 'lost':
+        if mode == 'lost' or self._lost:
             raise TimeoutError('response lost after Slack accepted the POST')
         return self._payload
 
@@ -59,8 +69,18 @@ def post(self, url, *args, headers=None, json=None, **kwargs):
     record = {'url': str(url), 'bearer': (headers or {}).get('Authorization', ''), 'json': json, 'pid': os.getpid()}
     with (home / 'slack-requests.jsonl').open('a') as handle:
         handle.write(__import__('json').dumps(record) + '\n')
+    attempts.append(record)
     if mode == 'reset':
         raise aiohttp.ServerDisconnectedError()
+    if mode.startswith('multi_'):
+        first = len(attempts) == 1
+        if mode == 'multi_ok' or (mode == 'multi_refused_ok' and not first):
+            return _Response({'ok': True, 'channel': (json or {}).get('channel'), 'ts': '1794700000.000200'})
+        if first or mode == 'multi_refused':
+            return _Response(REFUSED)
+        if mode == 'multi_reset':
+            raise aiohttp.ServerDisconnectedError()
+        return _Response({'ok': True, 'ts': '1794700000.000300'}, lost=True)  # multi_lost
     if mode == 'refused':
         return _Response({'ok': False, 'error': 'channel_not_found'})
     if mode in UNPROVEN:

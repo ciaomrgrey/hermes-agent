@@ -19,6 +19,14 @@ def estate(root):
     return root
 
 
+def two_token_estate(root):
+    """Same estate, but the sender profile .env carries two workspace tokens."""
+    root = estate(root)
+    (Path(root) / 'profiles/generalist/.env').write_text(
+        'SLACK_BOT_TOKEN=xoxb-offline-a,xoxb-offline-b\nSLACK_HOME_CHANNEL=C0BTEFMAAJX\n')
+    return root
+
+
 def child_env(root):
     """What served_profile_child_env yields for the sender, pinned to the disposable estate."""
     repo = str(Path(__file__).resolve().parents[3])

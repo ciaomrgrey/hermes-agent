@@ -101,6 +101,8 @@ class GateToNativeSenderComposition(unittest.TestCase):
         self.profiles = {n: self.root / 'profiles' / n for n in ('generalist', 'gurney', 'cody')}
 
     def two_turns(self, mode):
+        if mode.startswith('multi_'):
+            slack_fixture.two_token_estate(self.td.name)
         import subprocess as sp
         real = sp.run
         receipts = []
@@ -124,9 +126,9 @@ class GateToNativeSenderComposition(unittest.TestCase):
         persisted = [r['status'] for r in slack_fixture.receipts(self.root, 'gurney')]
         return receipts, actions, persisted, len(slack_fixture.requests(self.root))
 
-    def assert_single_attempt(self, mode, status):
+    def assert_single_attempt(self, mode, status, posts_first_turn=1):
         receipts, actions, persisted, posts = self.two_turns(mode)
-        self.assertEqual(posts, 1, mode)
+        self.assertEqual(posts, posts_first_turn, mode)
         self.assertEqual([r['status'] for r in receipts], [status])
         self.assertEqual(persisted, [status])
         self.assertEqual(actions, ['escalation_pending', 'fail_open', 'escalation_' + status, 'fail_open'])
@@ -160,6 +162,34 @@ class GateToNativeSenderComposition(unittest.TestCase):
         self.assertEqual(persisted, ['unavailable', 'unavailable'])
         self.assertEqual(actions, ['escalation_pending', 'fail_open', 'escalation_unavailable'] * 2)
 
+    # Native multi-workspace token fallback: every attempted POST must be accounted for.
+    def test_two_tokens_refusal_then_lost_response_is_unverified_and_never_resent(self):
+        receipts, actions, persisted, posts = self.two_turns('multi_lost')
+        bearers = [r['bearer'] for r in slack_fixture.requests(self.root)]
+        self.assertEqual(bearers, ['Bearer xoxb-offline-a', 'Bearer xoxb-offline-b'])
+        self.assert_single_attempt_result(receipts, actions, persisted, posts, 2, 'unverified')
+
+    def test_two_tokens_refusal_then_reset_is_unverified_and_never_resent(self):
+        self.assert_single_attempt('multi_reset', 'unverified', posts_first_turn=2)
+
+    def test_two_tokens_all_refused_control_rearms(self):
+        receipts, actions, persisted, posts = self.two_turns('multi_refused')
+        self.assertEqual(posts, 4)
+        self.assertEqual(persisted, ['unavailable', 'unavailable'])
+        self.assertEqual(actions, ['escalation_pending', 'fail_open', 'escalation_unavailable'] * 2)
+
+    def test_two_tokens_success_control_sends_once(self):
+        self.assert_single_attempt('multi_ok', 'sent', posts_first_turn=1)
+
+    def test_two_tokens_refused_then_success_sends_once(self):
+        self.assert_single_attempt('multi_refused_ok', 'sent', posts_first_turn=2)
+
+    def assert_single_attempt_result(self, receipts, actions, persisted, posts, n, status):
+        self.assertEqual(posts, n)
+        self.assertEqual([r['status'] for r in receipts], [status])
+        self.assertEqual(persisted, [status])
+        self.assertEqual(actions, ['escalation_pending', 'fail_open', 'escalation_' + status, 'fail_open'])
+
 
 class Classification(unittest.TestCase):
     C = 'C0BTH5ZQH61'
@@ -183,6 +213,9 @@ class Classification(unittest.TestCase):
             (api, True, [{'ok': 'false', 'error': 'channel_not_found'}], 'unverified'),
             (api, True, [refused, {'ok': False, 'error': 'fatal_error'}], 'unverified'),
             (api, True, ['not a dict'], 'unverified'),
+            # An attempted POST that never completed is uncertainty, even after a refusal.
+            (api, True, [refused, escalation.INCOMPLETE_ATTEMPT], 'unverified'),
+            (api, True, [escalation.INCOMPLETE_ATTEMPT], 'unverified'),
             ({'error': 'Slack send failed: response lost'}, True, (), 'unverified'),
             ({'error': 'Send failed: ServerDisconnectedError'}, True, (), 'unverified'),
             ({'error': 'anything at all'}, True, (), 'unverified'),
