@@ -96,8 +96,9 @@ def _write_sentinel(payload: Dict[str, Any], home: Optional[Path]) -> None:
         logger.debug("Failed to write lifecycle sentinel", exc_info=True)
 
 
-def _append_exit_diag(record: Dict[str, Any], home: Optional[Path]) -> None:
-    """Append a JSON line to gateway-exit-diag.log (same format as the CLI's ``_exit_diag``)."""
+def _append_exit_diag(record: Dict[str, Any], home: Optional[Path]) -> bool:
+    """Append a JSON line to gateway-exit-diag.log (same format as the CLI's ``_exit_diag``).
+    ``True`` once the line is written; ``False`` (never raises) when the append failed."""
     try:
         path = _home_path(home, "logs", "gateway-exit-diag.log")
         from hermes_constants import mkdir_under_hermes_home
@@ -107,6 +108,8 @@ def _append_exit_diag(record: Dict[str, Any], home: Optional[Path]) -> None:
             fh.write(json.dumps(record, default=str) + "\n")
     except OSError:
         logger.debug("Failed to append unclean-exit record", exc_info=True)
+        return False
+    return True
 
 
 def _pid_is_sentinel_owner(pid: Any, start_time: Any, create_time: Any) -> bool:
@@ -257,8 +260,9 @@ def _log_unclean_exit(evidence: Dict[str, Any]) -> None:
     )
 
 
-def _record_integrity_verdict(evidence: Dict[str, Any], home: Optional[Path], *, hold_startup_lease: bool) -> None:
-    """Integrity-check the store, ERROR-log a bad verdict, persist the exit-diag record."""
+def _record_integrity_verdict(evidence: Dict[str, Any], home: Optional[Path], *, hold_startup_lease: bool) -> bool:
+    """Integrity-check the store, ERROR-log a bad verdict, persist the exit-diag record.
+    Returns whether the exit-diag record was actually written."""
     # The death may have torn the store; this is the only moment we know to look.
     verdict = evidence["state_db_integrity"] = check_state_db_integrity(
         home=home, hold_startup_lease=hold_startup_lease)
@@ -268,7 +272,8 @@ def _record_integrity_verdict(evidence: Dict[str, Any], home: Optional[Path], *,
             "missing until it is repaired. Run `hermes doctor`.",
             verdict,
         )
-    _append_exit_diag({"ts": _now_iso(), "tag": "gateway.previous_unclean_exit", "pid": os.getpid(), **evidence}, home)
+    return _append_exit_diag(
+        {"ts": _now_iso(), "tag": "gateway.previous_unclean_exit", "pid": os.getpid(), **evidence}, home)
 
 
 def _report_unclean_exit(evidence: Dict[str, Any], home: Optional[Path]) -> None:
@@ -284,9 +289,14 @@ def _report_unclean_exit(evidence: Dict[str, Any], home: Optional[Path]) -> None
 # BEFORE re-claiming the sentinel, and start_deferred_integrity_check() runs the check
 # on a daemon thread once startup is done.  The pending file is removed only after the
 # verdict is recorded, so a life that exits (cleanly or not) mid-check leaves it for the
-# next boot to finish — the check is postponed, never skipped.
+# next boot to finish — the check is postponed, never skipped.  The pending record is
+# also kept in process memory (keyed by its path), so a failed pending-file write still
+# leaves this life's check to run; a failed exit-diag append keeps (and re-persists) the
+# pending record so a later attempt retries it.
 _DEFERRED_CHECK_THREAD_NAME = "state-db-integrity-check"
 _deferred_check_thread: Optional[threading.Thread] = None
+_pending_in_process: Dict[str, Dict[str, Any]] = {}
+_pending_lock = threading.Lock()
 
 
 def get_pending_integrity_check_path(home: Optional[Path] = None) -> Path:
@@ -294,27 +304,60 @@ def get_pending_integrity_check_path(home: Optional[Path] = None) -> Path:
     return _home_path(home, "state", "state_db_check.pending.json")
 
 
-def _write_pending_integrity_check(evidence: Dict[str, Any], home: Optional[Path]) -> None:
+def _write_pending_payload(payload: Dict[str, Any], path: Path) -> bool:
+    """Persist the pending-check record.  ``True`` on success; never raises."""
     try:
         from utils import atomic_json_write
         from hermes_constants import mkdir_under_hermes_home
 
-        path = get_pending_integrity_check_path(home)
         mkdir_under_hermes_home(path.parent)
-        atomic_json_write(path, {"detected_at": _now_iso(), "evidence": evidence}, indent=None)
+        atomic_json_write(path, payload, indent=None)
+        return True
     except Exception:
         logger.debug("Failed to persist pending state.db integrity check", exc_info=True)
+        return False
 
 
-def _run_deferred_integrity_check(evidence: Dict[str, Any], pending: Path, home: Optional[Path]) -> None:
+def _write_pending_integrity_check(evidence: Dict[str, Any], home: Optional[Path]) -> None:
+    """Register the pending check in process memory, then persist it for later boots."""
+    path = get_pending_integrity_check_path(home)
+    payload = {"detected_at": _now_iso(), "evidence": dict(evidence)}
+    with _pending_lock:
+        _pending_in_process[str(path)] = payload
+    if not _write_pending_payload(payload, path):
+        logger.warning(
+            "Could not persist the pending state.db integrity check to %s; it will still run in this "
+            "process, but if this life ends before it finishes the check will not be retried.", path)
+
+
+def _run_deferred_integrity_check(payload: Dict[str, Any], pending: Path, home: Optional[Path]) -> None:
+    evidence = dict(payload.get("evidence") or {})
+    if payload.get("detected_at"):
+        evidence.setdefault("unclean_exit_detected_at", payload["detected_at"])
     started = time.monotonic()
+    recorded = False
     try:
-        _record_integrity_verdict(evidence, home, hold_startup_lease=False)
+        recorded = _record_integrity_verdict(evidence, home, hold_startup_lease=False)
         logger.info("Deferred state.db integrity check after unclean exit: %s (%.1fs)",
                     evidence.get("state_db_integrity"), time.monotonic() - started)
-        pending.unlink(missing_ok=True)
     except Exception:
-        logger.debug("Deferred state.db integrity check failed", exc_info=True)
+        logger.warning("Deferred state.db integrity check failed; it stays pending", exc_info=True)
+    if recorded:
+        with _pending_lock:
+            _pending_in_process.pop(str(pending), None)
+        try:
+            pending.unlink(missing_ok=True)
+        except OSError:
+            logger.debug("Failed to remove pending state.db integrity check", exc_info=True)
+        return
+    # No verdict record: keep the obligation retryable in memory and on disk.
+    with _pending_lock:
+        _pending_in_process[str(pending)] = payload
+    persisted = pending.exists() or _write_pending_payload(payload, pending)
+    logger.warning(
+        "state.db integrity verdict after an unclean exit (%s) could not be written to "
+        "gateway-exit-diag.log; the check stays pending%s.", evidence.get("state_db_integrity"),
+        f" in {pending}" if persisted else " in this process only")
 
 
 def start_deferred_integrity_check(home: Optional[Path] = None) -> Optional[threading.Thread]:
@@ -330,12 +373,14 @@ def start_deferred_integrity_check(home: Optional[Path] = None) -> Optional[thre
         pending = get_pending_integrity_check_path(home)
         payload = _read_json(pending)
         if payload is None:
+            with _pending_lock:
+                payload = _pending_in_process.get(str(pending))
+        if payload is None:
             return None
         evidence = payload.get("evidence")
-        evidence = dict(evidence) if isinstance(evidence, dict) else {}
-        if payload.get("detected_at"):
-            evidence.setdefault("unclean_exit_detected_at", payload["detected_at"])
-        thread = threading.Thread(target=_run_deferred_integrity_check, args=(evidence, pending, home),
+        payload = {"detected_at": payload.get("detected_at"),
+                   "evidence": dict(evidence) if isinstance(evidence, dict) else {}}
+        thread = threading.Thread(target=_run_deferred_integrity_check, args=(payload, pending, home),
                                   daemon=True, name=_DEFERRED_CHECK_THREAD_NAME)
         thread.start()
         _deferred_check_thread = thread

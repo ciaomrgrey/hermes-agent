@@ -275,3 +275,109 @@ def test_interrupted_deferred_check_is_finished_by_the_next_boot(tmp_path: Path)
     records = _exit_diag_records(tmp_path)
     assert len(records) == 1 and records[0]["state_db_integrity"] != "ok"
     assert records[0]["prior_pid"] == _DEAD_PID
+
+
+# ── deferred check: persistence failures never skip or lose the check (t_7de1b4a4 r2) ─
+
+
+def test_pending_write_failure_still_runs_the_check_without_blocking(
+        tmp_path: Path, monkeypatch, caplog) -> None:
+    """A failed pending-file write must not skip the check: the in-process record still
+    drives it on the background thread, and the persistence failure is logged visibly."""
+    import logging
+    import threading
+    import utils
+    import gateway.lifecycle_ledger as ledger
+
+    real_write = utils.atomic_json_write
+
+    def failing_pending(path, *args, **kwargs):
+        if Path(path).name == "state_db_check.pending.json":
+            raise OSError("injected pending write failure")
+        return real_write(path, *args, **kwargs)
+
+    release = threading.Event()
+    calls = []
+
+    def slow_check(**kw):
+        calls.append(kw)
+        release.wait(30)
+        return "ok"
+
+    monkeypatch.setattr(utils, "atomic_json_write", failing_pending)
+    monkeypatch.setattr(ledger, "check_state_db_integrity", slow_check)
+    _make_state_db(tmp_path, corrupt=False)
+    _write_sentinel(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger="gateway.lifecycle_ledger"):
+        assert record_startup(home=tmp_path, defer_integrity_check=True) is not None
+    assert not _pending_path(tmp_path).exists()
+    assert any("Could not persist the pending state.db integrity check" in r.getMessage()
+               and r.levelno == logging.WARNING for r in caplog.records)
+    assert json.loads(get_lifecycle_sentinel_path(tmp_path).read_text())["phase"] == "running"
+
+    thread = ledger.start_deferred_integrity_check(home=tmp_path)
+    assert thread is not None and thread.is_alive(), "caller waited for the check"
+    release.set()
+    thread.join(timeout=30)
+
+    assert len(calls) == 1 and calls[0]["hold_startup_lease"] is False
+    records = _exit_diag_records(tmp_path)
+    assert len(records) == 1 and records[0]["state_db_integrity"] == "ok"
+    assert records[0]["tag"] == "gateway.previous_unclean_exit"
+    assert ledger.start_deferred_integrity_check(home=tmp_path) is None  # obligation discharged
+
+
+def test_exit_diag_append_failure_keeps_the_check_pending_until_recorded(
+        tmp_path: Path, monkeypatch, caplog) -> None:
+    """No verdict record → the pending evidence survives; once the log destination is
+    repaired the retried check records the verdict and only then clears the pending file."""
+    import logging
+    import gateway.lifecycle_ledger as ledger
+
+    monkeypatch.setattr(ledger, "check_state_db_integrity", lambda **kw: "ok")
+    _make_state_db(tmp_path, corrupt=False)
+    _write_sentinel(tmp_path)
+    record_startup(home=tmp_path, defer_integrity_check=True)
+    diag = tmp_path / "logs" / "gateway-exit-diag.log"
+    diag.mkdir(parents=True)  # append to a directory: a real OSError in _append_exit_diag
+
+    with caplog.at_level(logging.WARNING, logger="gateway.lifecycle_ledger"):
+        ledger.start_deferred_integrity_check(home=tmp_path).join(timeout=30)
+    assert _pending_path(tmp_path).exists(), "pending evidence deleted without a verdict record"
+    assert any("could not be written to gateway-exit-diag.log" in r.getMessage()
+               for r in caplog.records)
+    retained = json.loads(_pending_path(tmp_path).read_text())
+    assert retained["evidence"]["prior_pid"] == _DEAD_PID
+    assert "state_db_integrity" not in retained["evidence"]
+
+    diag.rmdir()  # destination repaired
+    ledger.start_deferred_integrity_check(home=tmp_path).join(timeout=30)
+
+    records = _exit_diag_records(tmp_path)
+    assert len(records) == 1 and records[0]["state_db_integrity"] == "ok"
+    assert records[0]["prior_pid"] == _DEAD_PID
+    assert not _pending_path(tmp_path).exists()
+
+
+def test_exit_diag_failure_with_pending_file_lost_is_retried_in_process(
+        tmp_path: Path, monkeypatch) -> None:
+    """Both persistence paths failing still leaves an in-process retry, never a silent skip."""
+    import gateway.lifecycle_ledger as ledger
+
+    monkeypatch.setattr(ledger, "check_state_db_integrity", lambda **kw: "ok")
+    monkeypatch.setattr(ledger, "_write_pending_payload", lambda payload, path: False)
+    _make_state_db(tmp_path, corrupt=False)
+    _write_sentinel(tmp_path)
+    record_startup(home=tmp_path, defer_integrity_check=True)
+    diag = tmp_path / "logs" / "gateway-exit-diag.log"
+    diag.mkdir(parents=True)
+
+    ledger.start_deferred_integrity_check(home=tmp_path).join(timeout=30)
+    assert not _pending_path(tmp_path).exists()
+    diag.rmdir()
+    thread = ledger.start_deferred_integrity_check(home=tmp_path)
+    assert thread is not None
+    thread.join(timeout=30)
+    assert _exit_diag_records(tmp_path)[0]["state_db_integrity"] == "ok"
+    assert ledger.start_deferred_integrity_check(home=tmp_path) is None
