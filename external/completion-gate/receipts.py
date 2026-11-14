@@ -56,9 +56,24 @@ _QUOTE_OR_APOSTROPHE_VARIANTS = str.maketrans({
     "\u2018": "'", "\u2019": "'", "\u02bc": "'", "\u2032": "'", "\uff07": "'",
     "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u00ab": '"', "\u00bb": '"', "\uff02": '"'})
 _MAX_RECEIPT_SOURCE_AGE_SECONDS = 15 * 60
+# Self-reported inaction is FIRST-PERSON negation of an obligation verb, or one of
+# the fixed no-third-state phrases. Third-party / factual negation ("it can't be
+# dissolved", "the backup didn't run", "agents can't restart the Mac") and
+# first-person perception ("I can't see/measure/confirm") are status, not inaction.
+_INACTION_NEGATION = (
+    r"(?:did\s*n[o']t|could\s*n[o']t|can\s*not|cannot|can't|will\s+not|won't|"
+    r"(?:am|'m|was)\s+(?:not\s+able|unable)\s+to|was\s*n[o']t\s+able\s+to)")
+_INACTION_VERB = (
+    r"(?:do|act|take|send|fix|finish|complete|proceed|run|start|restart|deploy|install|file|"
+    r"create|update|change|apply|deliver|merge|push|reply|respond|post|message|ask|escalate|"
+    r"reclaim|close|implement|build|make|handle|continue|resume|execute|carry|follow|submit|"
+    r"unblock|approve|release|publish|move|reach|contact|schedule|get\s+to|go\s+ahead|"
+    r"work\s+on|pick\s+up|reassign|dispatch|notify|tell|act\s+on)")
 _INACTION = re.compile(
-    r"\b(?:did not|could not|cannot|can't|will not|won't|nothing I can do|no(?:thing)?\s*[-—:]?\s*not between messages|"
-    r"board says running but no worker is executing|needs a permitted approval path)\b",
+    r"(?:\bI(?:\s+(?:also|still|just|simply|really|actually|then))?\s+" + _INACTION_NEGATION +
+    r"\s+(?:yet\s+|now\s+|currently\s+|safely\s+|actually\s+|really\s+)?" + _INACTION_VERB + r"\b"
+    r"|\bnothing I can do\b|\bno(?:thing)?\s*[-—:]?\s*not between messages\b"
+    r"|\bboard says running but no worker is executing\b|\bneeds a permitted approval path\b)",
     re.I,
 )
 _ACTION_TOOLS = {
@@ -989,9 +1004,16 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
     return _assessment(identity)
 
 
+def inaction_match(text):
+    """First self-reported-inaction phrase in ``text`` (typographic apostrophes folded), or None."""
+    if not isinstance(text, str):
+        return None
+    return _INACTION.search(text.translate(_QUOTE_OR_APOSTROPHE_VARIANTS))
+
+
 def assess_inaction(final_response, messages, *, user_message=""):
     """Reject self-reported inaction unless this turn acted or opened needs_input."""
-    if not isinstance(final_response, str) or not _INACTION.search(final_response):
+    if not isinstance(final_response, str) or not inaction_match(final_response):
         return None
     response_cards = set(_CARD.findall(final_response))
     obligation_cards = response_cards or set(_CARD.findall(str(user_message or "")))

@@ -61,8 +61,12 @@ action, current card, configured destination/session and exact destination mirro
 Legacy in-memory/persisted `send_message` evidence remains accepted for migration
 coverage, but the unrestricted model tool stays unregistered.
 
-`inaction_enabled` treats explicit “did/could/will not act” finals as an uncarded
-commitment unless the current turn records a successful corrective lifecycle
+`inaction_enabled` treats FIRST-PERSON inaction about an obligation (“I did not /
+could not / can't / won't” + an action verb such as send, fix, finish, restart,
+proceed) and the fixed no-third-state phrases as an uncarded
+commitment. Third-party or factual negation (“it can't be dissolved”, “the backup
+didn't run”, “agents can't restart the Mac”) and first-person perception (“I can't
+see/measure”) are status, not inaction, and never fire unless the current turn records a successful corrective lifecycle
 action bound to the named obligation, or a `needs_input` escalation. Its repair is:
 “Take the action or escalate to
 Lars — no third state.” Both classes reuse the existing reentrancy, reason dedup,
@@ -121,7 +125,8 @@ Defaults under `plugins.entries.completion-gate.settings`:
 | Setting | Default |
 |---|---|
 | enabled | false |
-| max_blocks | 2 |
+| max_blocks | 2 (per block window) |
+| block_window_seconds | 14400 (4 h) |
 | check_timeout_seconds | 60 seconds for the entire check |
 | max_claims | 20 |
 | max_answer_chars | 32000 |
@@ -150,9 +155,11 @@ adapter; check_timeout_seconds is the only clock setting (contract-tested).
 
 A block is reserved atomically in append-only SQLite. Counters are scoped by
 profile and `HERMES_KANBAN_TASK`, falling back to session ID (then task ID), so
-restart cannot reset the task ceiling. Without Kanban, the ceiling deliberately
-covers the entire session. Same normalized claim/mismatch with exact reference
-cannot block twice. Only one block is honored per turn; its rework iteration is
+restart cannot reset the task ceiling. The ceiling, repeat-reason check and
+escalation dedup count only rows inside `block_window_seconds`: a long-lived
+session (a DM open for weeks) regains its budget instead of failing open forever
+after its first two blocks. Same normalized claim/mismatch with exact reference
+cannot block twice within the window. Only one block is honored per turn; its rework iteration is
 passed through, not independently certified. A later turn can reproduce the fix.
 Concurrent callbacks cannot exceed the ceiling. Recursive calls bypass extraction.
 
@@ -172,20 +179,26 @@ Rework bypasses have no claim records and are separately visible as
 
 ## Escalation and explicit advice markers
 
-Worker ceiling/repeated reason => generalist inbound; generalist => gurney inbound.
-Native `tools.bot_live_delivery` writes an at-most-once queued receipt to a live
-owner. The exact receipt is read back. `queued` means admitted, NOT processed.
-No live owner => `escalation_unavailable`, never a fabricated send. The plugin
-neither spawns an owner nor touches legacy pending-message files. Reasons are
-deduplicated durably; unavailable sends are not automatically retried. Owner
-must inspect these statuses and maintain live generalist/gurney inbound owners.
+Worker ceiling/repeated reason => #hermes-bridge (C0BTEFMAAJX, generalist);
+generalist => #gurney-bridge (C0BTH5ZQH61, gurney). Delivery is the native
+`hermes send -t slack:<channel>` path (`send_message_tool`) run as the generalist
+profile, whose gateway owns the estate Slack bot. (The earlier live-owner inbound
+lane returned `escalation_unavailable` for every escalation ever raised.)
 
-Native owner discovery, receipt reads and admission execute in a dedicated child
-under the SAME absolute callback deadline. The parent kills and reaps on expiry;
-on POSIX a child alarm also exits at that absolute deadline, including while
-blocked on native active-session/mailbox locks. No detached callback worker can
-admit a stale message after return. No credentials are inherited by this child.
-The native owner/delivery APIs and at-most-once receipt format are unchanged.
+At-most-once: a receipt is reserved durably in the TARGET profile home
+(`runtime/completion_gate_escalations/<sha256(channel, message)>.json`) before the
+POST and resolved to `sent` (with the Slack message ts), `unavailable` (a definite
+platform refusal: nothing posted) or `unverified`. An identical escalation returns
+the stored receipt and is never re-posted; a reservation left unresolved by a
+timeout/crash reads back `unverified`, not a retry. Within the block window a
+reason is deduplicated unless its prior attempt is provably undelivered
+(`escalation_unavailable`). Lars is never a target.
+
+Reservation and send execute in a dedicated child under the SAME absolute callback
+deadline. The parent kills and reaps on expiry; on POSIX a child alarm also exits at
+that absolute deadline, including while blocked on the receipt lock. No detached
+callback worker can post a stale message after return. The child runs with the
+generalist profile's own scoped credentials only (`served_profile_child_env`).
 
 Before escalation I/O, an append-only `escalation_pending` row reserves the reason
 and stable event_id without counting a completed evaluation or duplicating claim
@@ -239,8 +252,8 @@ The separate nightly recommendation cron is Hermes's deployment responsibility.
    profile, link the shared external package before opting in. Future profiles do
    not inherit root discovery. Do not replace `plugins.enabled` with a singleton.
 3. Verify effective auxiliary routing (`auxiliary.completion_gate`, or native
-   auto route), shared DB permissions and live owner availability for generalist
-   and gurney. No provider credentials are added by this plugin.
+   auto route), shared DB permissions, and that `hermes -p generalist send --list slack`
+   resolves both bridge channels. No provider credentials are added by this plugin.
 4. Restart/reopen affected CLI/gateway runtimes through the native lifecycle
    owner so the new code and plugin registrations load. Read back discovery and
    effective profile config. No restart is performed by this candidate.
@@ -249,7 +262,7 @@ The separate nightly recommendation cron is Hermes's deployment responsibility.
    and confirm rejected text was not displayed or persisted. Test a truthful
    absolute nonempty file claim on a fresh turn and confirm `reproduced` delivery.
    Exercise ceiling on one stable task with distinct missing paths over turns;
-   read escalation event AND native receipt AND recipient's actual inbound turn.
+   read escalation event AND the receipt file AND the posted bridge message.
    A localhost fake-provider test is not this live acceptance.
 6. Owner installs Gurney's separate nightly recommendation-only cron with metrics
    and advice-cycle monitoring. Nothing here creates cron or Telegram sends.
@@ -274,6 +287,7 @@ Run from the candidate/shared repository with a qualified Python environment:
     HERMES_PYTHON=/path/to/python scripts/run_tests.sh tests/plugins/test_completion_gate.py tests/plugins/test_completion_gate_chat_receipts.py tests/plugins/test_completion_gate_checks.py tests/plugins/test_completion_gate_integration.py tests/plugins/test_completion_gate_reliability.py tests/plugins/test_completion_gate_health.py tests/plugins/test_completion_gate_portability.py tests/plugins/test_completion_gate_receipt_send.py tests/agent/test_turn_end_hook.py tests/agent/test_completion_gate_loop.py tests/gateway/test_turn_source_identity.py tests/gateway/test_completion_gate_source_state_clones.py
 
 Tests use real temporary files, SQLite, local HTTP/socket servers, native plugin
-discovery, native router against a local provider, native live-owner queue receipt,
+discovery, native router against a local provider, the real `hermes send` stack to an
+intercepted Slack POST with a durable receipt,
 and the actual AIAgent loop/SessionDB with synthetic model responses. They do not
 send estate messages, invoke real model providers, or certify live deployment.

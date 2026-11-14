@@ -115,8 +115,9 @@ Gate and session databases are opened read-only; health cursors/markers/alarms
 live in a SEPARATE health.db. No answers, references, config values or credentials
 are written there or sent. Profile homes and approval references are hashed.
 
-Alarms go directly to Gurney through the same native Bot Chat live-owner queue
-used by gate escalation. Exact message receipts are read back. `queued` is NOT
+Alarms go directly to Gurney through the native Bot Chat live-owner queue, with
+the explicit Telegram fallback below (gate escalation itself now posts to the
+Slack bridges; see README). Exact message receipts are read back. `queued` is NOT
 processed/seen. No live owner or send failure is `unavailable`, still exit 1;
 subsequent checks retry the same durable incident rather than silently dropping
 it. Native delivery IDs deduplicate queued incidents. Recovery rearms new alarms.

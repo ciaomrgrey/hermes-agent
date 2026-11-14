@@ -42,24 +42,29 @@ def test_shared_discovery_and_hot_kill_switch(tmp_path, monkeypatch):
     assert summary["per_profile"]
 
 
-def test_native_inbound_receipt_readback_and_no_owner_is_honest(tmp_path, monkeypatch):
+def test_bridge_receipt_readback_and_refusal_is_honest(tmp_path, monkeypatch):
+    """Escalation posts to the target's bridge via send_message_tool and keeps a durable receipt."""
     esc = load_escalation()
     from hermes_cli import profiles
-    from tools import bot_live_delivery as live
+    import tools.send_message_tool as smt
     monkeypatch.setattr(profiles, "get_profile_dir", lambda profile: tmp_path / profile)
+    monkeypatch.setattr("hermes_cli.send_cmd._load_hermes_env", lambda: None)
     home = tmp_path / "generalist"
-    home.mkdir()
-    owner = dict(profile_home=str(home.resolve()), session_id="s", lease_id="lease", live_session_id="live")
-    monkeypatch.setattr(live, "find_canonical_live_owner", lambda _: owner)
+    calls = []
+    reply = {"success": True, "platform": "slack", "chat_id": "C0BTEFMAAJX", "message_id": "1.2"}
+    monkeypatch.setattr(smt, "send_message_tool", lambda args: calls.append(args) or json.dumps(reply))
     event = {"event_id": 1, "target": "generalist", "profile": "cody", "task_id": "task", "reason": "retry_ceiling", "block_count": 2}
     receipt = esc.send(event)
-    assert receipt["status"] == "queued"
-    actual = live.read_delivery_result(home, receipt["delivery_id"])
-    assert actual["message"] == esc.message(event)
-    assert actual["status"] == "queued"  # admission is NOT completed work
-    monkeypatch.setattr(live, "find_canonical_live_owner", lambda _: None)
+    assert receipt["status"] == "sent" and receipt["channel"] == "C0BTEFMAAJX"
+    assert calls == [{"action": "send", "target": "slack:C0BTEFMAAJX", "message": esc.message(event)}]
+    actual = esc.read_receipt(home, receipt["delivery_id"])
+    assert actual["message"] == esc.message(event) and actual["message_id"] == "1.2"
+    assert esc.send(event) == receipt and len(calls) == 1  # at most once
+    reply = {"error": "Slack API error: channel_not_found"}
     assert esc.send({**event, "event_id": 2})["status"] == "unavailable"
-    assert len(list((home / "runtime" / "bot_live_delivery").glob("*.json"))) == 1
+    reply = {"success": True, "platform": "slack", "chat_id": "C0BTEFMAAJX"}  # no message id
+    assert esc.send({**event, "event_id": 3})["status"] == "unverified"
+    assert len(list((home / esc.RECEIPT_DIR).glob("*.json"))) == 3
 
 
 def test_aux_extraction_uses_real_native_router_in_bounded_child(tmp_path, monkeypatch):

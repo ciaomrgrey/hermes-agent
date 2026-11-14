@@ -21,6 +21,13 @@ _deadline = ContextVar("completion_gate_deadline", default=None)
 
 
 _BUSY_POLL_SECONDS = 0.005
+# Retry budget is per bounded window, not per chain lifetime: a long-lived session
+# (a DM) must not exhaust max_blocks once and then fail open forever.
+DEFAULT_BLOCK_WINDOW_SECONDS = 4 * 3600
+# Escalation receipts that mean "no message can have left": only these re-arm the
+# per-reason dedup. Anything else (sent, unverified, failed, in flight) may have
+# delivered, so a repeat is suppressed to keep delivery at-most-once.
+UNDELIVERED_ESCALATION = {"escalation_unavailable"}
 
 
 def _is_busy(exc):
@@ -95,6 +102,41 @@ def outcome(action, results=(), block_count=0, escalation_reason=None, event_id=
             "claim_count": sum(verdicts.values()), "block_count": int(block_count),
             "turn_blocks": len(turn_blocks), "last_block_failed_kinds": _failed_kinds(last) if last else [],
             "escalation_reason": escalation_reason, "event_id": event_id, "cause": cause}
+
+
+def block_window(settings):
+    try:
+        value = float(settings.get("block_window_seconds", DEFAULT_BLOCK_WINDOW_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_BLOCK_WINDOW_SECONDS
+    return value if math.isfinite(value) and value > 0 else DEFAULT_BLOCK_WINDOW_SECONDS
+
+
+def in_window(rows, settings, now=None):
+    """Rows created inside the retry window ending ``now``."""
+    start = (time.time() if now is None else now) - block_window(settings)
+    return [r for r in rows if (r["created"] or 0) >= start]
+
+
+def live_escalation_reasons(history):
+    """Reasons of escalations that may have been delivered (dedup keys).
+
+    The status row follows its escalation_pending row in the same chain. A pending
+    row with no later status (timeout / crash mid-send) counts as possibly delivered.
+    """
+    reasons, ordered = set(), sorted(history, key=lambda r: r["id"])
+    for index, row in enumerate(ordered):
+        esc = json.loads(row["escalation"]) if row["escalation"] else None
+        if not esc:
+            continue
+        status = None
+        if row["action"] == "escalation_pending":
+            status = next((r["action"] for r in ordered[index + 1:]
+                           if r["turn_id"] == row["turn_id"] and r["action"].startswith("escalation_")
+                           and r["action"] != "escalation_pending"), None)
+        if status not in UNDELIVERED_ESCALATION:
+            reasons.add(esc.get("reason"))
+    return reasons
 
 
 def digest(value):
@@ -270,7 +312,8 @@ class Gate:
             logger.warning("Completion gate failed open %s", json.dumps(diagnostics, sort_keys=True))
             try:
                 with self.connect() as db:
-                    count = sum(r["action"] == "block" for r in self._history(db, profile, task_id))
+                    count = sum(r["action"] == "block"
+                                for r in in_window(self._history(db, profile, task_id), self.settings))
                     errored = [{"verdict": "unverified", "mismatch": "gate_error"}]
                     event_id = self._append(db, profile, task_id, turn_id, "gate_error", errored, count,
                                             diagnostics=diagnostics)
@@ -295,7 +338,7 @@ class Gate:
             history = self._history(db, profile, task)
             ensure_time()
             if already_blocked or any(r["turn_id"] == turn and r["action"] == "block" for r in history):
-                count = sum(r["action"] == "block" for r in history)
+                count = sum(r["action"] == "block" for r in in_window(history, self.settings))
                 event_id = self._append(db, profile, task, turn, "reentrant_pass", [], count)
                 self.last_outcome = outcome("reentrant_pass", (), count, event_id=event_id,
                                             history=history, turn=turn)
@@ -322,12 +365,15 @@ class Gate:
             db.execute("BEGIN IMMEDIATE")
             history = self._history(db, profile, task)
             ensure_time()
-            blocks = [r for r in history if r["action"] == "block"]
+            all_blocks = [r for r in history if r["action"] == "block"]
+            # Budget, repeat-reason and escalation dedup all use the bounded window.
+            recent = in_window(history, self.settings)
+            blocks = [r for r in recent if r["action"] == "block"]
             count = len(blocks)
             prior = {h for r in blocks for h in json.loads(r["reason_hashes"])}
             hashes = [f[0] for f in failures]
             action, escalation, reason = "deliver", None, None
-            if any(r["turn_id"] == turn for r in blocks):
+            if any(r["turn_id"] == turn for r in all_blocks):
                 action = "reentrant_pass"
             elif failures:
                 repeat = bool(prior.intersection(hashes))
@@ -345,7 +391,7 @@ class Gate:
                     # Captured before dedup: a repeat escalation is not re-sent but the
                     # evaluated fail_open still has this reason.
                     reason = escalation["reason"]
-                    if any(json.loads(r["escalation"]) and json.loads(r["escalation"]).get("reason") == escalation["reason"] for r in history):
+                    if escalation["reason"] in live_escalation_reasons(recent):
                         escalation = None
                 else:
                     action, count = "block", count + 1
