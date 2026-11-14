@@ -70,7 +70,8 @@ def _read_codex_access_token() -> Optional[str]:
     try:
         from agent.auxiliary_client import _read_codex_access_token as _reader
 
-        token = _reader()
+        # Scope the pool pick to the image model: a chat model's entitlement bench must not hide it.
+        token = _reader(API_MODEL)
         return token.strip() if isinstance(token, str) and token.strip() else None
     except Exception as exc:
         logger.debug("Could not resolve Codex access token: %s", exc)
