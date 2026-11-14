@@ -1,9 +1,18 @@
 """Stage the distribution in a temporary profile and use native discovery.
 
-Writes ONLY into a fresh temporary home (t_70b901a9): ``install`` refuses a target
-that resolves (following symlinks) into a live plugin tree or a plugin directory this
-process did not create, and ``load`` refuses a live Hermes home before touching its
-``config.yaml``. Live roots: ``tests/estate_live_roots.py``.
+Writes ONLY into a fresh temporary home (t_70b901a9). Every actual write destination
+is confined, not just the outer plugin directory:
+
+* ``install`` refuses a live Hermes home, a ``plugins`` or ``plugins/completion-gate``
+  path that is a symlink, a target that resolves into a live plugin tree, and an
+  existing plugin directory this process did not create. A plugin directory it did
+  create is removed (``rmtree`` unlinks, never follows, links) and restaged as a fresh
+  copy, so no destination file can ever be a link planted after the first install.
+* ``load`` refuses a live Hermes home, and a ``config.yaml`` that is a symlink, before
+  reading or writing it; the config is written to a new ``O_EXCL|O_NOFOLLOW`` file and
+  ``os.replace``d into place, so a hard link to an outside file is never written through.
+
+Live roots: ``tests/estate_live_roots.py``.
 """
 import json
 import os
@@ -24,21 +33,46 @@ def _refuse(why, path):
                        'Point HERMES_HOME (or the install home) at a temporary directory.')
 
 
-def install(home):
-    home = Path(home)
+def _refuse_live_home(home):
     if live_root_for(home) is not None:
         _refuse('it is a live Hermes home', home)
-    target = home / 'plugins/completion-gate'
-    if os.path.islink(target):
-        _refuse(f'it is a symlink to {os.path.realpath(target)}', target)
+
+
+def install(home):
+    home = Path(home)
+    _refuse_live_home(home)
+    plugins_dir = home / 'plugins'
+    target = plugins_dir / 'completion-gate'
+    for path in (plugins_dir, target):
+        if os.path.islink(path):
+            _refuse(f'it is a symlink to {os.path.realpath(path)}', path)
     resolved = Path(os.path.realpath(target))
     if inside_live_plugin_tree(resolved):
         _refuse('it resolves into a live plugin tree', resolved)
-    if resolved.exists() and resolved not in _INSTALLED:
-        _refuse('it is an existing plugin directory this test run did not create', resolved)
-    shutil.copytree(SOURCE, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__'))
+    if os.path.lexists(target):
+        if resolved not in _INSTALLED:
+            _refuse('it is an existing plugin directory this test run did not create', resolved)
+        # Restage from scratch: never copy over destination files (any could be a link).
+        shutil.rmtree(target)
+    shutil.copytree(SOURCE, target, symlinks=True, ignore=shutil.ignore_patterns('__pycache__'))
     _INSTALLED.add(resolved)
     return target
+
+
+def _write_config(config, text):
+    """Replace *config* with a new regular file; never writes through a link."""
+    if os.path.islink(config):
+        _refuse(f'config.yaml is a symlink to {os.path.realpath(config)}', config)
+    staging = config.with_name(f'.config.yaml.{os.getpid()}.tmp')
+    fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    try:
+        with os.fdopen(fd, 'w') as fh:
+            fh.write(text)
+        os.replace(staging, config)
+    except BaseException:
+        if os.path.lexists(staging):
+            os.unlink(staging)
+        raise
 
 
 def load():
@@ -49,16 +83,17 @@ def load():
     except ImportError:
         from yaml import safe_load
     home = get_hermes_home()
-    if live_root_for(home) is not None:
-        _refuse('HERMES_HOME is a live Hermes home', home)
-    target = install(home)
+    _refuse_live_home(home)
     config = home / 'config.yaml'
+    if os.path.islink(config):
+        _refuse(f'config.yaml is a symlink to {os.path.realpath(config)}', config)
+    target = install(home)
     cfg = safe_load(config.read_text()) if config.exists() else {}
     cfg = cfg or {}
     enabled = cfg.setdefault('plugins', {}).setdefault('enabled', [])
     if 'completion-gate' not in enabled:
         enabled.append('completion-gate')
-    config.write_text(json.dumps(cfg))
+    _write_config(config, json.dumps(cfg))
     manager = plugins.PluginManager()
     manager.discover_and_load()
     loaded = manager._plugins['completion-gate']

@@ -141,3 +141,102 @@ def test_session_sandbox_engages_for_a_live_estate_profile_and_guards_keep_the_e
     assert Path(seen['kanban']) == root.resolve()
     assert str(root.resolve()) in seen['state']
     assert _digest(sentinel) == before
+
+
+# --- Round 2 (Gurney, comment on 230198d645): every actual write destination is confined.
+
+def _stop_after_config_write(monkeypatch):
+    """Fail fast if load() ever gets past its config write (no plugin discovery runs)."""
+    from hermes_cli import plugins
+
+    def stop(*_a, **_k):
+        raise RuntimeError('STOP_AFTER_CONFIG_WRITE')
+    monkeypatch.setattr(plugins, 'PluginManager', stop)
+
+
+@pytest.mark.parametrize('external_is_live_root', [True, False])
+def test_load_refuses_a_config_yaml_symlink_out_of_the_temp_home(tmp_path, monkeypatch, external_is_live_root):
+    from tests import completion_gate_support as support
+    home = tmp_path / 'profile'
+    home.mkdir()
+    outside = tmp_path / ('sentinel-estate' if external_is_live_root else 'elsewhere')
+    outside.mkdir()
+    if external_is_live_root:
+        monkeypatch.setenv('HERMES_TEST_LIVE_ROOTS', str(outside))
+    sentinel = outside / 'config.yaml'
+    sentinel.write_text('model: sentinel\n')
+    (home / 'config.yaml').symlink_to(sentinel)
+    monkeypatch.setenv('HERMES_HOME', str(home))
+    _stop_after_config_write(monkeypatch)
+    before = sentinel.read_bytes()
+    with pytest.raises(RuntimeError, match='refusing'):
+        support.load()
+    assert sentinel.read_bytes() == before
+    assert os.path.islink(home / 'config.yaml')
+
+
+def test_load_writes_config_in_a_fresh_temp_home(tmp_path, monkeypatch):
+    from tests import completion_gate_support as support
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    (tmp_path / 'config.yaml').write_text('model: temp\n')
+    _stop_after_config_write(monkeypatch)
+    with pytest.raises(RuntimeError, match='STOP_AFTER_CONFIG_WRITE'):
+        support.load()
+    cfg = json.loads((tmp_path / 'config.yaml').read_text())
+    assert cfg == {'model': 'temp', 'plugins': {'enabled': ['completion-gate']}}
+    assert not os.path.islink(tmp_path / 'config.yaml')
+
+
+def test_repeat_install_never_follows_a_nested_symlink_out_of_the_target(tmp_path):
+    from tests.completion_gate_support import SOURCE, install
+    home = tmp_path / 'home'
+    target = install(home)
+    external = tmp_path / 'external-sentinel.py'
+    external.write_text('UNCHANGED\n')
+    (target / '__init__.py').unlink()
+    (target / '__init__.py').symlink_to(external)
+    try:
+        install(home)
+    except RuntimeError as exc:
+        assert 'refusing' in str(exc)
+    assert external.read_text() == 'UNCHANGED\n'
+    # Whether it refused or restaged, nothing under the target may point outside it.
+    for p in target.rglob('*') if target.exists() else ():
+        assert not p.is_symlink(), p
+
+
+def test_repeat_install_restages_a_clean_copy(tmp_path):
+    from tests.completion_gate_support import SOURCE, install
+    target = install(tmp_path)
+    (target / '__init__.py').write_text('tampered\n')
+    (target / 'stray.py').write_text('left over\n')
+    assert install(tmp_path) == target
+    assert (target / '__init__.py').read_bytes() == (SOURCE / '__init__.py').read_bytes()
+    assert not (target / 'stray.py').exists()
+
+
+def test_install_refuses_a_plugins_dir_symlinked_out_of_the_home(tmp_path):
+    from tests.completion_gate_support import install
+    home = tmp_path / 'home'
+    home.mkdir()
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    (home / 'plugins').symlink_to(elsewhere, target_is_directory=True)
+    with pytest.raises(RuntimeError, match='refusing'):
+        install(home)
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_load_never_writes_through_a_hard_linked_config(tmp_path, monkeypatch):
+    from tests import completion_gate_support as support
+    home = tmp_path / 'profile'
+    home.mkdir()
+    sentinel = tmp_path / 'outside-config.yaml'
+    sentinel.write_text('model: sentinel\n')
+    os.link(sentinel, home / 'config.yaml')
+    monkeypatch.setenv('HERMES_HOME', str(home))
+    _stop_after_config_write(monkeypatch)
+    with pytest.raises(RuntimeError, match='STOP_AFTER_CONFIG_WRITE'):
+        support.load()
+    assert sentinel.read_text() == 'model: sentinel\n'
+    assert json.loads((home / 'config.yaml').read_text())['plugins'] == {'enabled': ['completion-gate']}
