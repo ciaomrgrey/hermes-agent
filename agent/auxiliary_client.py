@@ -1040,6 +1040,18 @@ def _select_pool_entry(provider: str, model: Optional[str] = None) -> tuple[bool
         return True, None
 
 
+def _pool_token_blocked(provider: str, token: str, model: str) -> bool:
+    """Whether the pool holds *token* under a cooldown that blocks *model* (unknown tokens fail open)."""
+    pool = _load_pool_with_credentials(provider, " (token check)")
+    if pool is None:
+        return False
+    try:
+        return bool(pool.token_is_blocked(token, model=_normalize_resolved_model(model, provider)))
+    except Exception as exc:
+        logger.debug("Auxiliary client: could not check pool cooldown for %s: %s", provider, exc)
+        return False
+
+
 def _peek_pool_entry(provider: str, pool: Any = None, model: Optional[str] = None) -> Optional[Any]:
     """Best-effort current/next pool entry without mutating selection order.
 
@@ -2123,7 +2135,12 @@ def _resolve_codex_credential_and_base(model: Optional[str] = None) -> tuple[Opt
             from hermes_cli.auth_codex import _codex_pool_route_base_url
             return token, _codex_pool_route_base_url(_pool_runtime_base_url(entry))
     # No usable pool token: auth.json only (re-selecting could pair another row's key with the default).
-    return _read_codex_singleton_token(), override or _CODEX_AUX_BASE_URL
+    token = _read_codex_singleton_token()
+    if token and pool_present and model and _pool_token_blocked("openai-codex", token, model):
+        # The singleton mirrors a pool row benched for *model*: falling back must not bypass the bench.
+        logger.debug("Codex singleton token is benched for %s in the pool; refusing fallback", model)
+        token = None
+    return token, override or _CODEX_AUX_BASE_URL
 
 
 def _read_codex_singleton_token() -> Optional[str]:
@@ -2359,7 +2376,7 @@ def _describe_openrouter_unavailable(model: str | None = None) -> str:
             f"auxiliary.free_only rejected non-free model {or_model!r}; "
             "the request was skipped before provider availability checks"
         )
-    pool_present, entry = _select_pool_entry("openrouter")
+    pool_present, entry = _select_pool_entry("openrouter", or_model)
     if pool_present:
         if entry is None:
             return "OpenRouter credential pool has no usable entries (credentials may be exhausted)"
