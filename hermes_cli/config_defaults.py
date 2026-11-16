@@ -2185,11 +2185,14 @@ DEFAULT_CONFIG = {
         "trust_recent_files_seconds": 600,
         # True: the launch profile's cache, every profile's cache
         # (profiles/*/cache/{images,audio,videos,documents,screenshots}) and the Kanban attachment
-        # dirs are always deliverable, whichever profile's reply names the path. False: only the
-        # replying profile's own cache and media_delivery_allow_dirs are trusted; everything else
-        # falls to the strict/recency rules above. Set false, with strict: true and
-        # trust_recent_files: false, on a profile that serves people who must not reach other
-        # profiles' files. Read per profile from config.yaml; not bridged to the environment.
+        # dirs are always deliverable, whichever profile's reply names the path. False: the
+        # replying profile is confined - it delivers ONLY from its own cache and the
+        # media_delivery_allow_dirs written in its own config.yaml. strict, trust_recent_files and
+        # the HERMES_MEDIA_* environment then admit nothing else, and remote-sandbox files are not
+        # fetched. Set false on a profile that serves people who must not reach other profiles'
+        # files. Read from the replying profile's config.yaml on every delivery; not bridged to
+        # the environment. A config.yaml that cannot be read confines too, unless a
+        # last-known-good copy of it is being served.
         "trust_shared_media_roots": True,
         "api_server": {  # OpenAI-compatible API server platform (gateway/platforms/api_server.py).
             # Max concurrent agent runs. Requests to /v1/chat/completions, /v1/responses, and

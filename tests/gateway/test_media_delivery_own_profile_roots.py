@@ -127,15 +127,136 @@ def test_non_true_value_confines(estate, value):
     assert _deliverable(estate, estate["dua"]) == {"own_cache"}
 
 
-def test_config_load_error_reads_as_confined(estate, monkeypatch):
+def test_confined_profile_needs_no_other_setting(estate):
+    """The key alone confines: a confined profile that is not strict (every fixture file is also
+    seconds old, so recency trust would admit them all) still delivers only its own cache."""
+    _write_gateway_cfg(estate["dua"], {"trust_shared_media_roots": False})
+    assert _deliverable(estate, estate["dua"]) == {"own_cache"}
+    _write_gateway_cfg(estate["dua"], {"strict": True, "trust_recent_files": True,
+                                       "trust_shared_media_roots": False})
+    assert _deliverable(estate, estate["dua"]) == {"own_cache"}
+
+
+def test_confined_profile_ignores_an_inherited_media_environment(estate, tmp_path, monkeypatch):
+    """A separate process for the profile (``hermes -p dua send``, a cron run, a Kanban worker):
+    HERMES_HOME is the profile, no override is bound, and the process inherits the gateway's
+    ``HERMES_MEDIA_*`` variables. Those are another profile's policy and must not widen this one."""
+    dua = estate["dua"]
+    monkeypatch.setenv("HERMES_HOME", str(dua))
+    monkeypatch.setattr(base, "_HERMES_HOME", dua)
+    monkeypatch.setattr(base, "MEDIA_DELIVERY_SAFE_ROOTS", tuple(
+        dua / "cache" / d for d in base._MEDIA_DELIVERY_CACHE_SUBDIRS))
+    monkeypatch.setenv("HERMES_MEDIA_DELIVERY_STRICT", "0")
+    monkeypatch.setenv("HERMES_MEDIA_TRUST_RECENT_FILES", "1")
+    monkeypatch.setenv("HERMES_MEDIA_ALLOW_DIRS", str(tmp_path / "Dropbox"))
+    assert _deliverable(estate, None) == {"own_cache"}
+
+
+SHARED_STRICT = {"other_cache", "kanban", "launch_cache", "own_cache"}
+
+
+# Two files the real loader cannot use. It does not raise for either: it serves a fallback
+# (``_load_config_impl``). MALFORMED also fails the routed turn's terminal-policy read, which
+# refuses the whole turn; NOT_A_MAPPING parses as YAML, so a routed turn reaches the validator.
+MALFORMED = "gateway: [broken\n"
+NOT_A_MAPPING = "- strict\n- trust_recent_files\n"
+BROKEN = pytest.mark.parametrize("broken", [MALFORMED, NOT_A_MAPPING], ids=["malformed", "not-a-mapping"])
+
+
+def _break_config(home: Path, content: str = MALFORMED) -> None:
+    (home / "config.yaml").write_text(content, encoding="utf-8")
+
+
+def _fail_policy_reads(monkeypatch) -> None:
+    """Make every config read made BY THE MEDIA POLICY raise (the rest of the turn reads normally)."""
+    import sys
+
     import hermes_cli.config as config_mod
-    from gateway.media_policy import media_delivery_trust_shared_roots
+    real = config_mod.load_config_readonly
 
     def _boom():
-        raise OSError("config unreadable")
+        if sys._getframe(1).f_globals.get("__name__") == "gateway.media_policy":
+            raise OSError("config unreadable")
+        return real()
     monkeypatch.setattr(config_mod, "load_config_readonly", _boom)
-    assert media_delivery_trust_shared_roots() is False
-    assert estate["emma"] / "cache" / "documents" not in base._media_delivery_allowed_roots()
+
+
+def _forget_loaded_config(home: Path) -> None:
+    """What a process restart does to the in-memory last-known-good (the on-disk backup stays)."""
+    import hermes_cli.config as config_mod
+    for memo in (config_mod._LOAD_CONFIG_CACHE, config_mod._LAST_EXPANDED_CONFIG_BY_PATH):
+        memo.pop(str(home / "config.yaml"), None)
+
+
+@BROKEN
+def test_unusable_config_without_last_known_good_delivers_only_own_cache(estate, broken):
+    """Defaults stand in for the file, and defaults say shared + non-strict: nothing of the
+    profile's policy is left, so the validator must not fall back to them."""
+    _break_config(estate["dua"], broken)
+    assert _deliverable(estate, estate["dua"]) == {"own_cache"}
+
+
+def test_policy_read_exception_delivers_only_own_cache(estate, monkeypatch):
+    _fail_policy_reads(monkeypatch)
+    assert _deliverable(estate, estate["dua"]) == {"own_cache"}
+
+
+def test_non_mapping_gateway_section_delivers_only_own_cache(estate):
+    (estate["dua"] / "config.yaml").write_text("gateway: [strict, trust_recent_files]\n", encoding="utf-8")
+    assert _deliverable(estate, estate["dua"]) == {"own_cache"}
+
+
+def test_unreadable_policy_confines_whichever_profile_is_delivering(estate):
+    """With no policy left to read, a profile that was never confined cannot be told apart from
+    one that was: both keep only their own cache until config.yaml is fixed. Launch scope too,
+    whatever the env bridge says."""
+    _break_config(estate["emma"])
+    assert _deliverable(estate, estate["emma"]) == {"other_cache"}  # emma's own cache document
+    _break_config(estate["launch"])
+    assert _deliverable(estate, None) == {"launch_cache"}
+
+
+@BROKEN
+def test_last_known_good_policy_is_kept_when_the_file_breaks(estate, tmp_path, broken):
+    """A last-known-good fallback IS the profile's policy: honoured as loaded, not replaced by the
+    unreadable-policy rule. In-process first, then from the on-disk backup after a 'restart'."""
+    share = tmp_path / "share"
+    estate["paths"]["allowlisted"] = _file(share / "price-list.pdf")
+    _write_gateway_cfg(estate["dua"], {**CONFINED, "media_delivery_allow_dirs": [str(share)]})
+    _write_gateway_cfg(estate["emma"], STRICT)
+    assert _deliverable(estate, estate["dua"]) == {"own_cache", "allowlisted"}
+    assert _deliverable(estate, estate["emma"]) == SHARED_STRICT
+
+    for home in (estate["dua"], estate["emma"]):
+        _break_config(home, broken)
+    assert _deliverable(estate, estate["dua"]) == {"own_cache", "allowlisted"}
+    assert _deliverable(estate, estate["emma"]) == SHARED_STRICT
+
+    for home in (estate["dua"], estate["emma"]):
+        _forget_loaded_config(home)
+    assert _deliverable(estate, estate["dua"]) == {"own_cache", "allowlisted"}
+    assert _deliverable(estate, estate["emma"]) == SHARED_STRICT
+
+
+def test_profile_without_a_config_file_is_unchanged(estate):
+    """No config.yaml is a healthy default profile, not a failed read: today's non-strict behaviour."""
+    (estate["emma"] / "config.yaml").unlink()
+    assert _deliverable(estate, estate["emma"]) == set(estate["paths"])
+
+
+def test_unreadable_policy_does_not_fetch_from_a_remote_sandbox(estate, monkeypatch):
+    """``fetch_remote_media`` copies a sandbox file into the launch cache unless strict."""
+    import gateway.media_fetch as media_fetch
+
+    def _no_env():
+        raise AssertionError("remote sandbox consulted under an unreadable policy")
+    monkeypatch.setattr(media_fetch, "_active_remote_env", _no_env)
+    _break_config(estate["dua"])
+    token = set_hermes_home_override(str(estate["dua"]))
+    try:
+        assert media_fetch.fetch_remote_media("/workspace/report.pdf") is None
+    finally:
+        reset_hermes_home_override(token)
 
 
 def test_confinement_only_removes_trusted_roots(estate, monkeypatch):
@@ -228,11 +349,73 @@ async def test_confined_profile_reply_uploads_nothing_from_outside_its_home(esta
     assert await _reply_uploads(estate, "dua", reply) == ["quote.pdf"]
 
 
+def _all_tags(estate) -> str:
+    return "\n".join(f"MEDIA:{path}" for path in estate["paths"].values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken", [NOT_A_MAPPING, "gateway: [strict, trust_recent_files]\n"],
+                         ids=["not-a-mapping", "gateway-section-not-a-mapping"])
+async def test_reply_under_unusable_config_uploads_only_own_cache(estate, broken):
+    _break_config(estate["dua"], broken)
+    assert await _reply_uploads(estate, "dua", _all_tags(estate)) == ["quote.pdf"]
+
+
+@pytest.mark.asyncio
+async def test_reply_under_malformed_config_uploads_nothing(estate):
+    """Malformed YAML never reaches the validator in a routed turn: the profile's terminal policy
+    cannot be built either, and that refusal fails the reply's delivery step (own cache included)."""
+    _break_config(estate["dua"], MALFORMED)
+    assert await _reply_uploads(estate, "dua", _all_tags(estate)) == []
+
+
+@pytest.mark.asyncio
+async def test_reply_under_policy_read_exception_uploads_only_own_cache(estate, monkeypatch):
+    _fail_policy_reads(monkeypatch)
+    assert await _reply_uploads(estate, "dua", _all_tags(estate)) == ["quote.pdf"]
+
+
+@pytest.mark.asyncio
+async def test_reply_after_the_file_breaks_keeps_the_last_known_good_policy(estate):
+    """Control for the tests above: a confined profile stays confined on its last-known-good, and
+    an unconfined strict one keeps the shared roots it had."""
+    _write_gateway_cfg(estate["emma"], STRICT)
+    for profile in ("dua", "emma"):
+        assert _deliverable(estate, estate[profile])  # one good load: in-process LKG + backup
+        _break_config(estate[profile], NOT_A_MAPPING)
+    assert await _reply_uploads(estate, "dua", _all_tags(estate)) == ["quote.pdf"]
+    assert await _reply_uploads(estate, "emma", _all_tags(estate)) == [
+        "brief.pdf", "handoff.pdf", "lab-result.pdf", "quote.pdf"]
+
+
 @pytest.mark.asyncio
 async def test_unconfined_profile_reply_still_uploads_shared_roots(estate):
     p = estate["paths"]
     reply = f"Here you go.\nMEDIA:{p['other_cache']}\nMEDIA:{p['kanban']}"
     assert await _reply_uploads(estate, "emma", reply) == ["handoff.pdf", "lab-result.pdf"]
+
+
+@pytest.mark.asyncio
+async def test_confined_profile_kanban_artifacts_upload_only_its_own_cache(estate):
+    """The Kanban notifier's artifact upload goes through the same validator. Its caller
+    (``kanban_watchers_notifier.deliver``) binds the subscriber profile's scope; this drives the
+    upload step inside that scope with artifacts named both as a list and in the summary prose."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    p = estate["paths"]
+    adapter = SimpleNamespace(
+        extract_local_files=lambda text: BasePlatformAdapter.extract_local_files(text),
+        send_document=AsyncMock(return_value=SendResult(success=True, message_id="d")),
+        send_video=AsyncMock(), send_multiple_images=AsyncMock())
+    payload = {"artifacts": [p["kanban"], p["other_cache"], p["launch_cache"], p["own_cache"]],
+               "summary": f"Report at {p['outside']} and {p['kanban']}"}
+
+    async with _async_profile_runtime_scope(estate["dua"]):
+        await GatewayRunner._deliver_kanban_artifacts(
+            SimpleNamespace(), adapter=adapter, chat_id="-100", metadata={}, event_payload=payload, task=None)
+
+    assert [Path(c.kwargs["file_path"]).name for c in adapter.send_document.await_args_list] == ["quote.pdf"]
 
 
 @pytest.mark.asyncio

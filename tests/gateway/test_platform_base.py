@@ -785,7 +785,10 @@ class TestMediaDeliveryDefaultMode:
         for rel in denied + allowed:
             path = profile_b / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"SECRET=1\n")
+            # A YAML mapping, so beta's config.yaml loads: one that is not a mapping leaves the
+            # profile with no readable delivery policy and confines its own turn to its cache
+            # (tests/gateway/test_media_delivery_own_profile_roots.py), which is not this test.
+            path.write_bytes(b"SECRET: 1\n")
 
         for scope in (None, profile_b):  # default profile's turn, then beta's own turn
             token = set_hermes_home_override(scope)

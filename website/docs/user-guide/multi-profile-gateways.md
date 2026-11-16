@@ -666,6 +666,18 @@ only for that profile's events. Shell hooks run with the routed profile's
 `HERMES_HOME`, without the default profile's secrets in their environment, and
 their stdin payload carries a `profile` field naming the profile that fired them.
 
+`gateway.trust_shared_media_roots: false` confines one profile's attachments.
+By default a reply may attach a file from any profile's
+`cache/{images,audio,videos,documents,screenshots}` or from a Kanban attachment
+directory, whichever profile wrote the reply. With the key set to `false`, that
+profile attaches files only from its own cache and from the
+`media_delivery_allow_dirs` in its own `config.yaml`. `gateway.strict`,
+`trust_recent_files` and the `HERMES_MEDIA_*` environment variables then admit
+nothing else, and files in a remote terminal sandbox are not fetched. If the
+profile's `config.yaml` cannot be read, the profile is treated as confined until
+the file is fixed, unless Hermes is still serving the last good copy of it; this
+applies to every profile, not only to ones that set the key.
+
 #### What is isolated per profile
 
 A quick reference for what a multiplexed turn resolves from **its own**
