@@ -3115,8 +3115,8 @@ def _validate_config_key(key: str) -> tuple[bool, Optional[str]]:
     """Validate a dotted config-key path against the known schema -> ``(is_known, suggestion)``.
 
     Headline case from #34067: ``gateway.discord.gateway_restart_notification`` was silently written, even
-    though ``gateway`` only has 4 known sub-keys (``strict``, ``media_delivery_allow_dirs``,
-    ``trust_recent_files``, ``trust_recent_files_seconds``). The correct path is
+    though ``gateway`` only has a few known sub-keys (``strict``, ``media_delivery_allow_dirs``,
+    ``trust_recent_files``, ``trust_recent_files_seconds``, ``trust_shared_media_roots``). The correct path is
     ``discord.gateway_restart_notification`` (platform configs live at the top level, not under a
     ``platforms`` namespace).
     """
