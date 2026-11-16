@@ -2183,6 +2183,14 @@ DEFAULT_CONFIG = {
         # Recency window in seconds; 600 covers a multi-tool turn. Bridged to
         # HERMES_MEDIA_TRUST_RECENT_SECONDS. Only consulted when strict is true.
         "trust_recent_files_seconds": 600,
+        # True: the launch profile's cache, every profile's cache
+        # (profiles/*/cache/{images,audio,videos,documents,screenshots}) and the Kanban attachment
+        # dirs are always deliverable, whichever profile's reply names the path. False: only the
+        # replying profile's own cache and media_delivery_allow_dirs are trusted; everything else
+        # falls to the strict/recency rules above. Set false, with strict: true and
+        # trust_recent_files: false, on a profile that serves people who must not reach other
+        # profiles' files. Read per profile from config.yaml; not bridged to the environment.
+        "trust_shared_media_roots": True,
         "api_server": {  # OpenAI-compatible API server platform (gateway/platforms/api_server.py).
             # Max concurrent agent runs. Requests to /v1/chat/completions, /v1/responses, and
             # /v1/runs beyond this get HTTP 429 + Retry-After, bounding CPU/memory/LLM-quota

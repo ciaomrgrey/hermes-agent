@@ -114,6 +114,26 @@ def media_delivery_trust_recent_seconds() -> str:
     return os.environ.get(_TRUST_RECENT_SECONDS_ENV, "")
 
 
+def media_delivery_trust_shared_roots() -> bool:
+    """``gateway.trust_shared_media_roots`` of the profile whose reply is being delivered (the
+    routed profile under a HERMES_HOME override, else the launch profile). True (default): the
+    launch profile's cache, every profile's cache and the Kanban attachment roots are trusted.
+    False: only the delivering profile's own cache and its ``media_delivery_allow_dirs`` are.
+    Config-only (no env bridge): ``os.environ`` is one process-wide copy and this is per profile.
+    An unreadable config or an unrecognised value takes the restrictive reading."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        gateway_cfg = load_config_readonly().get("gateway")
+    except Exception:
+        return False
+    value = gateway_cfg.get("trust_shared_media_roots") if isinstance(gateway_cfg, dict) else None
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in _TRUTHY
+
+
 def _load_gateway_cfg(config: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     if config is None:
         try:

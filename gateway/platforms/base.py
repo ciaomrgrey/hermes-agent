@@ -821,15 +821,34 @@ def _credential_home_roots() -> list[Path]:
     return list(dict.fromkeys((get_hermes_home(), _HERMES_ROOT, *_profile_dirs())))
 
 
+def _own_cache_roots(cache_roots: list[Path]) -> list[Path]:
+    """The members of ``cache_roots`` that are the ACTIVE home's own cache dirs (the routed
+    profile under a HERMES_HOME override): ``<home>/cache/<kind>`` or a legacy ``<home>/<kind>_cache``.
+    A filter, never a constructor, so confinement can only remove a trusted root."""
+    home = _resolve_path(get_hermes_home(), expand=True)
+    if home is None:
+        return []
+    own_parents = (home, home / "cache")
+    return [root for root in cache_roots
+            if (resolved := _resolve_path(root, expand=True)) is not None and resolved.parent in own_parents]
+
+
 def _media_delivery_allowed_roots() -> list[Path]:
-    """Return roots from which model-emitted local media may be delivered."""
-    from gateway.media_policy import media_delivery_allow_dirs
+    """Return roots from which model-emitted local media may be delivered.
+
+    ``gateway.trust_shared_media_roots: false`` on the delivering profile narrows the trusted
+    roots to that profile's own cache and its operator allowlist: the launch profile's cache,
+    other profiles' caches and the root-shared Kanban attachments are then judged like any other
+    host path (rejected under ``gateway.strict`` unless recency trust admits them)."""
+    from gateway.media_policy import media_delivery_allow_dirs, media_delivery_trust_shared_roots
     operator_roots = (
         root for chunk in media_delivery_allow_dirs().split(os.pathsep)
         for raw_root in chunk.split(",")
         if (root := Path(os.path.expanduser(raw_root.strip()))).is_absolute())
-    return [*map(Path, MEDIA_DELIVERY_SAFE_ROOTS), *_profile_cache_roots(),
-            *_kanban_attachment_roots(), *operator_roots]
+    cache_roots = [*map(Path, MEDIA_DELIVERY_SAFE_ROOTS), *_profile_cache_roots()]
+    if not media_delivery_trust_shared_roots():
+        return [*_own_cache_roots(cache_roots), *operator_roots]
+    return [*cache_roots, *_kanban_attachment_roots(), *operator_roots]
 
 
 def _media_delivery_recency_seconds() -> float:
