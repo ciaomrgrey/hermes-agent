@@ -134,12 +134,12 @@ def test_multiplex_housekeeping_uses_primary_routes_for_credentialless_satellite
     def fake_scope(_home):
         yield
 
-    def fake_shared(adapters):
+    def fake_shared(_own_adapters, adapters, owned=None):
         calls.append(("routed", adapters))
         return routed
 
     monkeypatch.setattr(gateway_run, "_profile_runtime_scope", fake_scope)
-    monkeypatch.setattr(sched_preflight, "shared_route_adapters_for_current_home", fake_shared)
+    monkeypatch.setattr(sched_preflight, "satellite_delivery_adapters", fake_shared)
     monkeypatch.setattr(
         scheduler,
         "drain_delivery_queue",
