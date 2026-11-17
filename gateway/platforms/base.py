@@ -821,15 +821,38 @@ def _credential_home_roots() -> list[Path]:
     return list(dict.fromkeys((get_hermes_home(), _HERMES_ROOT, *_profile_dirs())))
 
 
-def _media_delivery_allowed_roots() -> list[Path]:
-    """Return roots from which model-emitted local media may be delivered."""
-    from gateway.media_policy import media_delivery_allow_dirs
+def _own_cache_roots(cache_roots: list[Path]) -> list[Path]:
+    """The members of ``cache_roots`` that are the ACTIVE home's own cache dirs (the routed
+    profile under a HERMES_HOME override): ``<home>/cache/<kind>`` or a legacy ``<home>/<kind>_cache``.
+    A filter, never a constructor, so confinement can only remove a trusted root."""
+    home = _resolve_path(get_hermes_home(), expand=True)
+    if home is None:
+        return []
+    own_parents = (home, home / "cache")
+    return [root for root in cache_roots
+            if (resolved := _resolve_path(root, expand=True)) is not None and resolved.parent in own_parents]
+
+
+def _media_delivery_allowed_roots(confined: Optional[bool] = None) -> list[Path]:
+    """Return roots from which model-emitted local media may be delivered.
+
+    ``confined`` (``gateway.trust_shared_media_roots: false`` on the delivering profile, read here
+    when not passed) narrows them to that profile's own cache and the operator allowlist in its
+    own config.yaml: the launch profile's cache, other profiles' caches, the root-shared Kanban
+    attachments and an allowlist inherited through the environment are dropped."""
+    from gateway.media_policy import (
+        media_delivery_allow_dirs, media_delivery_confined_allow_dirs, media_delivery_trust_shared_roots)
+    if confined is None:
+        confined = not media_delivery_trust_shared_roots()
+    allow_dirs = media_delivery_confined_allow_dirs() if confined else media_delivery_allow_dirs()
     operator_roots = (
-        root for chunk in media_delivery_allow_dirs().split(os.pathsep)
+        root for chunk in allow_dirs.split(os.pathsep)
         for raw_root in chunk.split(",")
         if (root := Path(os.path.expanduser(raw_root.strip()))).is_absolute())
-    return [*map(Path, MEDIA_DELIVERY_SAFE_ROOTS), *_profile_cache_roots(),
-            *_kanban_attachment_roots(), *operator_roots]
+    cache_roots = [*map(Path, MEDIA_DELIVERY_SAFE_ROOTS), *_profile_cache_roots()]
+    if confined:
+        return [*_own_cache_roots(cache_roots), *operator_roots]
+    return [*cache_roots, *_kanban_attachment_roots(), *operator_roots]
 
 
 def _media_delivery_recency_seconds() -> float:
@@ -1032,7 +1055,9 @@ def validate_media_delivery_path(path: str, session_key: str = "") -> Optional[s
     regular file outside the credential / system denylist (symmetric with inbound). Strict
     (``HERMES_MEDIA_DELIVERY_STRICT=1``, public bots where prompt injection must not exfiltrate
     host secrets): MUST be under a Hermes cache, an operator root (``HERMES_MEDIA_ALLOW_DIRS``),
-    or freshly produced within the recency window. Symlinks are resolved before any check."""
+    or freshly produced within the recency window. Confined (``gateway.trust_shared_media_roots:
+    false``): the delivering profile's own cache or its own allowlist, nothing else, in either
+    mode. Symlinks are resolved before any check."""
     from tools.hosted_tool_policy import host_feature_enabled
     if not host_feature_enabled("media_delivery") or not (candidate := _normalize_media_tag_path(path)):
         return None
@@ -1054,12 +1079,19 @@ def validate_media_delivery_path(path: str, session_key: str = "") -> Optional[s
     if is_project_env_basename(resolved.name):
         return None
     # Cache / operator allowlist is trusted unconditionally, regardless of mode.
-    for root in _media_delivery_allowed_roots():
+    from gateway.media_policy import media_delivery_strict, media_delivery_trust_shared_roots
+    confined = not media_delivery_trust_shared_roots()  # read once: the roots and the stop agree
+    for root in _media_delivery_allowed_roots(confined):
         resolved_root = _resolve_path(root, expand=True)
         if resolved_root is not None and _path_is_within(resolved, resolved_root):
             return str(resolved)
+    # Confined profile (or one whose policy cannot be read): its own roots were the whole answer.
+    # Stopping here, not at the strict check, is what keeps a non-strict reading - an inherited
+    # HERMES_MEDIA_DELIVERY_STRICT=0, or the defaults served for an unreadable config.yaml - from
+    # reopening every other path.
+    if confined:
+        return None
     # Non-strict (default): anything not denylisted (/etc, /proc, ~/.ssh, Hermes-root secrets).
-    from gateway.media_policy import media_delivery_strict
     if not media_delivery_strict():
         return None if _path_under_denied_prefix(resolved) else str(resolved)
     # Strict: recency trust for fresh files (pandoc -o /tmp/x.pdf); denylist still applies.
