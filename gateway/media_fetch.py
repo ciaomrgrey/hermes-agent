@@ -79,9 +79,9 @@ def _active_remote_env():
 def fetch_remote_media(path: str) -> Optional[str]:
     """Host path of a validated copy of sandbox file ``path``, or None (never raises). Only fires
     when a remote backend is active; the caller has already failed local validation."""
-    from gateway.media_policy import media_delivery_strict
-    if media_delivery_strict():
-        return None
+    from gateway.media_policy import media_delivery_strict, media_delivery_trust_shared_roots
+    if media_delivery_strict() or not media_delivery_trust_shared_roots():
+        return None  # a confined profile delivers from its own roots only, never a sandbox copy
     env = _active_remote_env()
     if env is None:
         return None

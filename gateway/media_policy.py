@@ -114,6 +114,48 @@ def media_delivery_trust_recent_seconds() -> str:
     return os.environ.get(_TRUST_RECENT_SECONDS_ENV, "")
 
 
+def _delivering_gateway_cfg() -> Optional[dict[str, Any]]:
+    """``gateway`` section of the DELIVERING profile's config.yaml (the routed profile under a
+    HERMES_HOME override, else the launch profile), or None when that profile's policy cannot be
+    read: the load raised, config.yaml is unreadable and the loader served DEFAULTS in its place,
+    or the section is not a mapping. A last-known-good fallback is still the profile's own policy
+    and is returned. The defaults are the permissive values, so None is never read as them."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        from hermes_cli.config_read_errors import FailedConfigRead
+        config = load_config_readonly()
+        gateway_cfg = config.get("gateway")
+    except Exception:
+        return None
+    if isinstance(config, FailedConfigRead) and not getattr(config, "last_known_good", False):
+        return None
+    return gateway_cfg if isinstance(gateway_cfg, dict) else None
+
+
+def media_delivery_trust_shared_roots() -> bool:
+    """``gateway.trust_shared_media_roots`` of the delivering profile. True (default): the launch
+    profile's cache, every profile's cache and the Kanban attachment roots are trusted, and any
+    other path falls to the strict/recency rules. False: the profile is CONFINED - it delivers
+    only from its own cache and its own ``media_delivery_allow_dirs``, and neither ``strict`` nor
+    recency trust nor the ``HERMES_MEDIA_*`` environment can admit anything else.
+    Config-only (no env bridge): ``os.environ`` is one process-wide copy, inherited by child
+    processes, and this is per profile. An unreadable policy or an unrecognised value confines."""
+    gateway_cfg = _delivering_gateway_cfg()
+    if gateway_cfg is None:
+        return False
+    value = gateway_cfg.get("trust_shared_media_roots")
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in _TRUTHY
+
+
+def media_delivery_confined_allow_dirs() -> str:
+    """A confined profile's operator allowlist: its own config.yaml only (``""`` when unreadable)."""
+    return _allow_dirs_str((_delivering_gateway_cfg() or {}).get("media_delivery_allow_dirs"))
+
+
 def _load_gateway_cfg(config: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     if config is None:
         try:

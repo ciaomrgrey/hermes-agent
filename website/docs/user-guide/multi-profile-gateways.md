@@ -657,7 +657,7 @@ Per-turn runtime settings follow the routed profile as well: `agent.max_turns`,
 `fallback_providers`, `file_read_max_chars`, `tool_output.*`, `browser.*`
 timeouts, `timezone` (including the `TZ` handed to `execute_code` sandboxes),
 the media-delivery policy (`gateway.strict`, `media_delivery_allow_dirs`,
-`trust_recent_files*`) and the Nous `auth.json` used for auxiliary calls are all
+`trust_recent_files*`, `trust_shared_media_roots`) and the Nous `auth.json` used for auxiliary calls are all
 read from the profile serving the turn, never from the profile the gateway was
 launched under. The same holds for per-profile state files (`processes.json`,
 `checkpoints/`, sandbox snapshot stores, Feishu comment rules/pairing) and for
@@ -665,6 +665,18 @@ gateway hooks: each profile's `hooks/` directory is loaded on its own and fires
 only for that profile's events. Shell hooks run with the routed profile's
 `HERMES_HOME`, without the default profile's secrets in their environment, and
 their stdin payload carries a `profile` field naming the profile that fired them.
+
+`gateway.trust_shared_media_roots: false` confines one profile's attachments.
+By default a reply may attach a file from any profile's
+`cache/{images,audio,videos,documents,screenshots}` or from a Kanban attachment
+directory, whichever profile wrote the reply. With the key set to `false`, that
+profile attaches files only from its own cache and from the
+`media_delivery_allow_dirs` in its own `config.yaml`. `gateway.strict`,
+`trust_recent_files` and the `HERMES_MEDIA_*` environment variables then admit
+nothing else, and files in a remote terminal sandbox are not fetched. If the
+profile's `config.yaml` cannot be read, the profile is treated as confined until
+the file is fixed, unless Hermes is still serving the last good copy of it; this
+applies to every profile, not only to ones that set the key.
 
 #### What is isolated per profile
 

@@ -129,9 +129,13 @@ class FailedConfigRead(dict):
     after one transient EMFILE/EIO replaced the whole file with the fallback plus the caller's edit.
     A dict subclass so the refusal survives the load→mutate→save round trip at every call site."""
 
-    def __init__(self, data: Any = (), *, error: BaseException):
+    def __init__(self, data: Any = (), *, error: BaseException, last_known_good: bool = False):
         super().__init__(data)
         self.read_error = error
+        # True: ``data`` is the user's own last successfully loaded config. False: it is ``{}`` or
+        # DEFAULT_CONFIG, so none of the user's settings are in it (a consumer for which a default
+        # is the permissive value, like the media-delivery policy, must not read it as a choice).
+        self.last_known_good = last_known_good
 
 
 def _read_error_fix(exc: OSError) -> str:
