@@ -3720,6 +3720,18 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             )
         return content
 
+    def _summary_input_turns(self, turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # Filter only the summarizer's view; retained/persisted turns stay canonical.
+        from hermes_cli.middleware import apply_request_middleware_or_original
+
+        return apply_request_middleware_or_original(
+            {"messages": turns}, request_kind="compression_input",
+            session_id=getattr(self, "_session_id", ""),
+            **{key: getattr(self, key, None) for key in (
+                "task_id", "platform", "model", "provider", "api_mode", "base_url",
+            )},
+        )["messages"]
+
     def _generate_summary(
         self, turns_to_summarize: list[dict[str, Any]], focus_topic: Optional[str] = None,
         memory_context: str = "", bypass_cooldown: bool = False,
@@ -3747,23 +3759,24 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         _pruned_skill_names = list(dict.fromkeys(
             _collect_ghosted_skill_names(turns_to_summarize) + _extract_pruned_skill_names(self._previous_summary or "")
         ))[:_MAX_PRUNED_SKILL_MARKERS]
+        summary_turns = self._summary_input_turns(turns_to_summarize)
         # Lean mode even-samples oversized input (one bounded request, never a second).
         if getattr(self, "tail_mode", "lean") == "lean":
-            records = self._serialize_records_for_summary(turns_to_summarize)
+            records = self._serialize_records_for_summary(summary_turns)
             slices: list = []
             content_to_summarize, coverage = self._sample_summary_records(records, slices)
             self._record_summary_input_coverage(coverage)
             # Typed turns (#146750): user, assistant tool_calls and tool output each keep their real role.
             # Typed rows (async-delegation results, notices; not /steer) and flagged nudges are not user input.
             typed_turns = typed_summary_messages(
-                turns_to_summarize, records, slices,
+                summary_turns, records, slices,
                 lambda m: self._is_real_user_turn(m) and not is_user_role_scaffolding(m),
                 self._render_tool_args_for_summary,
             )
             content_to_summarize = TYPED_TURNS_POINTER
         else:
             typed_turns = []
-            content_to_summarize = self._bound_summary_input(self._serialize_for_summary(turns_to_summarize))
+            content_to_summarize = self._bound_summary_input(self._serialize_for_summary(summary_turns))
         has_user_turn = getattr(self, "_summary_has_user_turn", None)
         if has_user_turn is None:
             has_user_turn = self._transcript_has_real_user_turn(turns_to_summarize)
