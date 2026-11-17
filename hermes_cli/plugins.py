@@ -111,6 +111,8 @@ _install_plugin_debug_handler()
 # The function that fires each name is listed in website/docs/developer-guide/plugins/index.md
 # ("Where each hook fires"); add a row there when you add a hook.
 VALID_HOOKS: set[str] = {
+    # Before a text answer is persisted/delivered; block with message to rework once per turn.
+    "before_turn_end",
     "pre_tool_call", "post_tool_call", "transform_terminal_output", "transform_tool_result",
     # transform_llm_output: return a replacement string (first non-None wins) or None.
     "transform_llm_output", "pre_llm_call", "post_llm_call",
@@ -214,7 +216,7 @@ VALID_HOOKS: set[str] = {
 
 # Hooks whose directive the shell-hook response parser has no channel for. VALID_HOOKS doubles as
 # the shell-hook allow-list, so these are refused loudly instead of having output silently ignored.
-SHELL_UNSUPPORTED_HOOKS: set[str] = {"transform_api_error_classification"}
+SHELL_UNSUPPORTED_HOOKS: set[str] = {"transform_api_error_classification", "before_turn_end"}
 
 _env_enabled = env_var_enabled  # imported by plugins/memory
 

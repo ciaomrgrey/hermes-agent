@@ -107,6 +107,7 @@ class GatewayGoalCommandsMixin:
                     media_types=list(event.media_types) if media else [],
                     media_text_inlined=list(event.media_text_inlined) if media else [],
                     media_filenames=list(event.media_filenames) if media else [],
+                    metadata=dict(event.metadata or {}) if kickoff else {},
                 )
                 self._enqueue_fifo(quick_key, turn, adapter)
         except Exception as exc:
