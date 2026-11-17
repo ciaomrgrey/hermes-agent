@@ -1079,6 +1079,15 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         from gateway.run_turn_runner_approval_transport import approval_transport
         register_gateway_notify(session_key, approval_transport(self))
         try:
+            platform = getattr(ctx.source, "platform", "")
+            agent._current_source_identity = {
+                "platform": getattr(platform, "value", platform) or "",
+                "channel_id": str(getattr(ctx.source, "chat_id", "") or ""),
+                "request_id": str(ctx.inbound_message_id or ""),
+                "timestamp": ctx.persist_user_timestamp,
+                "internal": bool(ctx.inbound_internal),
+                "source_state": ctx.inbound_source_state,
+            }
             run_message = self._native_image_run_message()
             api_message = _wrap_current_message_with_observed_context(run_message, observed_group_context)
             kwargs = {"conversation_history": agent_history, "task_id": ctx.session_id}
