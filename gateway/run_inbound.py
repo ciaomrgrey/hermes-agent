@@ -388,7 +388,16 @@ class GatewayInboundMixin(
             return None
         if _pending_clarify is None or self._refused_clarify(event, _pending_clarify.clarify_id):
             return None  # another member's message is their own message, not this clarify's answer
-        _clarify_has_audio = bool(self._pending_event_audio_paths(event))
+        _clarify_audio_paths = self._pending_event_audio_paths(event)
+        if any(path not in _clarify_audio_paths for path in event.media_urls or []):
+            # A caption is not the whole message: resolving it as a choice (or retaining an
+            # invalid selection) would discard the attachments. Voice-only replies still use
+            # STT below; other media takes the normal delivery/FIFO path with its caption intact.
+            _generation = self._current_session_run_generation(_quick_key)
+            if await self._release_pending_clarify(_pending_clarify, source):
+                event._clarify_superseded = _generation
+            return None
+        _clarify_has_audio = bool(_clarify_audio_paths)
         _raw_clarify_reply = await self._prepare_clarify_reply_text(event)
 
         def _retain(why: str) -> str:
