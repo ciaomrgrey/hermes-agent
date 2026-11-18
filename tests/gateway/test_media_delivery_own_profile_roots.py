@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import hermes_yaml as yaml
 
-import gateway.platforms.base as base
+from gateway.platforms import base
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter, SendResult, validate_media_delivery_path
 from gateway.platforms.event import MessageEvent, MessageType
@@ -246,7 +246,7 @@ def test_profile_without_a_config_file_is_unchanged(estate):
 
 def test_unreadable_policy_does_not_fetch_from_a_remote_sandbox(estate, monkeypatch):
     """``fetch_remote_media`` copies a sandbox file into the launch cache unless strict."""
-    import gateway.media_fetch as media_fetch
+    from gateway import media_fetch
 
     def _no_env():
         raise AssertionError("remote sandbox consulted under an unreadable policy")
