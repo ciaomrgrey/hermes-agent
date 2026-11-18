@@ -13,7 +13,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-import yaml
+import hermes_yaml as yaml
 
 import gateway.platforms.base as base
 from gateway.config import GatewayConfig, Platform, PlatformConfig
@@ -277,6 +277,31 @@ def test_confinement_only_removes_trusted_roots(estate, monkeypatch):
         assert confined < shared
         assert confined == {home / "cache" / d for d in base._MEDIA_DELIVERY_CACHE_SUBDIRS} | (
             {legacy} if home == estate["launch"] else set())
+
+
+@pytest.mark.parametrize("owner", ["dua", "emma"])
+def test_connector_download_roots_are_not_confined_cache_roots(estate, owner):
+    """Upstream adds connector downloads to shared roots, not to the reviewed own-cache filter."""
+    path = _file(estate[owner] / base.CONNECTOR_DOWNLOADS_SUBDIR / "download.pdf")
+    token = set_hermes_home_override(str(estate["dua"]))
+    try:
+        assert validate_media_delivery_path(path) is None
+        _write_gateway_cfg(estate["dua"], STRICT)
+        assert validate_media_delivery_path(path) == str(Path(path).resolve())
+    finally:
+        reset_hermes_home_override(token)
+
+
+def test_generated_cache_remains_own_profile_only(estate):
+    """The newer generated-artifact cache follows the same own-profile rule."""
+    own = _file(estate["dua"] / "cache" / base.GENERATED_SUBDIR / "generated.pdf")
+    other = _file(estate["emma"] / "cache" / base.GENERATED_SUBDIR / "generated.pdf")
+    token = set_hermes_home_override(str(estate["dua"]))
+    try:
+        assert validate_media_delivery_path(own) == str(Path(own).resolve())
+        assert validate_media_delivery_path(other) is None
+    finally:
+        reset_hermes_home_override(token)
 
 
 def test_launch_profile_can_confine_itself(estate):
