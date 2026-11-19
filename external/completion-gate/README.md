@@ -73,6 +73,17 @@ Lars — no third state.” Both classes reuse the existing reentrancy, reason d
 single repair bound and escalation ceiling. Metrics add subtype counts without
 changing the existing claims/error denominators.
 
+First-person negations inside paired `"…"`, `“…”` or backtick spans are reported
+text, not self-reported inaction. Unclosed spans and single quotes do not exempt
+anything; unquoted obligations later in the answer are still checked. The fixed
+no-third-state phrases are unchanged. A narrow future promise (`won't` / `will
+not` + `change|touch|alter|override`) to preserve `your decision` / `your choice`,
+or `that|it|this` immediately tied to `as you decided/chose/specified/requested`
+or `as you set it/her/him/them`, is also excluded. Bare `I won't change that`,
+inability, past inaction, conditional attribution and delayed changes still
+fail when they match the existing verb list. The verb list is not expanded
+(`touch`, `alter` and `override` were not triggers before this exception).
+
 ### Bounded failure diagnostics and recovery
 
 Extraction retries at most once for classified transport/server/timeouts, only

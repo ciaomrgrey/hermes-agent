@@ -1004,11 +1004,50 @@ def assess_chat_receipt(*, profile, source, user_message, final_response, messag
     return _assessment(identity)
 
 
+# Only paired double quotes / backticks are reported text; apostrophes are not
+# delimiters. Mask rather than delete so quotes cannot join unrelated clauses.
+_INACTION_QUOTES = re.compile(
+    r'"(?:\\.|[^"\\])*"|“[^”]*”|(?<!`)(?P<ticks>`+)(?!`)[\s\S]*?(?<!`)(?P=ticks)(?!`)')
+_PRESERVING_PROMISE = re.compile(
+    r"\b(?:won't|will\s+not)\s+(?:change|touch|alter|override)$", re.I)
+_USER_DECISION_CLAUSE = (
+    r"as\s+you\s+(?:decided|chose|specified|requested|set\s+(?:it|her|him|them))")
+_PRIOR_USER_DECISION = re.compile(
+    r"\b" + _USER_DECISION_CLAUSE + r",?\s+(?:and\s+)?$", re.I)
+_PRESERVED_TARGET = re.compile(
+    r"\s+(?:your\s+(?:own\s+)?(?:decision|choice)"
+    r"|(?P<reference>that|it|this)(?P<attribution>,?\s+" + _USER_DECISION_CLAUSE + r")?)"
+    r"[ \t]*(?=$|[.!?;\n]|,\s+(?:and|but)\b)", re.I)
+
+
+def _preserves_user_decision(text, match):
+    """A future no-change promise, not inability, delay or an unrelated refusal."""
+    if not _PRESERVING_PROMISE.search(match.group()):
+        return False
+    target = _PRESERVED_TARGET.match(text, match.end())
+    if not target:
+        return False
+    prefix = re.split(r"[.!?;\n]", text[:match.start()])[-1]
+    if re.search(r"\b(?:if|unless|not|never)\b|n't\b", prefix, re.I):
+        return False
+    return (not target.group("reference") or bool(target.group("attribution"))
+            or _PRIOR_USER_DECISION.search(prefix) is not None)
+
+
 def inaction_match(text):
-    """First self-reported-inaction phrase in ``text`` (typographic apostrophes folded), or None."""
+    """First unquoted obligation negation, excluding explicit decision preservation."""
     if not isinstance(text, str):
         return None
-    return _INACTION.search(text.translate(_QUOTE_OR_APOSTROPHE_VARIANTS))
+    unquoted = _INACTION_QUOTES.sub(lambda m: "\0" * len(m.group()), text)
+    unquoted = unquoted.translate(_QUOTE_OR_APOSTROPHE_VARIANTS)
+    normalized = text.translate(_QUOTE_OR_APOSTROPHE_VARIANTS)
+    for match in _INACTION.finditer(normalized):
+        # The fixed no-third-state phrases retain their existing semantics.
+        if match.group().lower().startswith("i"):
+            if unquoted[match.start()] == "\0" or _preserves_user_decision(unquoted, match):
+                continue
+        return match
+    return None
 
 
 def assess_inaction(final_response, messages, *, user_message=""):
