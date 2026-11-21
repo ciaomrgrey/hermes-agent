@@ -152,7 +152,8 @@ class TestUnverifiedDeliveryVisibility:
         assert job["id"] in out
         assert "Delivery UNVERIFIED" in out
         assert "slack:C0123456" in out
-        assert "without message_id/raw_response" in out
+        assert "no delivery confirmation" in out
+        assert "may have been delivered" in out
 
     def test_list_is_quiet_when_delivery_was_verified(self, tmp_cron_dir, capsys):
         create_job(prompt="Nightly brief", schedule="every 1h", deliver="slack:C0123456")

@@ -34,6 +34,9 @@ def _install_telegram_mock_with_request(
     Mirrors ``_install_telegram_mock`` in test_send_message_tool.py but also
     provides the ``telegram.request`` submodule that the proxy branch needs.
     """
+    from telegram.error import TimedOut
+
+    monkeypatch.setitem(sys.modules, "telegram.error", SimpleNamespace(TimedOut=TimedOut))
     parse_mode = SimpleNamespace(MARKDOWN_V2="MarkdownV2", HTML="HTML")
     constants_mod = SimpleNamespace(ParseMode=parse_mode)
     request_mod = SimpleNamespace(HTTPXRequest=httpx_request_factory)

@@ -1271,9 +1271,9 @@ def _cron_delivery_notify_enabled(cfg: Optional[dict]) -> bool:
 
 
 def _record_delivery_verification(job: dict, unverified_targets: list) -> None:
-    """Persist ``last_delivery_unverified``: list of ``platform:chat_id`` targets acked with no
-    evidence, or None, alongside queued Bot Chat receipts. Never raises (bookkeeping must not fail a
-    delivery)."""
+    """Persist ``last_delivery_unverified``: list of ``platform:chat_id`` targets lacking
+    delivery evidence (bare ack or ambiguous timeout), or None, alongside queued Bot Chat
+    receipts. Never raises (bookkeeping must not fail a delivery)."""
     new_value = list(unverified_targets) or None
     queued = {target: receipt for target, receipt in
               job.get("_bot_chat_delivery_receipts", {}).items()
@@ -1744,6 +1744,7 @@ def _standalone_send(
 
 def _deliver_standalone(
     t: _TargetDelivery, content: str, media_files: list, target_errors: list, delivery_errors: list,
+    unverified_targets: list,
 ) -> None:
     """Standalone fallback for a target the live lane did not deliver."""
     job = t.job
@@ -1755,6 +1756,17 @@ def _deliver_standalone(
         return
     result, err = _standalone_send(t, content, media_files)
     if err is None and result and result.get("error"):
+        if t.platform_name == "telegram" and (
+            result.get("delivery_unverified") is True
+            or str(result["error"]).strip().casefold() == "telegram send failed: timed out"
+        ):
+            # The standalone sender may have posted successfully before its response timed
+            # out. Discard earlier live-lane errors, but neither mirror nor claim a receipt.
+            unverified_targets.append(t.where)
+            logger.warning("Job '%s': standalone delivery to %s UNVERIFIED: %s; "
+                           "may have been delivered; do not resend",
+                           job["id"], t.where, result["error"])
+            return
         # Not inside an except block — the error comes from the result dict, no traceback.
         err = f"delivery error: {result['error']} (target {t.where})"
         logger.error("Job '%s': %s", job["id"], err)
@@ -2065,7 +2077,8 @@ def _deliver_result(
         )
         if not delivered:
             _deliver_standalone(
-                t, cleaned_delivery_content, media_files, target_errors, delivery_errors)
+                t, cleaned_delivery_content, media_files, target_errors, delivery_errors,
+                unverified_targets)
 
     # Filter-time drops apply to every target; report them once. A run whose every target was
     # suppressed sent nothing, so there is no drop to report.

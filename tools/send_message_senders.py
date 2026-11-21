@@ -258,6 +258,8 @@ def _telegram_format(message):
 async def _send_telegram(token, chat_id, message, media_files=None, thread_id=None, disable_link_previews=False, force_document=False):
     """One-shot Telegram Bot API send; parse failures fall back to plain text."""
     try:
+        from telegram.error import TimedOut
+
         formatted, send_parse_mode, _has_html = _telegram_format(message)
         bot = _telegram_bot(token)
         from plugins.platforms.telegram.telegram_ids import normalize_telegram_chat_id
@@ -305,7 +307,11 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
     except ImportError:
         return {"error": "python-telegram-bot not installed. Run: pip install python-telegram-bot"}
     except Exception as e:
-        return _error(f"Telegram send failed: {e}")
+        result = _error(f"Telegram send failed: {e}")
+        if isinstance(e, TimedOut):
+            # A lost response cannot prove the send failed; never invite a duplicate.
+            result["delivery_unverified"] = True
+        return result
 
 
 def _live_adapter(platform, *, lookup_failed_warning=None):
