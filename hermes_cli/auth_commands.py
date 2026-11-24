@@ -424,6 +424,13 @@ def _add_credential(args, provider: str, pool, requested_type: str) -> PooledCre
     token = spec.token(creds)
     label = (getattr(args, "label", None) or "").strip() or label_from_token(
         token, f"{provider}-oauth-{len(pool.entries()) + 1}")
+    # Removed rows leave gaps in generated labels; labels from token claims or
+    # --label can collide too. Keep the old row for audit, suffix the new login.
+    labels = {e.label.strip().lower() for e in pool.entries()}
+    base_label, suffix = label, 2
+    while label.lower() in labels:
+        label = f"{base_label}-{suffix}"
+        suffix += 1
     # Every account gets a distinct, self-contained pool entry instead of routing through a
     # singleton save path (which collapsed every added account into the latest login).
     # ``manual:*`` entries refresh from their own token pair, so they need no singleton shadow.

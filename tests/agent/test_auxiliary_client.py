@@ -2899,7 +2899,7 @@ class TestAuxiliaryPoolRotationRetry:
 
             def mark_exhausted_and_rotate(self, **kwargs):
                 self.rotate_calls.append(kwargs)
-                return SimpleNamespace(id="cred-b")
+                return SimpleNamespace(id="cred-b", runtime_api_key="replacement-test-key")
 
         pool = _Pool()
 

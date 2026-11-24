@@ -1174,6 +1174,11 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         persist: bool = True,
         failure_reason: Optional[str] = None,
     ) -> PooledCredential:
+        # A request already in flight may report a generic 401 after refresh
+        # established invalid_grant. Only re-auth/reset may clear that verdict.
+        current = self._find(lambda e: e.id == entry.id) or entry
+        if current.last_status == STATUS_DEAD:
+            return current
         normalized_error = _normalize_error_context(error_context)
         # Permanent OAuth failures become STATUS_DEAD, not STATUS_EXHAUSTED:
         # otherwise a revoked credential re-enters rotation every hour and
