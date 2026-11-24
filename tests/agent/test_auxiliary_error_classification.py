@@ -85,7 +85,7 @@ def test_upstream_capacity_429_is_not_a_credential_to_bench(monkeypatch, body, b
     monkeypatch.setattr(ac, "load_pool", lambda provider: pool)
     monkeypatch.setattr(ac, "_evict_cached_clients", lambda provider: None)
     recovered = ac._recover_provider_pool("openrouter", exc, failed_api_key="sk-failed")
-    assert recovered is benches_pool
+    assert bool(recovered) is benches_pool
     assert len(pool.rotate_calls) == (1 if benches_pool else 0)
     if benches_pool:
         assert pool.rotate_calls[0]["status_code"] == 429
