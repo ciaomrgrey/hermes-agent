@@ -415,9 +415,18 @@ def _anthropic_token_or_raise(*, model: str | None = None) -> str:
     if not token:
         # A key the pool benched for *this* model is not a missing credential; telling the
         # user to re-authenticate would send them chasing a cooldown that lifts on its own.
-        if model and resolve_anthropic_token():
+        pool = load_pool("anthropic")
+        limits = pool.limit_state([model] if model else [])
+        live = [entry for entry in pool.entries() if entry.last_status != "dead"]
+        if limits and limits["scope"] == "account" and all(
+            entry.last_error_code == 429 and entry.failure_reason not in ("billing", "billing_unverified")
+            for entry in live
+        ):
+            raise AuthError("Anthropic credentials are rate-limited; retry after the cooldown "
+                            "(see `hermes auth list`).", provider="anthropic", code="rate_limited")
+        if model and ((limits and limits["scope"] == "models") or resolve_anthropic_token()):
             raise AuthError(f"Anthropic credentials are rate-limited for {model}; "
-                            "other Claude models remain available (see `hermes auth list`).",
+                            "try another Claude model or retry after the cooldown (see `hermes auth list`).",
                             provider="anthropic", code="model_rate_limited")
         raise AuthError(_NO_ANTHROPIC_CREDENTIALS_MSG)
     return token

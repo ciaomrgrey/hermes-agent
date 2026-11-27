@@ -1081,19 +1081,14 @@ def _entry_ids(entries: Iterable[Any]) -> dict[str, dict[str, Any]]:
 
 
 def write_credential_pool(
-    provider_id: str, entries: list[dict[str, Any]], *,
-    removed_ids: Optional[Iterable[str]] = None,
-    status_cleared_ids: Optional[Iterable[str]] = None,
-    token_bases: Optional[dict[str, tuple[Any, Any]]] = None,
+    provider_id: str, entries: list[dict[str, Any]], *, removed_ids: Optional[Iterable[str]] = None,
+    status_cleared_ids: Optional[Iterable[str]] = None, token_bases: Optional[dict[str, tuple[Any, Any]]] = None,
 ) -> list[dict[str, Any]]:
     """Persist one provider's credential pool under auth.json.
 
-    Final disk-boundary sanitizer for borrowed credentials (callers may pass raw dicts). Entries on
-    disk but missing from *entries* (added concurrently) are merged back unless in *removed_ids*,
-    so a rotation/exhaustion rewrite never drops a concurrent credential. Entries in
-    *status_cleared_ids* were cleared deliberately (``hermes auth reset``) and skip the
-    recency merge, which would otherwise read their cleared ``last_status_at`` (None ->
-    epoch 0) as a stale snapshot and copy a still-binding cooldown back."""
+    Sanitizes borrowed credentials. Concurrent additions survive; explicit removals and
+    previously observed ids now absent on disk stay removed. ``status_cleared_ids`` bypass
+    the recency merge so ``hermes auth reset`` is not undone by a stale cooldown."""
     removed = {rid for rid in (removed_ids or ()) if rid}
     bases = token_bases or {}
     with _auth_store_lock():
@@ -1105,6 +1100,11 @@ def write_credential_pool(
         existing_list = pool.get(provider_id)
         existing_list = existing_list if isinstance(existing_list, list) else []
         existing_by_id = _entry_ids(existing_list)
+        # A row this writer previously observed, now absent under the store lock,
+        # was removed by a peer. It is not a newly added credential. Generation
+        # bases include token-less reference rows, so deletion works for those too.
+        removed.update(set(bases) - set(existing_by_id))
+        sanitized = [e for e in sanitized if not isinstance(e, dict) or e.get("id") not in removed]
         new_ids = set(_entry_ids(sanitized))
         status_cleared = {cid for cid in (status_cleared_ids or ()) if cid}
         merged: list[dict[str, Any]] = [

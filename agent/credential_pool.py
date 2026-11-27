@@ -1079,10 +1079,7 @@ class CredentialPool(CredentialPoolSelectionMixin, CredentialPoolAdminMixin, Cre
                     return
 
     def _persist(
-        self,
-        *,
-        removed_ids: Optional[list[str]] = None,
-        status_cleared_ids: Optional[list[str]] = None,
+        self, *, removed_ids: Optional[list[str]] = None, status_cleared_ids: Optional[list[str]] = None,
     ) -> None:
         # Self-locking: snapshotting self._entries must not race a rotation.
         with self._lock:
@@ -1096,17 +1093,19 @@ class CredentialPool(CredentialPoolSelectionMixin, CredentialPoolAdminMixin, Cre
             if written is None:
                 return
             rows = auth_mod._entry_ids(written)
+            # Drop peer-deleted rows before advancing the baseline: the next flush must not treat them as new.
+            deleted_ids = self._persisted_token_pairs.keys() - rows.keys()
+            self._entries = [entry for entry in self._entries if entry.id not in deleted_ids]
+            if self._current_id in deleted_ids:
+                self._current_id = None
             self._persisted_token_pairs = auth_mod._token_pairs_by_id(written)
             for entry in self._entries:
                 row = rows.get(entry.id)
                 pair = self._persisted_token_pairs.get(entry.id, (None, None))
-                # Reference-only rows are intentionally secret-free on disk; never dehydrate
-                # their live in-memory credential while adopting a concurrent generation.
+                # Reference-only rows are secret-free on disk; never dehydrate their live credential.
                 if row is None or not any(pair):
                     continue
-                # Adopt only rows the store overrode with a peer's newer pair; re-hydrating an
-                # unchanged row would replace the live object (and pull peer cooldown state
-                # merged into the written row) on every ordinary flush.
+                # Adopt a peer's newer pair, but don't replace unchanged live rows with merged peer cooldowns.
                 if pair != (entry.access_token, entry.refresh_token):
                     self._replace_entry(entry, PooledCredential.from_dict(self.provider, row))
 
